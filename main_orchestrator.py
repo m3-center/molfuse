@@ -92,134 +92,129 @@ def main(config_path="experiment_config.json"):
         os.makedirs(results_base_dir, exist_ok=True)
 
         # --- 1. Data Preparation ---
-        logging.info("Step 1: Preparing data...")
+        logging.info("Step 1: Preparing data (filtering pre-calculated files and extracting raw target ligands)...")
         cmd_prepare_data = [
             "python", "experimental_pipeline/prepare_data.py",
             "--config_path", config_path,
             "--target_id_name", target_id_name,
-            "--mf_affinity_path_resolved", mf_affinity_full_path, # Pass the resolved full path
+            # No longer pass mf_affinity_path_resolved, prepare_data handles finding precalc files
             "--output_dir", temp_data_dir
         ]
         if not run_command(cmd_prepare_data, "Data Preparation"):
             logging.error(f"Data preparation failed for {target_id_name}. Skipping target.")
             continue
         
-        # Expected output paths from prepare_data.py
-        target_ligands_for_projection_csv = os.path.join(temp_data_dir, f"{target_id_name}_target_ligands_for_projection.csv")
-        chembl_mf_excluded_csv = os.path.join(temp_data_dir, f"{target_id_name}_chembl_mf_excluded.csv")
-        zinc_excluded_csv = os.path.join(temp_data_dir, f"{target_id_name}_zinc_excluded.csv")
+        # Path to the RAW target ligands (SMILES, IDs only) for separate feature calculation
+        raw_target_ligands_for_feature_calc_csv = os.path.join(temp_data_dir, f"{target_id_name}_target_ligands_for_feature_calc_raw.csv")
+
+        # Paths to the FILTERED PRE-CALCULATED files
+        filtered_chembl_mf_features_csv = os.path.join(temp_data_dir, f"{target_id_name}_chembl_mf_excluded_features.csv")
+        filtered_chembl_mf_fingerprints_csv = os.path.join(temp_data_dir, f"{target_id_name}_chembl_mf_excluded_fingerprints.csv")
+        filtered_zinc_features_csv = os.path.join(temp_data_dir, f"{target_id_name}_zinc_excluded_features.csv")
+        filtered_zinc_fingerprints_csv = os.path.join(temp_data_dir, f"{target_id_name}_zinc_excluded_fingerprints.csv")
 
         # --- 2. Loop through Representations (Features/Fingerprints) ---
         for repr_type in config['representations']:
             logging.info(f"  Processing Representation: {repr_type}")
             
-            # --- 2a. Calculate Features/Fingerprints ---
-            logging.info(f"    Step 2a: Calculating {repr_type}...")
-            repr_output_dir = os.path.join(temp_data_dir, repr_type) # Subdir for features/fps
-            os.makedirs(repr_output_dir, exist_ok=True)
+            # --- 2a. Calculate Features/Fingerprints ONLY FOR TARGET LIGANDS ---
+            logging.info(f"    Step 2a: Calculating {repr_type} for TARGET LIGANDS...")
+            target_ligands_repr_output_dir = os.path.join(temp_data_dir, repr_type, "target_ligands_processed") # Specific subdir
+            os.makedirs(target_ligands_repr_output_dir, exist_ok=True)
 
-            input_files_for_molcalcs = {
-                "target_ligands": target_ligands_for_projection_csv,
-                "chembl_mf_excluded": chembl_mf_excluded_csv,
-                "zinc_excluded": zinc_excluded_csv
-            }
+            cmd_molcalcs_target = [
+                "python", "core_scripts/calculate_features_and_fingerprints_exp.py",
+                "--input_csv", raw_target_ligands_for_feature_calc_csv, # Use the raw SMILES file
+                "--output_dir", target_ligands_repr_output_dir,
+                "--representation_type", repr_type,
+                "--file_label", f"{target_id_name}_target_ligands_project", # Distinct label
+                "--n_jobs", str(gs['n_jobs_molcalcs'])
+            ]
+            if not run_command(cmd_molcalcs_target, f"MolCalcs for TARGET LIGANDS ({repr_type})"):
+                logging.error(f"Feature/Fingerprint calculation failed for TARGET LIGANDS ({repr_type}). Skipping this representation for {target_id_name}.")
+                continue 
+
+            # Path to the processed target ligands' features/fingerprints
+            processed_target_ligands_repr_file = os.path.join(target_ligands_repr_output_dir, f"{target_id_name}_target_ligands_project_{repr_type}.csv")
+
+            # Determine paths for pre-calculated, filtered ChEMBL MF and ZINC data for this repr_type
+            current_chembl_mf_filtered_path = filtered_chembl_mf_features_csv if repr_type == "features" else filtered_chembl_mf_fingerprints_csv
+            current_zinc_filtered_path = filtered_zinc_features_csv if repr_type == "features" else filtered_zinc_fingerprints_csv
             
-            processed_repr_files = {} # To store paths of generated feature/fingerprint files
+            # --- 2b. Loop through SIMSPACE_DIM values ---
+            for simspace_dim in gs['simspace_dims_to_test']:
+                logging.info(f"      Processing SIMSPACE_DIM: {simspace_dim}")
 
-            for key, input_csv in input_files_for_molcalcs.items():
-                cmd_molcalcs = [
-                    "python", "core_scripts/calculate_features_and_fingerprints_exp.py",
-                    "--input_csv", input_csv,
-                    "--output_dir", repr_output_dir,
-                    "--representation_type", repr_type, # 'features' or 'fingerprints'
-                    "--file_label", f"{target_id_name}_{key}", # e.g. PyruvateKinase_target_ligands
-                    "--n_jobs", str(gs['n_jobs_molcalcs'])
-                ]
-                if not run_command(cmd_molcalcs, f"MolCalcs for {key} ({repr_type})"):
-                    logging.error(f"Feature/Fingerprint calculation failed for {key} ({repr_type}). Skipping this representation for {target_id_name}.")
-                    # Continue to next representation or target
-                    break 
+                # --- 2c. Calculate Similarity Spaces (iterates DR methods internally) ---
+                # `calculate_similarityspaces_exp.py` will handle different DR methods.
+                # It needs the Chembl MF (excluded) and ZINC (excluded) files of current repr_type.
                 
-                # Store output path
-                output_basename = f"{target_id_name}_{key}_{repr_type}.csv" # e.g. PyruvateKinase_target_ligands_features.csv
-                processed_repr_files[key] = os.path.join(repr_output_dir, output_basename)
-            else: # if loop completed without break
-                # All molcalcs for this representation succeeded
+                current_models_dir = os.path.join(models_base_dir, repr_type, f"dim_{simspace_dim}")
+                current_simspaces_dir = os.path.join(simspaces_base_dir, repr_type, f"dim_{simspace_dim}")
+                os.makedirs(current_models_dir, exist_ok=True)
+                os.makedirs(current_simspaces_dir, exist_ok=True)
 
-                # --- 2b. Loop through SIMSPACE_DIM values ---
-                for simspace_dim in gs['simspace_dims_to_test']:
-                    logging.info(f"      Processing SIMSPACE_DIM: {simspace_dim}")
+                cmd_calc_simspace = [
+                    "python", "core_scripts/calculate_similarityspaces_exp.py",
+                    "--chembl_mf_data_path", current_chembl_mf_filtered_path, # Use filtered pre-calc
+                    "--zinc_data_path", current_zinc_filtered_path,           # Use filtered pre-calc
+                    "--simspace_dim", str(simspace_dim),
+                    "--representation_type", repr_type,
+                    "--target_id_name", target_id_name, # For naming models and output files
+                    "--output_simspace_dir", current_simspaces_dir,
+                    "--output_model_dir", current_models_dir
+                ]
+                # Add all DR methods from config to the command
+                for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
+                    cmd_calc_simspace.extend([f"--dr_method_{dr_key}", "True"]) # e.g., --dr_method_pca True
+                    if "metric" in dr_params: # For UMAP
+                        cmd_calc_simspace.extend([f"--umap_metric_{dr_key.split('_')[-1]}", dr_params["metric"]])
 
-                    # --- 2c. Calculate Similarity Spaces (iterates DR methods internally) ---
-                    # `calculate_similarityspaces_exp.py` will handle different DR methods.
-                    # It needs the Chembl MF (excluded) and ZINC (excluded) files of current repr_type.
+
+                if not run_command(cmd_calc_simspace, f"Similarity Space Calculation (dim {simspace_dim}, {repr_type})"):
+                    logging.error(f"Similarity space calculation failed for dim {simspace_dim}, {repr_type}. Skipping this dimension.")
+                    continue
+
+                # --- 2d. Projection & Analysis (Loop for each DR method's output) ---
+                # After calculate_similarityspaces_exp.py runs, models and simspace CSVs are created.
+                # We need to iterate through each DR method that was processed.
+                for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
+                    dr_short_name = dr_params["short_name"] # e.g., PCA, UMAP-Euclidean
+                    logging.info(f"        Step 2d: Projecting & Analyzing for DR: {dr_short_name} (dim {simspace_dim}, {repr_type})")
                     
-                    current_models_dir = os.path.join(models_base_dir, repr_type, f"dim_{simspace_dim}")
-                    current_simspaces_dir = os.path.join(simspaces_base_dir, repr_type, f"dim_{simspace_dim}")
-                    os.makedirs(current_models_dir, exist_ok=True)
-                    os.makedirs(current_simspaces_dir, exist_ok=True)
-
-                    cmd_calc_simspace = [
-                        "python", "core_scripts/calculate_similarityspaces_exp.py",
-                        "--chembl_mf_data_path", processed_repr_files["chembl_mf_excluded"],
-                        "--zinc_data_path", processed_repr_files["zinc_excluded"],
-                        "--simspace_dim", str(simspace_dim),
-                        "--representation_type", repr_type,
-                        "--target_id_name", target_id_name, # For naming models and output files
-                        "--output_simspace_dir", current_simspaces_dir,
-                        "--output_model_dir", current_models_dir
-                    ]
-                    # Add all DR methods from config to the command
-                    for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-                        cmd_calc_simspace.extend([f"--dr_method_{dr_key}", "True"]) # e.g., --dr_method_pca True
-                        if "metric" in dr_params: # For UMAP
-                            cmd_calc_simspace.extend([f"--umap_metric_{dr_key.split('_')[-1]}", dr_params["metric"]])
-
-
-                    if not run_command(cmd_calc_simspace, f"Similarity Space Calculation (dim {simspace_dim}, {repr_type})"):
-                        logging.error(f"Similarity space calculation failed for dim {simspace_dim}, {repr_type}. Skipping this dimension.")
+                    # Construct paths to the specific model and simspace files
+                    # Naming convention needs to be consistent with calculate_similarityspaces_exp.py
+                    model_name_root = f"{target_id_name}_{repr_type}_dim{simspace_dim}_{dr_short_name.replace('-', '_')}"
+                    
+                    # Path to the specific DR model (e.g., .../PCA.lzma or .../euclidean_UMAP.lzma)
+                    # This needs careful construction based on how calculate_similarityspaces_exp.py saves them.
+                    # For now, assume a general model dir and project_and_analyze.py figures out the exact model file.
+                    
+                    simspace_csv_path = os.path.join(current_simspaces_dir, f"{model_name_root}_similarity_space.csv")
+                    
+                    if not os.path.exists(simspace_csv_path):
+                        logging.warning(f"Simspace CSV not found: {simspace_csv_path}. Skipping projection for {dr_short_name}.")
                         continue
 
-                    # --- 2d. Projection & Analysis (Loop for each DR method's output) ---
-                    # After calculate_similarityspaces_exp.py runs, models and simspace CSVs are created.
-                    # We need to iterate through each DR method that was processed.
-                    for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-                        dr_short_name = dr_params["short_name"] # e.g., PCA, UMAP-Euclidean
-                        logging.info(f"        Step 2d: Projecting & Analyzing for DR: {dr_short_name} (dim {simspace_dim}, {repr_type})")
-                        
-                        # Construct paths to the specific model and simspace files
-                        # Naming convention needs to be consistent with calculate_similarityspaces_exp.py
-                        model_name_root = f"{target_id_name}_{repr_type}_dim{simspace_dim}_{dr_short_name.replace('-', '_')}"
-                        
-                        # Path to the specific DR model (e.g., .../PCA.lzma or .../euclidean_UMAP.lzma)
-                        # This needs careful construction based on how calculate_similarityspaces_exp.py saves them.
-                        # For now, assume a general model dir and project_and_analyze.py figures out the exact model file.
-                        
-                        simspace_csv_path = os.path.join(current_simspaces_dir, f"{model_name_root}_similarity_space.csv")
-                        
-                        if not os.path.exists(simspace_csv_path):
-                            logging.warning(f"Simspace CSV not found: {simspace_csv_path}. Skipping projection for {dr_short_name}.")
-                            continue
+                    current_results_dir = os.path.join(results_base_dir, repr_type, f"dim_{simspace_dim}", dr_short_name.replace('-', '_'))
+                    os.makedirs(current_results_dir, exist_ok=True)
 
-                        current_results_dir = os.path.join(results_base_dir, repr_type, f"dim_{simspace_dim}", dr_short_name.replace('-', '_'))
-                        os.makedirs(current_results_dir, exist_ok=True)
-
-                        cmd_project_analyze = [
-                            "python", "experimental_pipeline/project_and_analyze.py",
-                            "--target_ligands_repr_path", processed_repr_files["target_ligands"],
-                            "--simspace_csv_path", simspace_csv_path,
-                            "--model_dir_for_projection", current_models_dir, # Dir containing scaler and specific DR model
-                            "--model_name_root_for_projection", model_name_root, # To help find the right scaler/DR model
-                            "--dr_method_key", dr_key, # e.g. "pca", "umap_euclidean"
-                            "--dr_short_name", dr_short_name, # e.g. "PCA", "UMAP-Euclidean"
-                            "--simspace_dim", str(simspace_dim),
-                            "--k_for_knn", ','.join(map(str,gs['k_for_knn_distance'])),
-                            "--output_dir", current_results_dir,
-                            "--target_id_name", target_id_name
-                        ]
-                        if not run_command(cmd_project_analyze, f"Projection & Analysis ({dr_short_name}, dim {simspace_dim}, {repr_type})"):
-                           logging.error(f"Projection & Analysis failed for {dr_short_name}, dim {simspace_dim}, {repr_type}.")
-                           # Continue to next DR method or dim
+                    cmd_project_analyze = [
+                        "python", "experimental_pipeline/project_and_analyze.py",
+                        "--target_ligands_repr_path", processed_target_ligands_repr_file, # Use the newly featurized target ligands
+                        "--simspace_csv_path", simspace_csv_path,
+                        "--model_dir_for_projection", current_models_dir, # Dir containing scaler and specific DR model
+                        "--model_name_root_for_projection", model_name_root, # To help find the right scaler/DR model
+                        "--dr_method_key", dr_key, # e.g. "pca", "umap_euclidean"
+                        "--dr_short_name", dr_short_name, # e.g. "PCA", "UMAP-Euclidean"
+                        "--simspace_dim", str(simspace_dim),
+                        "--k_for_knn", ','.join(map(str,gs['k_for_knn_distance'])),
+                        "--output_dir", current_results_dir,
+                        "--target_id_name", target_id_name
+                    ]
+                    if not run_command(cmd_project_analyze, f"Projection & Analysis ({dr_short_name}, dim {simspace_dim}, {repr_type})"):
+                        logging.error(f"Projection & Analysis failed for {dr_short_name}, dim {simspace_dim}, {repr_type}.")
+                        # Continue to next DR method or dim
 
             # End of simspace_dim loop
         # End of repr_type loop

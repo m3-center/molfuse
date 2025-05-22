@@ -83,122 +83,156 @@ def main():
         return
     
     target_uniprot_id = current_target_info['uniprot_id']
-
-    logging.info(f"Preparing data for target: {current_target_info['display_name']} (UniProt: {target_uniprot_id})")
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    # --- 1. Prepare ChEMBL datasets ---
+    
+    # --- 1. Get RAW data for target ligands (to be featurized separately) ---
+    # This uses the original ChEMBL affinity CSVs to find the specific target's compounds
     try:
-        target_ligands_df, _ = load_and_merge_chembl_data(
-            gs['chembl_db_path'], # Not directly used if CSVs exist, but passed for future potential
+        raw_target_ligands_df, _ = load_and_merge_chembl_data( # This is the function from previous prepare_data.py
+            gs['chembl_db_path'],
             gs['chembl_affinity_full_csv_path'],
             gs['chembl_target_mapping_csv_path'],
             target_uniprot_id
         )
     except Exception as e:
-        logging.error(f"Failed to load and process ChEMBL base data: {e}")
+        logging.error(f"Failed to load raw ChEMBL data to identify target ligands: {e}")
         return
 
-    # Save the target ligands that will be projected
-    target_ligands_for_projection_path = os.path.join(args.output_dir, f"{args.target_id_name}_target_ligands_for_projection.csv")
-    if not target_ligands_df.empty:
-        target_ligands_df.to_csv(target_ligands_for_projection_path, index=False)
-        logging.info(f"Saved target ligands for projection to: {target_ligands_for_projection_path} ({len(target_ligands_df)} records)")
+    target_ligands_for_feature_calc_path = os.path.join(args.output_dir, f"{args.target_id_name}_target_ligands_for_feature_calc_raw.csv")
+    if not raw_target_ligands_df.empty:
+        # Save only essential columns like SMILES, Compound ChEMBL ID for feature calculation input
+        raw_target_ligands_df[['SMILES', 'Compound ChEMBL ID']].to_csv(target_ligands_for_feature_calc_path, index=False)
+        logging.info(f"Saved RAW target ligands (for feature calc) to: {target_ligands_for_feature_calc_path}")
     else:
-        # Create empty file so downstream processes don't fail on file not found, they should handle empty DFs
-        pd.DataFrame().to_csv(target_ligands_for_projection_path, index=False)
-        logging.warning(f"No target ligands for projection for {args.target_id_name}. Empty file created: {target_ligands_for_projection_path}")
+        pd.DataFrame(columns=['SMILES', 'Compound ChEMBL ID']).to_csv(target_ligands_for_feature_calc_path, index=False)
+        logging.warning(f"No RAW target ligands found for {target_uniprot_id}.")
 
+    target_smiles_to_exclude = set(raw_target_ligands_df['SMILES'].dropna().unique()) if not raw_target_ligands_df.empty else set()
 
-    # Create the "ChEMBL Molecular Function Excluded" dataset
-    # This dataset should contain compounds active for the molecular function,
-    # BUT NOT active against the specific target_uniprot_id.
-    # The mf_affinity_path_resolved already contains compounds for the specific MF.
-    # We need to filter out any remaining entries for the target_uniprot_id from this file.
-    try:
-        df_chembl_mf_specific = pd.read_csv(args.mf_affinity_path_resolved, low_memory=False)
-    except FileNotFoundError:
-        logging.error(f"Molecular function specific affinity file not found: {args.mf_affinity_path_resolved}")
-        return
+    # --- 2. Filter PRE-CALCULATED ChEMBL MF files ---
+    for repr_type in ["features", "fingerprints"]: # Assuming config['representations']
+        precalc_chembl_mf_base_dir = gs[f'precalculated_chembl_mf_{repr_type}_base_dir']
         
-    # The df_chembl_mf_specific might or might not have an 'accession' column if it was generated
-    # by collect_affinity_forall_functions.py before the merge step was fully integrated there.
-    # For robustness, if 'accession' is not present, merge it.
-    if 'accession' not in df_chembl_mf_specific.columns:
-        logging.info(f"Merging 'accession' into {args.mf_affinity_path_resolved} as it's missing.")
-        try:
-            df_target_map = pd.read_csv(gs['chembl_target_mapping_csv_path'], low_memory=False)
-            df_chembl_mf_specific = pd.merge(df_chembl_mf_specific, df_target_map,
-                                     left_on='Target ChEMBL ID', right_on='target_chembl_id',
-                                     how='left')
-            if 'accession' not in df_chembl_mf_specific.columns: # Check again
-                 logging.error(f"Still no 'accession' column after attempting merge for {args.mf_affinity_path_resolved}.")
-                 return
-            df_chembl_mf_specific.dropna(subset=['accession'], inplace=True)
-        except Exception as e:
-            logging.error(f"Error merging accession into MF specific file: {e}")
-            return
-
-
-    chembl_mf_excluded_df = df_chembl_mf_specific[df_chembl_mf_specific['accession'] != target_uniprot_id].copy()
-    
-    # Standardize columns for the output (matching what feature calculation might expect)
-    # These are ChEMBL compounds, so they should have these columns.
-    required_chembl_cols = ['Compound ChEMBL ID', 'SMILES', 'Target ChEMBL ID', 
-                            'Target Name', 'Activity Type', 'Standard Value (nM)', 'accession']
-    
-    # Ensure all required columns are present, add NA if not (though they should be)
-    for col in required_chembl_cols:
-        if col not in chembl_mf_excluded_df.columns:
-            chembl_mf_excluded_df[col] = pd.NA # Or handle as error depending on expectation
-
-    # Filter to only necessary columns and drop duplicates again after filtering
-    chembl_mf_excluded_df = chembl_mf_excluded_df[required_chembl_cols].drop_duplicates()
-    
-    chembl_mf_excluded_path = os.path.join(args.output_dir, f"{args.target_id_name}_chembl_mf_excluded.csv")
-    chembl_mf_excluded_df.to_csv(chembl_mf_excluded_path, index=False)
-    logging.info(f"Saved ChEMBL MF (excluded) data to: {chembl_mf_excluded_path} ({len(chembl_mf_excluded_df)} records)")
-
-    # --- 2. Prepare ZINC dataset (exclude target ligands by SMILES) ---
-    if not target_ligands_df.empty and 'SMILES' in target_ligands_df.columns:
-        target_smiles_to_exclude = set(target_ligands_df['SMILES'].dropna().unique())
-        logging.info(f"Excluding {len(target_smiles_to_exclude)} unique SMILES from ZINC dataset.")
+        # Construct pre-calculated ChEMBL MF filename
+        mf_kw_id = get_mf_keyword_id_from_config(config, current_target_info['molecular_function_canonical_name']) # Helper needed
+        if not mf_kw_id: # Error logged in helper
+            continue 
+        mf_filename_segment = current_target_info['molecular_function_filename_segment']
         
-        try:
-            df_zinc_full = pd.read_csv(gs['zinc_full_csv_path'], low_memory=False)
-        except FileNotFoundError:
-            logging.error(f"Full ZINC dataset not found at: {gs['zinc_full_csv_path']}. Cannot prepare excluded ZINC.")
-            return
+        # Example: KW-0418_Kinase_affinity_extracted_features.csv
+        precalc_mf_filename = f"{mf_kw_id}_{mf_filename_segment}_affinity_extracted_{'features' if repr_type == 'features' else 'fingerprints_ECFP4'}.csv"
+        precalc_mf_full_path = os.path.join(precalc_chembl_mf_base_dir, precalc_mf_filename)
 
-        # Assuming ZINC CSV has 'SMILES' and 'ZINC_ID' and other columns from collect_ZINC.py
-        # ('ZINC_ID', 'SMILES', 'LABEL', 'MANUFACTURER', 'TRANCHE')
-        if 'SMILES' in df_zinc_full.columns:
-            zinc_excluded_df = df_zinc_full[~df_zinc_full['SMILES'].isin(target_smiles_to_exclude)].copy()
-            
-            zinc_excluded_path = os.path.join(args.output_dir, f"{args.target_id_name}_zinc_excluded.csv")
-            zinc_excluded_df.to_csv(zinc_excluded_path, index=False)
-            logging.info(f"Saved ZINC (excluded) data to: {zinc_excluded_path} ({len(zinc_excluded_df)} records)")
+        output_chembl_mf_excluded_path = os.path.join(args.output_dir, f"{args.target_id_name}_chembl_mf_excluded_{repr_type}.csv")
+
+        if os.path.exists(precalc_mf_full_path):
+            try:
+                df_precalc_mf = pd.read_csv(precalc_mf_full_path, low_memory=False)
+                # Filter out rows belonging to the target_uniprot_id
+                # This assumes the pre-calculated files *might* still contain 'Compound ChEMBL ID'
+                # that can be mapped back to the target_uniprot_id, or directly have 'accession'.
+                # If 'accession' is not in pre-calc files, mapping is needed.
+                
+                # Simplest case: if 'Compound ChEMBL ID' is in precalc and we have target's ChEMBL IDs
+                target_chembl_ids = set(raw_target_ligands_df['Compound ChEMBL ID'].dropna().unique()) if not raw_target_ligands_df.empty else set()
+
+                if 'Compound ChEMBL ID' in df_precalc_mf.columns and target_chembl_ids:
+                    # This is the key filtering step for pre-calculated ChEMBL MF data
+                    df_filtered_precalc_mf = df_precalc_mf[~df_precalc_mf['Compound ChEMBL ID'].isin(target_chembl_ids)].copy()
+                    df_filtered_precalc_mf.to_csv(output_chembl_mf_excluded_path, index=False)
+                    logging.info(f"Saved filtered pre-calculated ChEMBL MF {repr_type} to: {output_chembl_mf_excluded_path}")
+                elif 'accession' in df_precalc_mf.columns : # If accession is directly available
+                     df_filtered_precalc_mf = df_precalc_mf[df_precalc_mf['accession'] != target_uniprot_id].copy()
+                     df_filtered_precalc_mf.to_csv(output_chembl_mf_excluded_path, index=False)
+                     logging.info(f"Saved filtered pre-calculated ChEMBL MF {repr_type} (by accession) to: {output_chembl_mf_excluded_path}")
+                else:
+                    logging.warning(f"Cannot filter pre-calculated ChEMBL MF file {precalc_mf_full_path} by Compound ChEMBL ID or accession. Copying as is.")
+                    df_precalc_mf.to_csv(output_chembl_mf_excluded_path, index=False) # Copy if no filter possible
+            except Exception as e:
+                logging.error(f"Error processing pre-calculated ChEMBL MF file {precalc_mf_full_path}: {e}")
+                pd.DataFrame().to_csv(output_chembl_mf_excluded_path, index=False) # Save empty on error
         else:
-            logging.error("SMILES column not found in ZINC dataset. Cannot exclude target ligands.")
-    else:
-        logging.warning("No target SMILES to exclude from ZINC or target_ligands_df is empty. Copying full ZINC dataset.")
-        try:
-            # If no SMILES to exclude, just copy the full ZINC file with the "excluded" name for consistency
-            full_zinc_path = gs['zinc_full_csv_path']
-            zinc_excluded_path = os.path.join(args.output_dir, f"{args.target_id_name}_zinc_excluded.csv")
-            if os.path.exists(full_zinc_path):
-                # For large files, consider a symlink or just noting that no exclusion happened
-                # For now, copy for simplicity of downstream file existence checks
-                df_zinc_full = pd.read_csv(full_zinc_path, low_memory=False)
-                df_zinc_full.to_csv(zinc_excluded_path, index=False)
-                logging.info(f"Copied full ZINC dataset to {zinc_excluded_path} as no exclusions were made.")
-            else:
-                logging.error(f"Full ZINC dataset not found at: {full_zinc_path} and no exclusions to make.")
-        except Exception as e:
-            logging.error(f"Error handling ZINC data when no exclusions: {e}")
+            logging.error(f"Pre-calculated ChEMBL MF file not found: {precalc_mf_full_path}")
+            pd.DataFrame().to_csv(output_chembl_mf_excluded_path, index=False) # Save empty
 
 
-    logging.info(f"Data preparation for {args.target_id_name} completed.")
+    # --- 3. Filter PRE-CALCULATED ZINC files ---
+    for repr_type in ["features", "fingerprints"]:
+        precalc_zinc_path = gs[f'precalculated_zinc_{repr_type}_path']
+        output_zinc_excluded_path = os.path.join(args.output_dir, f"{args.target_id_name}_zinc_excluded_{repr_type}.csv")
+
+        if os.path.exists(precalc_zinc_path):
+            try:
+                df_precalc_zinc = pd.read_csv(precalc_zinc_path, low_memory=False)
+                if 'SMILES' in df_precalc_zinc.columns and target_smiles_to_exclude:
+                    df_filtered_precalc_zinc = df_precalc_zinc[~df_precalc_zinc['SMILES'].isin(target_smiles_to_exclude)].copy()
+                    df_filtered_precalc_zinc.to_csv(output_zinc_excluded_path, index=False)
+                    logging.info(f"Saved filtered pre-calculated ZINC {repr_type} to: {output_zinc_excluded_path}")
+                else: # No SMILES to exclude or no SMILES column in ZINC precalc
+                    logging.info(f"Copying pre-calculated ZINC {repr_type} as is (no SMILES for exclusion or missing SMILES col).")
+                    df_precalc_zinc.to_csv(output_zinc_excluded_path, index=False)
+            except Exception as e:
+                logging.error(f"Error processing pre-calculated ZINC file {precalc_zinc_path}: {e}")
+                pd.DataFrame().to_csv(output_zinc_excluded_path, index=False)
+        else:
+            logging.error(f"Pre-calculated ZINC file not found: {precalc_zinc_path}")
+            pd.DataFrame().to_csv(output_zinc_excluded_path, index=False)
+
+    logging.info(f"Data preparation for {args.target_id_name} (using pre-calculated files) completed.")
+
+# Helper function for prepare_data.py to get KW-ID (needs access to config or keywords_df)
+def get_mf_keyword_id_from_config(config, canonical_mf_name):
+    # This should ideally load the keywords_df once and pass it around, or be part of a class.
+    # For a standalone script, it might reload it.
+    gs = config['global_settings']
+    try:
+        mf_keywords_df = pd.read_csv(gs['molecular_function_keywords_csv_path'])
+        row = mf_keywords_df[mf_keywords_df['Name'].str.lower() == canonical_mf_name.lower()]
+        if not row.empty:
+            return row.iloc[0]['ID']
+        logging.error(f"KW-ID not found for MF: {canonical_mf_name}")
+    except Exception as e:
+        logging.error(f"Error getting KW-ID for {canonical_mf_name}: {e}")
+    return None
+
+# (Need to define load_and_merge_chembl_data as in the previous version of prepare_data.py
+# for step 1 to get raw_target_ligands_df for their SMILES and for separate feature calculation)
+# ... [Insert load_and_merge_chembl_data function here] ...
+# This function needs to be defined as it was in the previous version of prepare_data.py
+# to correctly extract target_ligands_df from the base ChEMBL CSVs.
+def load_and_merge_chembl_data(db_path, affinity_csv_path, target_mapping_csv_path, target_uniprot_id):
+    logging.info("Loading ChEMBL affinity and target mapping data for raw target ligand identification...")
+    try:
+        df_affinity = pd.read_csv(affinity_csv_path, low_memory=False)
+        df_target_map = pd.read_csv(target_mapping_csv_path, low_memory=False)
+    except FileNotFoundError as e:
+        logging.error(f"Required ChEMBL CSV file not found: {e}.")
+        raise
+
+    df_merged = pd.merge(df_affinity, df_target_map,
+                         left_on='Target ChEMBL ID', right_on='target_chembl_id',
+                         how='left')
+    
+    if 'accession' not in df_merged.columns:
+        logging.error("'accession' column not found after merging. Check CSVs.")
+        raise ValueError("'accession' column missing.")
+        
+    df_merged.dropna(subset=['accession'], inplace=True)
+    target_ligands_df = df_merged[df_merged['accession'] == target_uniprot_id].copy()
+    
+    # No need for chembl_all_others_df from this function anymore in this revised workflow
+    # We only need target_ligands_df to get their SMILES and ChEMBL IDs.
+    
+    if target_ligands_df.empty:
+        logging.warning(f"No ChEMBL ligands found for target UniProt ID: {target_uniprot_id} in raw ChEMBL data.")
+    
+    cols_to_keep = ['Compound ChEMBL ID', 'SMILES', 'Target ChEMBL ID', 'Target Name', 
+                    'Activity Type', 'Standard Value (nM)', 'accession']
+    # Ensure all cols_to_keep are present, add with NA if not.
+    for col in cols_to_keep:
+        if col not in target_ligands_df.columns:
+            target_ligands_df[col] = pd.NA
+            
+    return target_ligands_df[cols_to_keep].drop_duplicates(), pd.DataFrame() # Return empty df for the second output
 
 if __name__ == "__main__":
     main()
