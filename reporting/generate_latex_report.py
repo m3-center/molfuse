@@ -4,100 +4,118 @@ import os
 import argparse
 import logging
 import json
-import glob
+import glob # Not strictly needed if paths are constructed directly, but can be useful
 import shutil
 from collections import defaultdict
-import matplotlib.pyplot as plt
-import subprocess
+import subprocess # For pdflatex
+import matplotlib.pyplot as plt # For generating dim_opt plots within this script
 
 # Setup basic logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler("generate_report.log"), logging.StreamHandler()])
 
 LATEX_TEMPLATE_HEADER = r"""
-\documentclass[10pt]{article}
-\usepackage[margin=1in]{geometry}
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=0.75in]{geometry} % Slightly wider margins
 \usepackage{graphicx}
-\usepackage{float} % For [H] placement
+\usepackage{float} 
 \usepackage{amsmath}
-\usepackage{booktabs} % For nice tables
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{booktabs} 
 \usepackage{longtable}
 \usepackage{caption}
-\usepackage{subcaption} % For subfigures
-\usepackage{array} % For better column control in tables
-\usepackage{hyperref} % For clickable links if needed
-\usepackage{xcolor} % For colored text if desired
+\usepackage{subcaption} 
+\usepackage{array} 
+\usepackage{xcolor}
+\usepackage{hyperref} 
+\usepackage{fancyhdr} % For headers/footers
+\usepackage{lastpage} % For Page X of Y
 
 \hypersetup{
-    colorlinks=true,
-    linkcolor=blue,
-    filecolor=magenta,      
-    urlcolor=cyan,
-    pdftitle={UMMBAS Similarity Experiment Report},
-    pdfpagemode=FullScreen,
+    colorlinks=true, linkcolor=blue, filecolor=magenta, urlcolor=cyan,
+    pdftitle={UMMBAS Similarity Experiment Report}, pdfauthor={UMMBAS Project Team},
+    pdfsubject={Molecular Similarity Analysis}, pdfkeywords={UMMBAS, Cheminformatics, Similarity},
+    bookmarksnumbered=true, pdfpagemode=UseOutlines % Show bookmarks panel
 }
 
-\title{UMMBAS Molecular Similarity Experimental Evaluation}
+\pagestyle{fancy}
+\fancyhf{} % Clear all header and footer fields
+\fancyhead[L]{UMMBAS Experimental Report}
+\fancyhead[R]{\today}
+\fancyfoot[C]{\thepage\ of \pageref{LastPage}} % Page X of Y
+
+\title{UMMBAS Molecular Similarity Experimental Evaluation Report}
 \author{UMMBAS Project Team}
 \date{\today}
 
 \begin{document}
 \maketitle
+\begin{abstract}
+This report details experiments conducted to evaluate the predictive capacity of molecular similarity spaces using a leave-one-target-out inspired methodology. The central hypothesis posits that ligands active against a specific protein target will exhibit proximity to compounds known to interact with other proteins sharing the same broader molecular function, even when the specific target's known ligands are excluded during the construction of the similarity space. Experiments encompassed multiple target proteins, two molecular representations (physicochemical features and ECFP4 fingerprints), various dimensionality reduction (DR) techniques (PCA; UMAP with Euclidean, Cosine, Manhattan, and Hamming metrics; and t-SNE with pre-PCA), and a range of similarity space dimensionalities. Evaluation primarily focused on the distances of projected known target ligands to the molecular function (MF) cloud within these generated similarity spaces.
+\end{abstract}
+\clearpage
 \tableofcontents
 \clearpage
 
 \section{Introduction}
-This report details experiments conducted to evaluate the predictive capacity of molecular similarity spaces using a leave-one-target-out cross-validation inspired approach. The core hypothesis is that ligands active against a specific protein target will cluster near compounds known to interact with other proteins sharing the same broader molecular function, even when the specific target's known ligands are excluded during space construction. 
+The exploration of chemical space for novel therapeutic agents is a cornerstone of drug discovery. Molecular similarity, a fundamental concept in cheminformatics, suggests that structurally similar molecules are likely to exhibit similar biological activities. This principle underpins many virtual screening and lead optimization strategies. This study investigates the utility of constructing and analyzing molecular similarity spaces to predict potential interactions between small molecules and protein targets, grouped by their shared molecular function.
 
-Experiments were performed for multiple target proteins, utilizing two distinct molecular representations (physicochemical features and ECFP4 fingerprints), various dimensionality reduction (DR) techniques (PCA, UMAP with Euclidean, Cosine, Manhattan, and Hamming metrics), and a range of similarity space dimensionalities. The primary evaluation metric is the distance of projected known target ligands to the molecular function (MF) cloud in the generated similarity spaces.
+The experimental design aims to rigorously test whether general molecular function similarity can guide the identification of ligands for a specific, "held-out" protein target. By systematically varying data representations, dimensionality reduction methods, and the dimensionality of the resulting spaces, we seek to identify optimal parameters and assess the overall robustness of this similarity-based approach. Key metrics involve measuring the proximity of known active ligands (for the held-out target) to the cloud of compounds associated with the broader molecular function after projection into these tailored similarity spaces.
 
 """
 
 LATEX_TEMPLATE_FOOTER = r"""
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
 \end{document}
 """
 
-def get_section_header(level, title):
-    sec_cmd = ""
-    if level == 1: sec_cmd = r"\section"
-    elif level == 2: sec_cmd = r"\subsection"
-    elif level == 3: sec_cmd = r"\subsubsection"
-    elif level == 4: sec_cmd = r"\paragraph"
-    else: return f"% Unknown section level {level} for: {title}\n"
-    return f"{sec_cmd}{{{title}}}\n"
+def get_section_header_latex(level, title):
+    sec_cmd_map = {1: r"\section", 2: r"\subsection", 3: r"\subsubsection", 4: r"\paragraph"}
+    sec_cmd = sec_cmd_map.get(level, r"\paragraph") # Default to paragraph for deeper levels
+    # Sanitize title for LaTeX: replace underscores, escape special chars if any more complex titles
+    safe_title = title.replace('_', r'\_') 
+    return f"\n{sec_cmd}{{{safe_title}}}\n"
 
+def add_figure_to_latex(latex_content_list, relative_fig_path_in_tex, caption_text, label_text, figure_width="0.75\\textwidth"):
+    # Assumes fig_path is relative to the .tex file, typically "figures/filename.png"
+    latex_content_list.append(r"\begin{figure}[H]")
+    latex_content_list.append(r"  \centering")
+    latex_content_list.append(f"  \\includegraphics[width={figure_width}]{{{relative_fig_path_in_tex}}}")
+    latex_content_list.append(f"  \\caption{{{caption_text.replace('_', r'\_')}}}")
+    latex_content_list.append(f"  \\label{{fig:{label_text}}}")
+    latex_content_list.append(r"\end{figure}")
+    latex_content_list.append("\n")
 
-def add_figure(latex_content, fig_path, caption, label, width="0.8\\textwidth"):
-    if os.path.exists(fig_path):
-        latex_content.append(r"\begin{figure}[H]")
-        latex_content.append(r"  \centering")
-        latex_content.append(f"  \\includegraphics[width={width}]{{{{{fig_path}}}}}") # Double {{}} for f-string
-        latex_content.append(f"  \\caption{{{caption}}}")
-        latex_content.append(f"  \\label{{fig:{label}}}")
-        latex_content.append(r"\end{figure}")
-        latex_content.append("\n")
-    else:
-        latex_content.append(f"% Figure not found: {fig_path}\n")
-
-def add_table_from_df(latex_content, df, caption, label):
-    if df is not None and not df.empty:
-        latex_content.append(r"\begin{table}[H]")
-        latex_content.append(r"  \centering")
-        latex_content.append(f"  \\caption{{{caption}}}")
-        latex_content.append(f"  \\label{{tab:{label}}}")
-        # Format numbers in DataFrame for LaTeX output
-        # Ensure column names are LaTeX-friendly (no underscores, etc.)
-        df_latex = df.copy()
-        for col in df_latex.select_dtypes(include=np.number).columns:
-            df_latex[col] = df_latex[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
+def add_dataframe_as_latex_table(latex_content_list, dataframe, caption_text, label_text, col_format=None):
+    if dataframe is not None and not dataframe.empty:
+        latex_content_list.append(r"\begin{table}[H]")
+        latex_content_list.append(r"  \centering")
+        latex_content_list.append(r"  \small") # Make table text smaller if needed
+        latex_content_list.append(f"  \\caption{{{caption_text.replace('_', r'\_')}}}")
+        latex_content_list.append(f"  \\label{{tab:{label_text}}}")
         
-        df_latex.columns = [col.replace('_', ' ').title() for col in df_latex.columns]
+        df_for_latex = dataframe.copy()
+        # Format numeric columns to a few decimal places
+        for col in df_for_latex.select_dtypes(include=np.number).columns:
+            df_for_latex[col] = df_for_latex[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
         
-        latex_content.append(df_latex.to_latex(index=False, escape=False, column_format='|' + 'l|'*len(df.columns)))
-        latex_content.append(r"\end{table}")
-        latex_content.append("\n")
-    else:
-        latex_content.append(f"% Table data not available for: {label}\n")
+        # Sanitize column names for LaTeX (replace underscores, title case)
+        df_for_latex.columns = [col.replace('_', ' ').title() for col in df_for_latex.columns]
+        
+        if col_format is None:
+            col_format = '|' + 'l|' * len(df_for_latex.columns) # Default left-aligned
 
+        latex_content_list.append(df_for_latex.to_latex(index=False, escape=False, column_format=col_format, booktabs=True))
+        latex_content_list.append(r"\end{table}")
+        latex_content_list.append("\n")
+    else:
+        latex_content_list.append(f"% Table data for '{label_text}' is empty or None.\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Generate LaTeX report from experiment results.")
@@ -108,213 +126,189 @@ def main():
 
     with open(args.config_path, 'r') as f:
         config = json.load(f)
-    
     gs = config['global_settings']
     
-    report_output_dir = os.path.join(args.output_dir, os.path.basename(args.experiment_run_dir) + "_report")
-    report_figures_dir = os.path.join(report_output_dir, "figures")
-    os.makedirs(report_figures_dir, exist_ok=True)
+    report_filename_base = os.path.basename(args.experiment_run_dir) + "_report"
+    report_output_abs_dir = os.path.join(args.output_dir, report_filename_base)
+    report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures")
+    os.makedirs(report_figures_abs_dir, exist_ok=True)
     
     latex_content = [LATEX_TEMPLATE_HEADER]
+    all_targets_summary_metrics = [] # To collect data for an overall summary table
 
-    # --- Overall Summary Section ---
-    latex_content.append(get_section_header(1, "Overall Summary and Key Findings"))
-    # Placeholder for overall summary table/plots later
-    all_target_summary_data = []
-
-
-    # --- Loop through each target ---
     for target_info in config['targets']:
         target_id_name = target_info['id_name']
         target_display_name = target_info['display_name']
         mf_display_name = target_info['molecular_function_display_name']
         
-        latex_content.append(f"\\clearpage\n{get_section_header(1, f'Target: {target_display_name} (MF: {mf_display_name})')}")
-        
-        target_results_base = os.path.join(args.experiment_run_dir, target_id_name, "results")
-        if not os.path.exists(target_results_base):
+        latex_content.append(f"\\clearpage\n{get_section_header_latex(1, f'Target: {target_display_name} (MF: {mf_display_name})')}")
+        target_results_base_dir = os.path.join(args.experiment_run_dir, target_id_name, "results")
+
+        if not os.path.exists(target_results_base_dir):
             latex_content.append(f"Results not found for target {target_id_name}.\n")
             continue
 
-        # Store data for optimizing SIMSPACE_DIM
-        dim_opt_data = defaultdict(lambda: defaultdict(list)) # repr -> dr_method -> list of (dim, mean_min_dist)
+        # --- Section: Dimensionality Optimization ---
+        latex_content.append(get_section_header_latex(2, "Optimization of Similarity Space Dimensionality (SIMSPACE\\_DIM)"))
+        latex_content.append("The optimal dimensionality for similarity projections was investigated by testing SIMSPACE\\_DIM values of "
+                             f"{', '.join(map(str, gs['simspace_dims_to_test']))}. "
+                             "The mean of the minimum Euclidean distances from projected target ligands to the molecular function cloud served as the primary metric for this optimization.\n")
 
-        # --- Loop through representations ---
+        target_dim_opt_summary_rows = []
+
         for repr_type in config['representations']:
-            latex_content.append(get_section_header(2, f"Data Representation: {repr_type.capitalize()}"))
+            latex_content.append(get_section_header_latex(3, f"Representation: {repr_type.capitalize()}"))
             
-            # --- Loop through DR methods ---
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-                dr_short_name_fs = dr_params["short_name"].replace('-', '_') # Filesystem friendly
                 dr_display_name = dr_params["short_name"]
+                dr_short_name_fs = dr_display_name.replace('-', '_') # Filesystem friendly
 
-                # latex_content.append(get_section_header(3, f"DR Method: {dr_display_name}"))
-
-                # Collect data for dimensionality optimization plot for this repr/DR
-                current_dr_dim_data = []
-
-                # --- Loop through SIMSPACE_DIM values ---
-                for simspace_dim in gs['simspace_dims_to_test']:
-                    results_path = os.path.join(target_results_base, repr_type, f"dim_{simspace_dim}", dr_short_name_fs)
-                    distances_csv_path = os.path.join(results_path, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim{simspace_dim}_distances.csv")
+                dim_vs_dist_data = []
+                for simspace_dim_val in gs['simspace_dims_to_test']:
+                    results_path_for_dim_dr = os.path.join(target_results_base_dir, repr_type, f"dim_{simspace_dim_val}", dr_short_name_fs)
+                    distances_csv = os.path.join(results_path_for_dim_dr, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim{simspace_dim_val}_distances.csv")
                     
-                    if os.path.exists(distances_csv_path):
+                    if os.path.exists(distances_csv):
                         try:
-                            df_distances = pd.read_csv(distances_csv_path)
-                            if 'min_dist_to_mf_cloud' in df_distances.columns and not df_distances['min_dist_to_mf_cloud'].empty:
-                                mean_min_dist = df_distances['min_dist_to_mf_cloud'].mean()
-                                current_dr_dim_data.append({'dim': simspace_dim, 'mean_min_dist': mean_min_dist})
-                                dim_opt_data[repr_type][dr_display_name].append((simspace_dim, mean_min_dist))
+                            df_dist = pd.read_csv(distances_csv)
+                            if 'min_dist_to_mf_cloud' in df_dist and not df_dist['min_dist_to_mf_cloud'].dropna().empty:
+                                mean_min_d = df_dist['min_dist_to_mf_cloud'].dropna().mean()
+                                dim_vs_dist_data.append({'dim': simspace_dim_val, 'mean_min_dist': mean_min_d})
                         except Exception as e:
-                            logging.warning(f"Could not read or process distances CSV: {distances_csv_path} - {e}")
+                            logging.warning(f"Could not process distances CSV {distances_csv}: {e}")
                 
-                # Plot for SIMSPACE_DIM optimization for current repr/DR method
-                if current_dr_dim_data:
-                    df_plot_dim_opt = pd.DataFrame(current_dr_dim_data)
-                    df_plot_dim_opt.sort_values(by='dim', inplace=True)
+                if dim_vs_dist_data:
+                    df_plot = pd.DataFrame(dim_vs_dist_data).sort_values(by='dim')
                     
-                    plt.figure(figsize=(7, 4))
-                    plt.plot(df_plot_dim_opt['dim'], df_plot_dim_opt['mean_min_dist'], marker='o', linestyle='-')
-                    plt.xlabel("Similarity Space Dimensionality (SIMSPACE_DIM)")
+                    plt.figure(figsize=(8, 5))
+                    plt.plot(df_plot['dim'], df_plot['mean_min_dist'], marker='o', linestyle='-', label=dr_display_name)
+                    plt.xlabel("SIMSPACE\\_DIM Value")
                     plt.ylabel("Mean Min. Distance to MF Cloud")
-                    plt.title(f"Optimizing SIMSPACE_DIM for {target_display_name}\n({repr_type.capitalize()}, {dr_display_name})")
+                    plt.title(f"SIMSPACE\\_DIM vs. Mean Min. Distance\nTarget: {target_display_name} ({repr_type.capitalize()}, {dr_display_name})", fontsize=11)
                     plt.xticks(gs['simspace_dims_to_test'])
-                    plt.grid(True, which="both", ls="-", alpha=0.5)
+                    plt.grid(True, linestyle='--', alpha=0.6)
+                    plt.legend()
                     
-                    dim_opt_plot_filename = f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim_vs_mindist.png"
-                    dim_opt_plot_path_src = os.path.join(results_path, "..", dim_opt_plot_filename) # Save one level up from specific dim folder
-                    dim_opt_plot_path_dest = os.path.join(report_figures_dir, dim_opt_plot_filename)
-                    plt.savefig(dim_opt_plot_path_src) # Save in results dir too
+                    plot_filename = f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim_vs_mindist.png"
+                    plot_abs_path_dest = os.path.join(report_figures_abs_dir, plot_filename)
+                    try:
+                        plt.savefig(plot_abs_path_dest, dpi=150, bbox_inches='tight')
+                        plot_relative_path_for_tex = os.path.join("figures", plot_filename) # Path relative to .tex file
+                        caption = f"Mean minimum distance to MF cloud vs. SIMSPACE\\_DIM for {target_display_name} ({repr_type.capitalize()}, DR: {dr_display_name})."
+                        add_figure_to_latex(latex_content, plot_relative_path_for_tex, caption, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dimopt")
+                    except Exception as e: logging.error(f"Failed to save dim_opt plot {plot_abs_path_dest}: {e}")
                     plt.close()
-                    
-                    shutil.copy(dim_opt_plot_path_src, dim_opt_plot_path_dest)
-                    caption = f"Mean minimum distance vs. SIMSPACE\\_DIM for target {target_display_name} ({repr_type.capitalize()}, DR: {dr_display_name})."
-                    add_figure(latex_content, dim_opt_plot_path_dest, caption, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dimopt", width="0.7\\textwidth")
 
-            latex_content.append("\\clearpage\n")
-        
-        # --- After iterating all DRs for a representation, find "optimal" dim ---
-        # For simplicity, choose dim that gives lowest mean_min_dist across all DRs for that repr, or report per DR
-        # This part needs more sophisticated logic to choose a single "optimal" or discuss variability.
-        # For now, we will proceed to show 2D plots if they exist.
+                    # Find best dim for summary
+                    if not df_plot.empty:
+                        best_row = df_plot.loc[df_plot['mean_min_dist'].idxmin()]
+                        target_dim_opt_summary_rows.append({
+                            'Representation': repr_type.capitalize(), 'DR Method': dr_display_name,
+                            'Optimal_SIMSPACE_DIM': int(best_row['dim']), 
+                            'Mean_Min_Dist_at_Optimal_DIM': best_row['mean_min_dist']
+                        })
+            latex_content.append("\\clearpage\n") # After all DR methods for a representation
 
-        latex_content.append(get_section_header(2, f"Detailed 2D Projections (if available)"))
-        # Loop again to add 2D scatter and histograms
-        for repr_type in config['representations']:
-            latex_content.append(get_section_header(3, f"2D Plots for Representation: {repr_type.capitalize()}"))
-            for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-                dr_short_name_fs = dr_params["short_name"].replace('-', '_')
-                dr_display_name = dr_params["short_name"]
-                
-                dim2_results_path = os.path.join(target_results_base, repr_type, "dim_2", dr_short_name_fs)
-                if os.path.exists(dim2_results_path):
-                    latex_content.append(get_section_header(4, f"DR Method: {dr_display_name} (2D)"))
-
-                    scatter_plot_src = os.path.join(dim2_results_path, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim2_scatter.png")
-                    hist_plot_src = os.path.join(dim2_results_path, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim2_min_distances_hist.png")
-                    
-                    scatter_plot_dest = os.path.join(report_figures_dir, os.path.basename(scatter_plot_src))
-                    hist_plot_dest = os.path.join(report_figures_dir, os.path.basename(hist_plot_src))
-
-                    if os.path.exists(scatter_plot_src):
-                        shutil.copy(scatter_plot_src, scatter_plot_dest)
-                        caption_scatter = f"2D Similarity space for {target_display_name} ({repr_type.capitalize()}, {dr_display_name}). Projected target ligands (red 'x')."
-                        add_figure(latex_content, scatter_plot_dest, caption_scatter, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_scatter2D")
-                    
-                    if os.path.exists(hist_plot_src):
-                        shutil.copy(hist_plot_src, hist_plot_dest)
-                        # Try to get mean/median from distances.csv for caption
-                        distances_csv_path = os.path.join(dim2_results_path, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim2_distances.csv")
-                        dist_stats_caption = ""
-                        if os.path.exists(distances_csv_path):
-                            try:
-                                df_dist = pd.read_csv(distances_csv_path)
-                                if 'min_dist_to_mf_cloud' in df_dist:
-                                    mean_d = df_dist['min_dist_to_mf_cloud'].mean()
-                                    median_d = df_dist['min_dist_to_mf_cloud'].median()
-                                    dist_stats_caption = f" Mean min dist: {mean_d:.2f}, Median min dist: {median_d:.2f}."
-                            except: pass
-                        caption_hist = f"Histogram of minimum distances for {target_display_name} ({repr_type.capitalize()}, {dr_display_name}, 2D).{dist_stats_caption}"
-                        add_figure(latex_content, hist_plot_dest, caption_hist, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_hist2D", width="0.7\\textwidth")
-                    latex_content.append("\\clearpage\n")
-
-        # --- Summary table for the current target ---
-        target_summary_rows = []
-        for repr_type in config['representations']:
-            for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-                dr_short_name_fs = dr_params["short_name"].replace('-', '_')
-                dr_display_name = dr_params["short_name"]
-                
-                # Find the optimal dimension for this combo from dim_opt_data
-                best_dim_for_combo = 'N/A'
-                best_dist_for_combo = np.inf
-                if dim_opt_data[repr_type][dr_display_name]:
-                    sorted_dims = sorted(dim_opt_data[repr_type][dr_display_name], key=lambda x: x[1]) # Sort by mean_min_dist
-                    if sorted_dims:
-                        best_dim_for_combo = sorted_dims[0][0]
-                        best_dist_for_combo = sorted_dims[0][1]
-
-                # Now load the distances for this best_dim
-                mean_min_dist_at_best_dim = best_dist_for_combo if best_dim_for_combo != 'N/A' else np.nan
-                # Add other metrics if desired (kNN, centroid) by loading the specific distances.csv
-                
-                target_summary_rows.append({
-                    'Representation': repr_type.capitalize(),
-                    'DR Method': dr_display_name,
-                    'Optimal DIM': best_dim_for_combo,
-                    'Mean Min Dist @ Opt DIM': mean_min_dist_at_best_dim
+        if target_dim_opt_summary_rows:
+            df_target_dim_opt_summary = pd.DataFrame(target_dim_opt_summary_rows)
+            latex_content.append(get_section_header_latex(3, f"Summary of Optimal Dimensionality for {target_display_name}"))
+            add_dataframe_as_latex_table(latex_content, df_target_dim_opt_summary,
+                                         f"Optimal SIMSPACE\\_DIM and corresponding Mean Minimum Distance for {target_display_name}.",
+                                         f"opt_dim_summary_{target_id_name}")
+            
+            # Add to overall summary
+            for row in target_dim_opt_summary_rows:
+                all_targets_summary_metrics.append({
+                    'Target': target_display_name, **row
                 })
-                all_target_summary_data.append({ # For overall summary
-                    'Target': target_display_name,
-                    'Representation': repr_type.capitalize(),
-                    'DR Method': dr_display_name,
-                    'Optimal DIM': best_dim_for_combo,
-                    'Mean Min Dist @ Opt DIM': mean_min_dist_at_best_dim
-                })
-
-
-        if target_summary_rows:
-            df_target_summary = pd.DataFrame(target_summary_rows)
-            latex_content.append(get_section_header(2, f"Summary of Optimal Dimensionality for {target_display_name}"))
-            add_table_from_df(latex_content, df_target_summary, 
-                              f"Optimal SIMSPACE\\_DIM and corresponding Mean Minimum Distance to MF Cloud for target {target_display_name}.",
-                              f"summary_opt_dim_{target_id_name}")
         latex_content.append("\\clearpage\n")
 
 
-    # --- Add Overall Summary Section Content ---
-    if all_target_summary_data:
-        df_overall_summary = pd.DataFrame(all_target_summary_data)
-        # This section in the LaTeX needs to be moved or populated here.
-        # For now, just ensure the DataFrame is created.
-        # It would be good to pivot this table or create comparative plots.
-        logging.info("Overall summary table data collected. Needs formatting in LaTeX.")
-        # Example: Table of best DR/Repr per target.
-        # Example: Average performance of each DR method across targets.
+        # --- Section: Detailed 2D Projections ---
+        latex_content.append(get_section_header_latex(2, "Detailed 2D Projections (SIMSPACE\\_DIM = 2)"))
+        dim_2_exists_for_target = False
+        for repr_type in config['representations']:
+            repr_has_2d_plot = False
+            for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
+                dr_display_name = dr_params["short_name"]
+                dr_short_name_fs = dr_display_name.replace('-', '_')
+                
+                dim2_results_path = os.path.join(target_results_base_dir, repr_type, "dim_2", dr_short_name_fs)
+                if os.path.exists(dim2_results_path):
+                    if not repr_has_2d_plot: # Add subsection for representation only if it has 2D plots
+                        latex_content.append(get_section_header_latex(3, f"Representation: {repr_type.capitalize()} (2D Projections)"))
+                        repr_has_2d_plot = True
+                        dim_2_exists_for_target = True
+
+                    latex_content.append(get_section_header_latex(4, f"DR Method: {dr_display_name} (2D)"))
+                    
+                    scatter_src = os.path.join(dim2_results_path, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim2_scatter.png")
+                    hist_src = os.path.join(dim2_results_path, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_dim2_min_distances_hist.png")
+                    
+                    if os.path.exists(scatter_src):
+                        scatter_dest_filename = os.path.basename(scatter_src)
+                        shutil.copy(scatter_src, os.path.join(report_figures_abs_dir, scatter_dest_filename))
+                        caption = f"2D Similarity space for {target_display_name} ({repr_type.capitalize()}, {dr_display_name})."
+                        add_figure_to_latex(latex_content, os.path.join("figures", scatter_dest_filename), caption, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_scatter2D")
+
+                    if os.path.exists(hist_src):
+                        hist_dest_filename = os.path.basename(hist_src)
+                        shutil.copy(hist_src, os.path.join(report_figures_abs_dir, hist_dest_filename))
+                        caption = f"Histogram of minimum distances for {target_display_name} ({repr_type.capitalize()}, {dr_display_name}, 2D)."
+                        add_figure_to_latex(latex_content, os.path.join("figures", hist_dest_filename), caption, f"{target_id_name}_{repr_type}_{dr_short_name_fs}_hist2D", width="0.7\\textwidth")
+            if repr_has_2d_plot: latex_content.append("\\clearpage\n")
+        if not dim_2_exists_for_target:
+            latex_content.append("No 2D projection results were found for this target.\n")
+
+
+    # --- Overall Summary Table Section ---
+    latex_content.append(f"\\clearpage\n{get_section_header_latex(1, 'Overall Comparative Summary')}")
+    if all_targets_summary_metrics:
+        df_all_summary = pd.DataFrame(all_targets_summary_metrics)
+        # Sort or pivot for better readability
+        df_all_summary = df_all_summary[['Target', 'Representation', 'DR Method', 'Optimal_SIMSPACE_DIM', 'Mean_Min_Dist_at_Optimal_DIM']]
+        df_all_summary.sort_values(by=['Target', 'Representation', 'Mean_Min_Dist_at_Optimal_DIM'], inplace=True)
+        
+        latex_content.append("The following table summarizes the optimal SIMSPACE\\_DIM and corresponding mean minimum distance to the MF cloud achieved for each combination of target, representation, and DR method.\n")
+        add_dataframe_as_latex_table(latex_content, df_all_summary,
+                                     "Overall Summary: Optimal SIMSPACE\\_DIM and Mean Minimum Distances.",
+                                     "overall_summary_opt_dims", col_format='|p{3.5cm}|p{2cm}|p{3cm}|c|r|') # Example column format
+    else:
+        latex_content.append("No summary data collected across targets.\n")
 
     latex_content.append(LATEX_TEMPLATE_FOOTER)
 
-    # Write to .tex file
-    report_tex_path = os.path.join(report_output_dir, "experiment_report.tex")
-    with open(report_tex_path, "w") as f:
+    report_tex_path = os.path.join(report_output_abs_dir, "experiment_report.tex")
+    with open(report_tex_path, "w", encoding='utf-8') as f:
         f.write("\n".join(latex_content))
     
     logging.info(f"LaTeX report generated: {report_tex_path}")
-    logging.info(f"Figures copied to: {report_figures_dir}")
-    logging.info("To compile: `pdflatex experiment_report.tex` (may need multiple runs)")
+    logging.info(f"Figures for report are in: {report_figures_abs_dir}")
 
-    # Attempt to compile LaTeX (optional, requires pdflatex in PATH)
     try:
-        subprocess.run(["pdflatex", "-output-directory", report_output_dir, report_tex_path], check=True, capture_output=True, text=True)
-        subprocess.run(["pdflatex", "-output-directory", report_output_dir, report_tex_path], check=True, capture_output=True, text=True) # Run twice for TOC/refs
-        logging.info(f"PDF report compiled successfully in {report_output_dir}")
+        logging.info(f"Attempting to compile LaTeX report in: {report_output_abs_dir}")
+        # Run pdflatex twice for table of contents, references, etc.
+        for _ in range(2):
+            process = subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", "-output-directory", report_output_abs_dir, report_tex_path],
+                capture_output=True, text=True, check=False # check=False to inspect output even on error
+            )
+            if process.returncode != 0:
+                logging.error(f"pdflatex compilation failed on a pass. Log output below.")
+                logging.error("STDOUT:\n" + process.stdout)
+                logging.error("STDERR:\n" + process.stderr)
+                # Try to find the .log file for more detailed errors
+                log_file_path = os.path.join(report_output_abs_dir, "experiment_report.log")
+                if os.path.exists(log_file_path):
+                    logging.error(f"See {log_file_path} for detailed LaTeX errors.")
+                break # Stop trying to compile if one pass fails
+        else: # If loop completed without break
+             logging.info(f"PDF report compilation attempt finished. Check {report_output_abs_dir} for experiment_report.pdf")
+
     except FileNotFoundError:
         logging.warning("pdflatex command not found. Please compile the .tex file manually.")
-    except subprocess.CalledProcessError as e:
-        logging.error(f"pdflatex compilation failed. Check experiment_report.log in {report_output_dir} for details.")
-        logging.error(f"STDOUT: {e.stdout}")
-        logging.error(f"STDERR: {e.stderr}")
-
+    except Exception as e: # Catch other potential errors during subprocess
+        logging.error(f"An unexpected error occurred during pdflatex compilation: {e}")
 
 if __name__ == "__main__":
     main()
