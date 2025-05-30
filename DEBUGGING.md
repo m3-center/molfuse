@@ -310,6 +310,3 @@ This uses main_orchestrator.py.
 # - All file paths in test_config.json point to your *small test data files*.
 
 python main_orchestrator.py --config test_config_for_e2e.json # A specially crafted minimal config
-Use code with caution.
-Bash
-Verification: Check orchestrator.log. Inspect the entire experiment_workspace/run_YYYYMMDD_HHMMSS/ structure and the final_report/ content.

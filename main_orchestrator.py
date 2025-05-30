@@ -234,11 +234,11 @@ def main(config_path="experiment_config.json"):
                         "--dr_method_key", dr_key_analysis,
                         "--dr_short_name", dr_short_name_analysis,
                         "--simspace_dim", str(simspace_dim_val),
-                        "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])),
+                        "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])), # Still passed, though primary metrics changed
                         "--output_dir", os.path.abspath(results_output_dir),
                         "--target_id_name", target_id_name,
                         "--representation_type", repr_type,
-                        "--rdkit_features_list_target_str", rdkit_features_list_target_json_str
+                        "--rdkit_features_list_target_str", rdkit_features_list_target_json_str # Defined earlier in main()
                     ]
                     
                     model_name_root_for_projection = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}"

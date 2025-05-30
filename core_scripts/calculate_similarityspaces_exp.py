@@ -139,12 +139,39 @@ def process_similarity_calculations(
 
     # (Align columns and concat df_main_combined as before)
     all_main_cols = list(set(df_chembl_mf.columns) | (set(df_zinc.columns) if not df_zinc.empty else set()))
+    # Ensure key ID columns are considered for alignment if they exist
+    for id_col_candidate in ['Compound ChEMBL ID', 'ZINC_ID', 'SMILES']: # Add SMILES for safety
+        if id_col_candidate not in all_main_cols and \
+           (id_col_candidate in df_chembl_mf.columns or (not df_zinc.empty and id_col_candidate in df_zinc.columns)):
+            all_main_cols.append(id_col_candidate)
+    all_main_cols = sorted(list(set(all_main_cols))) # Unique and sorted
+
     for col in all_main_cols: 
-        if col not in df_chembl_mf.columns: df_chembl_mf[col] = np.nan
-        if not df_zinc.empty and col not in df_zinc.columns: df_zinc[col] = np.nan
+        if col not in df_chembl_mf.columns: df_chembl_mf[col] = pd.NA # Use pd.NA for missing
+        if not df_zinc.empty and col not in df_zinc.columns: df_zinc[col] = pd.NA
     
     df_main_combined = pd.concat([df_chembl_mf, df_zinc], ignore_index=True) if not df_zinc.empty else df_chembl_mf.copy()
-    logging.info(f"Combined Main (ChEMBL MF + ZINC) DataFrame shape after potential FP parsing: {df_main_combined.shape}")
+    logging.info(f"Combined Main (ChEMBL MF + ZINC) DataFrame shape: {df_main_combined.shape}")
+
+    # ***** NEW: Create unified 'MOLECULE ID' column *****
+    if 'Compound ChEMBL ID' in df_main_combined.columns and 'ZINC_ID' in df_main_combined.columns:
+        df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID'].fillna(df_main_combined['ZINC_ID'])
+    elif 'Compound ChEMBL ID' in df_main_combined.columns:
+        df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID']
+    elif 'ZINC_ID' in df_main_combined.columns:
+        df_main_combined['MOLECULE ID'] = df_main_combined['ZINC_ID']
+    else:
+        # Fallback if neither specific ID column exists, try to use SMILES or generate a placeholder
+        if 'SMILES' in df_main_combined.columns:
+            logging.warning("Neither 'Compound ChEMBL ID' nor 'ZINC_ID' found. Using 'SMILES' as 'MOLECULE ID'. This might not be unique.")
+            df_main_combined['MOLECULE ID'] = df_main_combined['SMILES']
+        else:
+            logging.warning("Critical ID columns ('Compound ChEMBL ID', 'ZINC_ID', 'SMILES') missing. Generating placeholder 'MOLECULE ID'.")
+            df_main_combined['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_main_combined.index).astype(str)
+    
+    # Ensure 'MOLECULE ID' is string and handle any remaining NaNs in it
+    df_main_combined['MOLECULE ID'] = df_main_combined['MOLECULE ID'].astype(str).fillna('MISSING_MOLECULE_ID')
+    logging.info(f"Unified 'MOLECULE ID' column created. Example IDs: {df_main_combined['MOLECULE ID'].unique()[:5]}")
 
     if df_main_combined.empty: # ... (rest of empty check as before)
         logging.error("Combined Main DataFrame is empty. Cannot proceed.")
