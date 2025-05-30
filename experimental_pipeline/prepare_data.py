@@ -107,7 +107,15 @@ def main():
     raw_target_ligands_output_path = os.path.join(args.output_dir, f"{args.target_id_name}_target_ligands_for_feature_calc_raw.csv")
     if not raw_target_ligands_df.empty:
         # Keep only necessary ID columns for feature calculation input and SMILES exclusion
-        cols_for_raw_output = ['SMILES', 'Compound ChEMBL ID'] 
+        cols_for_raw_output = [
+        'SMILES', 
+        'Compound ChEMBL ID', 
+        'Activity Type',          # Good to have for context
+        'Standard Value (nM)',    # CRITICAL for Spearman correlation
+        'accession'               # The UniProt ID of the target itself
+        ]
+
+
         df_to_save = pd.DataFrame(columns=cols_for_raw_output)
         for col in cols_for_raw_output:
             if col in raw_target_ligands_df:
