@@ -36,13 +36,10 @@
       "molecular_function_display_name": "Protein kinase inhibitor"
     }
   ],
-  "representations": ["features", "fingerprints"],
+  "representations": ["fingerprints"],
   "dimensionality_reduction_methods": {
       "pca": {"short_name": "PCA"},
       "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean"},
-      "umap_cosine": {"short_name": "UMAP-Cosine", "metric": "cosine"},
-      "umap_manhattan": {"short_name": "UMAP-Manhattan", "metric": "manhattan"},
-      "umap_hamming": {"short_name": "UMAP-Hamming", "metric": "hamming"},
       "tsne": {"short_name": "t-SNE", "perplexity": 30}
   }
 }

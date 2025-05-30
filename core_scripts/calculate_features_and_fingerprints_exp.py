@@ -41,7 +41,15 @@ desc_list = [
     mordred_descriptors_module.AtomCount.AtomCount('S'),
     mordred_descriptors_module.AtomCount.AtomCount('P'),
     mordred_descriptors_module.AtomCount.AtomCount('X'), # Halogens
-    mordred_descriptors_module.BondCount.BondCount, # Changed from BondCount to BondCount('any') for clarity
+    mordred_descriptors_module.BondCount.BondCount('any', False), 
+    mordred_descriptors_module.BondCount.BondCount('heavy', False), 
+    mordred_descriptors_module.BondCount.BondCount('single', False), 
+    mordred_descriptors_module.BondCount.BondCount('double', False), 
+    mordred_descriptors_module.BondCount.BondCount('triple', False), 
+    mordred_descriptors_module.BondCount.BondCount('aromatic', False), 
+    mordred_descriptors_module.BondCount.BondCount('multiple', False), 
+    mordred_descriptors_module.BondCount.BondCount('single', True), 
+    mordred_descriptors_module.BondCount.BondCount('double', True), 
     mordred_descriptors_module.MoeType.EState_VSA(7),
     mordred_descriptors_module.GeometricalIndex.Diameter3D, # 3D
     mordred_descriptors_module.MomentOfInertia.MomentOfInertia(axis='X'), # 3D
@@ -69,7 +77,7 @@ desc_list = [
 ]
 # Initialize Mordred Calculator using the defined list
 # ignore_3D=False because some listed descriptors are 3D and _process_smiles generates 3D conformer.
-mordred_calc_instance = Calculator(desc_list, ignore_3D=True) 
+mordred_calc_instance = Calculator(desc_list, ignore_3D=False) 
 # Get string names of descriptors for column headers and NaN initialization
 MORDRED_DESCRIPTOR_NAMES = [str(d) for d in mordred_calc_instance.descriptors]
 
