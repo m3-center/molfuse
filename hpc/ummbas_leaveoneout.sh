@@ -12,5 +12,5 @@
 module load nvidia-hpc/default
 module load cuda
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
-python main_orchestrator.py --config debugging_config.json 
-# python main_orchestrator.py --config experiment_config.json 
+# python main_orchestrator.py --config debugging_config.json 
+python main_orchestrator.py --config experiment_config.json 
