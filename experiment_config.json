@@ -24,7 +24,8 @@
         "nBondsKS","nBondsKD","EState_VSA7","nHBAcc","nHBDon","Lipinski","apol","bpol",
         "nRing","n3Ring","n4Ring","n5Ring","n6Ring","n7Ring","n8Ring","nRot","Diameter",
         "TopoShapeIndex","Vabc","MW"
-    ]
+    ],
+    "run_coembedding_for_pca_umap": true 
   },
   "targets": [
     {
@@ -70,11 +71,11 @@
   ],
   "representations": ["features", "fingerprints"],
   "dimensionality_reduction_methods": {
-      "pca": {"short_name": "PCA"},
-      "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean"},
-      "umap_cosine": {"short_name": "UMAP-Cosine", "metric": "cosine"},
-      "umap_manhattan": {"short_name": "UMAP-Manhattan", "metric": "manhattan"},
-      "umap_hamming": {"short_name": "UMAP-Hamming", "metric": "hamming"},
-      "tsne": {"short_name": "t-SNE", "perplexity": 30}
+      "pca": {"short_name": "PCA", "allow_coembedding": true},
+      "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean", "allow_coembedding": true},
+      "umap_cosine": {"short_name": "UMAP-Cosine", "metric": "cosine", "allow_coembedding": true},
+      "umap_manhattan": {"short_name": "UMAP-Manhattan", "metric": "manhattan", "allow_coembedding": true},
+      "umap_hamming": {"short_name": "UMAP-Hamming", "metric": "hamming", "allow_coembedding": true},
+      "tsne": {"short_name": "t-SNE", "perplexity": 30, "allow_coembedding": true} 
   }
 }
