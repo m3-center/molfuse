@@ -27,8 +27,34 @@ except ImportError:
     logging.info("cuML not found. Falling back to scikit-learn for PCA, t-SNE. UMAP on CPU if 'umap-learn' installed.")
 
 # Setup basic logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
-                    handlers=[logging.FileHandler("calculate_simspaces.log"), logging.StreamHandler()])
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+if logger.hasHandlers():
+    logger.handlers.clear()
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s')
+try:
+    file_handler = logging.FileHandler("calculate_simspaces.log", mode='w')
+    file_handler.setFormatter(log_formatter)
+    file_handler.setLevel(logging.INFO) # Or DEBUG for more verbosity
+    logger.addHandler(file_handler)
+except Exception as e:
+    print(f"CRITICAL: Failed to initialize file logger for calculate_simspaces.log: {e}")
+
+# Stream Handler (console output)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(log_formatter)
+stream_handler.setLevel(logging.INFO)
+logger.addHandler(stream_handler)
+
+logging.info("--- calculate_similarityspaces_exp.py script started, logging configured. ---")
+if CUML_AVAILABLE:
+    logging.info("cuML found. Using GPU for PCA, UMAP, t-SNE where possible.")
+else:
+    logging.info("cuML not found. Falling back to scikit-learn for PCA, t-SNE.")
+    if SKLEARN_UMAP_AVAILABLE:
+        logging.info("umap-learn package found. CPU UMAP is available.")
+    else:
+        logging.warning("umap-learn package not found. CPU UMAP will NOT be available.")
 
 FINGERPRINT_COLUMN_PREFIX = "fp_" # Used for output columns after parsing
 NUM_FINGERPRINT_BITS = 2048
@@ -73,39 +99,39 @@ def parse_fingerprint_string_column(df_input, fp_string_col_name=PRECALCULATED_F
     Returns a new DataFrame with expanded fingerprint columns.
     """
     logging.info(f"Parsing fingerprint string column: '{fp_string_col_name}'")
-    
-    # Ensure the column exists
+
     if fp_string_col_name not in df_input.columns:
         logging.error(f"Fingerprint string column '{fp_string_col_name}' not found in DataFrame for parsing.")
-        # Return a DataFrame that will cause an error or be empty downstream
-        return pd.DataFrame(columns=[f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(num_bits)])
+        empty_fp_df = pd.DataFrame(columns=[f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(num_bits)], index=df_input.index)
+        df_output = pd.concat([df_input, empty_fp_df], axis=1) # Keep original columns, add empty fp cols
+        return df_output
 
-    def expand_fp_string(fp_str):
+
+    fp_matrix = np.full((len(df_input), num_bits), np.nan) # Pre-allocate with NaNs
+
+    for idx, fp_str in enumerate(df_input[fp_string_col_name]):
         if pd.isna(fp_str) or not isinstance(fp_str, str) or not fp_str.strip():
-            return [np.nan] * num_bits # Return NaNs if input is bad
+            # Already NaN due to pre-allocation
+            continue
         bits = fp_str.split(',')
         if len(bits) == num_bits:
             try:
-                return [int(b) for b in bits]
+                fp_matrix[idx, :] = [int(b) for b in bits]
             except ValueError:
-                 logging.debug(f"ValueError parsing bits in string: {fp_str[:30]}...")
-                 return [np.nan] * num_bits
+                 logging.debug(f"ValueError parsing bits in string (row {df_input.index[idx]}): {fp_str[:30]}... Filling with NaNs.")
+                 # Already NaN
         else:
-            logging.debug(f"Fingerprint string '{fp_str[:30]}...' has incorrect length {len(bits)}, expected {num_bits}. Returning NaNs.")
-            return [np.nan] * num_bits
+            logging.debug(f"Fingerprint string (row {df_input.index[idx]}) '{fp_str[:30]}...' has incorrect length {len(bits)}, expected {num_bits}. Filling with NaNs.")
+            # Already NaN
 
-    # Apply the expansion
-    expanded_fps = df_input[fp_string_col_name].apply(expand_fp_string)
-    
-    # Create a new DataFrame from the list of lists
-    df_fp_bits = pd.DataFrame(expanded_fps.tolist(), 
+    df_fp_bits = pd.DataFrame(fp_matrix,
                               columns=[f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(num_bits)],
                               index=df_input.index)
-    
-    # Combine with original df, dropping the original string column
+
     df_output = pd.concat([df_input.drop(columns=[fp_string_col_name]), df_fp_bits], axis=1)
-    logging.info(f"Fingerprint string column parsed. New shape: {df_output.shape}")
+    logging.info(f"Fingerprint string column parsed. Original shape: {df_input.shape}, New shape after FP expansion: {df_output.shape}")
     return df_output
+
 
 def process_similarity_calculations(
     chembl_mf_data_path, zinc_data_path, target_ligands_unscaled_path_for_tsne,
@@ -195,8 +221,7 @@ def process_similarity_calculations(
         logging.error("Main DataFrame is empty after NaN drop. Cannot proceed.")
         return
     
-    X_original_main = df_main_combined[descriptor_columns].values
-    # ... rest of the script (scaling, PCA, UMAP, t-SNE, saving) remains the same as the previous full version ...
+    X_original_main = df_main_combined[descriptor_columns].values.astype(np.float32) # Ensure float32 for cuML compatibility
 
     logging.info("Standardizing Main data...")
     scaler = StandardScaler()
@@ -263,84 +288,111 @@ def process_similarity_calculations(
 
     # --- t-SNE (co-embedding Main data + Target Ligands) ---
     if dr_method_flags.get('tsne'):
-        # This includes loading target_ligands_unscaled_path_for_tsne,
-        # scaling them with the *current* scaler, vstacking with X_scaled_main,
-        # then PCA for t-SNE, then t-SNE, then separating results and saving target projections.
-        if simspace_dim == 2: # Only run t-SNE if the requested final dimensionality is 2
+        logging.info("t-SNE flag is True. Checking conditions...")
+        if simspace_dim == 2:
             logging.info(f"Attempting t-SNE as simspace_dim is 2 (Perp: {tsne_params['perplexity']}, InitPCA: {tsne_params['pca_components']})...")
-            X_for_tsne_combined = X_scaled_main
+            X_for_tsne_combined = X_scaled_main.copy() # Start with main scaled data
             num_main_data_points = len(X_scaled_main)
-            df_target_ligands_unscaled_for_tsne = None # Renamed for clarity
+            df_target_ligands_unscaled_for_tsne = None
             
-            try:
-                df_target_ligands_unscaled_for_tsne = pd.read_csv(target_ligands_unscaled_path_for_tsne, low_memory=False)
-                # Crucially, use the *same* descriptor columns definition as main data for consistency
-                target_desc_cols = get_descriptor_columns(df_target_ligands_unscaled_for_tsne, representation_type, target_rdkit_features_list, 
-                                                        is_parsed_fp=(representation_type == "fingerprints")) # Target FPs are already parsed by calc_feat_fp
-                
-                if target_desc_cols:
-                    df_target_ligands_unscaled_for_tsne[target_desc_cols] = df_target_ligands_unscaled_for_tsne[target_desc_cols].apply(pd.to_numeric, errors='coerce')
-                    df_target_ligands_unscaled_for_tsne.dropna(subset=target_desc_cols, how='any', inplace=True) 
+            if not target_ligands_unscaled_path_for_tsne or not os.path.exists(target_ligands_unscaled_path_for_tsne):
+                logging.warning(f"Target ligands file for t-SNE not provided or not found: '{target_ligands_unscaled_path_for_tsne}'. t-SNE will run on main data only.")
+            else:
+                try:
+                    logging.info(f"Loading target ligands for t-SNE from: {target_ligands_unscaled_path_for_tsne}")
+                    df_target_ligands_unscaled_for_tsne_raw = pd.read_csv(target_ligands_unscaled_path_for_tsne, low_memory=False)
                     
-                    if not df_target_ligands_unscaled_for_tsne.empty:
-                        X_target_unscaled_values = df_target_ligands_unscaled_for_tsne[target_desc_cols].values
-                        X_target_scaled_values = scaler.transform(X_target_unscaled_values) 
+                    # Target FPs are already parsed by calc_feat_fp by the time they are written to this file
+                    # So is_parsed_fp should be True if representation_type is "fingerprints"
+                    target_desc_cols = get_descriptor_columns(df_target_ligands_unscaled_for_tsne_raw,
+                                                              representation_type, target_rdkit_features_list,
+                                                              is_parsed_fp=(representation_type == "fingerprints"))
+                    
+                    if target_desc_cols:
+                        logging.info(f"Identified {len(target_desc_cols)} descriptor columns in target ligands for t-SNE: {target_desc_cols[:5]}...")
+                        df_target_ligands_unscaled_for_tsne = df_target_ligands_unscaled_for_tsne_raw.copy()
+                        df_target_ligands_unscaled_for_tsne[target_desc_cols] = df_target_ligands_unscaled_for_tsne[target_desc_cols].apply(pd.to_numeric, errors='coerce')
+                        original_target_rows = len(df_target_ligands_unscaled_for_tsne)
+                        df_target_ligands_unscaled_for_tsne.dropna(subset=target_desc_cols, how='any', inplace=True)
+                        if len(df_target_ligands_unscaled_for_tsne) < original_target_rows:
+                            logging.info(f"Dropped {original_target_rows - len(df_target_ligands_unscaled_for_tsne)} rows from target ligands (t-SNE) due to NaNs in descriptors.")
                         
-                        X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_values))
-                        logging.info(f"Co-embedding {num_main_data_points} main points and {len(X_target_scaled_values)} target ligands for t-SNE.")
+                        if not df_target_ligands_unscaled_for_tsne.empty:
+                            logging.info(f"Target ligands for t-SNE shape after NaN drop: {df_target_ligands_unscaled_for_tsne.shape}")
+                            X_target_unscaled_values = df_target_ligands_unscaled_for_tsne[target_desc_cols].values.astype(np.float32)
+                            X_target_scaled_values = scaler.transform(X_target_unscaled_values)
+                            
+                            X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_values))
+                            logging.info(f"Co-embedding {num_main_data_points} main points and {len(X_target_scaled_values)} target ligands for t-SNE. Combined shape: {X_for_tsne_combined.shape}")
+                        else:
+                            logging.warning("Target ligands DataFrame empty after NaN drop for t-SNE. t-SNE will run on main data only.")
+                            df_target_ligands_unscaled_for_tsne = None # Ensure it's None if empty
                     else:
-                        logging.warning("Target ligands DataFrame empty after NaN drop for t-SNE. t-SNE will run on main data only.")
-                        df_target_ligands_unscaled_for_tsne = None # Ensure it's None if empty
-                else:
-                    logging.warning("Could not get descriptor columns for target ligands for t-SNE. t-SNE will run on main data only.")
+                        logging.warning("Could not get descriptor columns for target ligands for t-SNE. t-SNE will run on main data only.")
+                        df_target_ligands_unscaled_for_tsne = None
+                except Exception as e:
+                    logging.error(f"Error loading/processing target ligands for t-SNE: {e}. t-SNE will run on main data only.")
                     df_target_ligands_unscaled_for_tsne = None
-            except Exception as e:
-                logging.error(f"Error loading/scaling target ligands for t-SNE: {e}. t-SNE will run on main data only.")
-                df_target_ligands_unscaled_for_tsne = None
 
-            tsne_cols = [f't-SNE-{i+1}' for i in range(simspace_dim)]
+            tsne_cols = [f't-SNE-{i+1}' for i in range(simspace_dim)] # simspace_dim is 2 here
             try:
-                logging.info(f"t-SNE Step 1: Initial PCA to {tsne_params['pca_components']} components.")
-                pca_for_tsne = (cumlPCA(n_components=tsne_params['pca_components'], random_state=42) if CUML_AVAILABLE
-                                else sklearnPCA(n_components=tsne_params['pca_components'], random_state=42))
-                X_tsne_pca_reduced = pca_for_tsne.fit_transform(X_for_tsne_combined)
+                actual_pca_components_for_tsne = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0]-1, X_for_tsne_combined.shape[1])
+                if actual_pca_components_for_tsne < 2: # PCA needs at least 2 components to be meaningful, and t-SNE needs some variance
+                     logging.error(f"Cannot run t-SNE: too few samples/features for initial PCA. Need at least 2 effective components, got {actual_pca_components_for_tsne} from data shape {X_for_tsne_combined.shape} and config {tsne_params['pca_components']}.")
+                     for col in tsne_cols: df_results_main[col] = np.nan
+                else:
+                    logging.info(f"t-SNE Step 1: Initial PCA to {actual_pca_components_for_tsne} components (data shape: {X_for_tsne_combined.shape}).")
+                    pca_for_tsne = (cumlPCA(n_components=actual_pca_components_for_tsne, random_state=42) if CUML_AVAILABLE
+                                    else sklearnPCA(n_components=actual_pca_components_for_tsne, random_state=42))
+                    X_tsne_pca_reduced = pca_for_tsne.fit_transform(X_for_tsne_combined)
 
-                pca_for_tsne_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_tSNE_internal_PCA_model.lzma")
-                with open(pca_for_tsne_model_path, "wb") as f: dump(pca_for_tsne, f)
-                logging.info(f"Saved t-SNE's internal PCA model to {pca_for_tsne_model_path}")
+                    pca_for_tsne_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_tSNE_internal_PCA_model.lzma")
+                    with open(pca_for_tsne_model_path, "wb") as f: dump(pca_for_tsne, f)
+                    logging.info(f"Saved t-SNE's internal PCA model to {pca_for_tsne_model_path}")
 
-                logging.info(f"t-SNE Step 2: t-SNE to {simspace_dim}D (Perp: {tsne_params['perplexity']}).")
-                tsne_model = (cumlTSNE(n_components=simspace_dim, perplexity=tsne_params['perplexity'], random_state=42, method='barnes_hut', verbose=False) if CUML_AVAILABLE
-                            else sklearnTSNE(n_components=simspace_dim, perplexity=tsne_params['perplexity'], random_state=42, init='pca', method='barnes_hut', n_jobs=-1))
-                tsne_embedding_combined = tsne_model.fit_transform(X_tsne_pca_reduced)
-
-                tsne_embedding_main = tsne_embedding_combined[:num_main_data_points]
-                for i in range(simspace_dim): df_results_main[tsne_cols[i]] = tsne_embedding_main[:, i]
-
-                if df_target_ligands_unscaled_for_tsne is not None and not df_target_ligands_unscaled_for_tsne.empty and \
-                len(tsne_embedding_combined) > num_main_data_points:
-                    tsne_embedding_target = tsne_embedding_combined[num_main_data_points:]
+                    logging.info(f"t-SNE Step 2: t-SNE to {simspace_dim}D (Perp: {tsne_params['perplexity']}). Input PCA-reduced shape: {X_tsne_pca_reduced.shape}")
+                    # For sklearn TSNE, init='pca' is often good. method='exact' for small N, 'barnes_hut' for larger N.
+                    tsne_model = (cumlTSNE(n_components=simspace_dim, perplexity=tsne_params['perplexity'], random_state=42, method='barnes_hut', verbose=logging.DEBUG) if CUML_AVAILABLE # Changed verbose level
+                                else sklearnTSNE(n_components=simspace_dim, perplexity=tsne_params['perplexity'], random_state=42, init='pca', method='barnes_hut', n_jobs=-1, verbose=1 if logger.isEnabledFor(logging.DEBUG) else 0)) # Link verbose to logger
                     
-                    df_tsne_target_coords = pd.DataFrame(tsne_embedding_target, columns=tsne_cols, index=df_target_ligands_unscaled_for_tsne.index)
-                    
-                    id_cols_to_include = [col for col in ['SMILES', 'Compound ChEMBL ID'] if col in df_target_ligands_unscaled_for_tsne.columns]
-                    df_target_ids_for_tsne_output = df_target_ligands_unscaled_for_tsne[id_cols_to_include]
-                    
-                    df_target_ligands_projected_tsne_with_ids = df_target_ids_for_tsne_output.join(df_tsne_target_coords, how="inner") # Use join on index
+                    tsne_embedding_combined = tsne_model.fit_transform(X_tsne_pca_reduced)
+                    logging.info(f"t-SNE fit_transform completed. Output shape: {tsne_embedding_combined.shape}")
 
-                    tsne_target_proj_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_tSNE_TARGET_PROJECTIONS.csv")
-                    df_target_ligands_projected_tsne_with_ids.to_csv(tsne_target_proj_path, index=False)
-                    logging.info(f"Saved t-SNE projections for TARGET LIGANDS (with IDs) to {tsne_target_proj_path} ({len(df_target_ligands_projected_tsne_with_ids)} records)")
-                
-                logging.info(f"t-SNE completed.")
+                    tsne_embedding_main = tsne_embedding_combined[:num_main_data_points]
+                    for i in range(simspace_dim): df_results_main[tsne_cols[i]] = tsne_embedding_main[:, i]
+
+                    if df_target_ligands_unscaled_for_tsne is not None and not df_target_ligands_unscaled_for_tsne.empty and \
+                    len(tsne_embedding_combined) > num_main_data_points:
+                        tsne_embedding_target = tsne_embedding_combined[num_main_data_points:]
+                        
+                        # Ensure indices match between target_ligands_unscaled_for_tsne and the target portion of embedding
+                        if len(tsne_embedding_target) == len(df_target_ligands_unscaled_for_tsne):
+                            df_tsne_target_coords = pd.DataFrame(tsne_embedding_target, columns=tsne_cols, index=df_target_ligands_unscaled_for_tsne.index)
+                            
+                            # Include key ID columns from the original target df
+                            id_cols_to_include_tsne = [col for col in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession'] if col in df_target_ligands_unscaled_for_tsne.columns]
+                            df_target_ids_for_tsne_output = df_target_ligands_unscaled_for_tsne[id_cols_to_include_tsne]
+                            
+                            df_target_ligands_projected_tsne_with_ids = df_target_ids_for_tsne_output.join(df_tsne_target_coords, how="inner")
+
+                            tsne_target_proj_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_tSNE_TARGET_PROJECTIONS.csv")
+                            df_target_ligands_projected_tsne_with_ids.to_csv(tsne_target_proj_path, index=False)
+                            logging.info(f"Saved t-SNE projections for TARGET LIGANDS (with IDs) to {tsne_target_proj_path} ({len(df_target_ligands_projected_tsne_with_ids)} records)")
+                        else:
+                            logging.error(f"t-SNE Mismatch: Target embedding length {len(tsne_embedding_target)} != df_target_ligands length {len(df_target_ligands_unscaled_for_tsne)}. Cannot save target t-SNE projections.")
+                    else:
+                        logging.info("No target ligands were co-embedded or available for t-SNE output.")
+                    logging.info(f"t-SNE completed successfully.")
             except Exception as e:
-                logging.error(f"t-SNE processing failed: {e}")
-                for col in tsne_cols: df_results_main[col] = np.nan
+                logging.error(f"t-SNE processing FAILED: {e}", exc_info=True) # Add exc_info for traceback in log
+                for col in tsne_cols: df_results_main[col] = np.nan # Ensure columns exist
             gc.collect()
         else:
             logging.info(f"Skipping t-SNE calculation because simspace_dim is {simspace_dim} (t-SNE is configured to run only for 2D).")
+    else:
+        logging.info("t-SNE flag is False. Skipping t-SNE.")
+
     # --- Save Comprehensive Similarity Space CSV (for main data) ---
-    # ... (Saving logic as provided in the previous full version) ...
     output_csv_name = f"{base_name_prefix}_similarity_space.csv"
     output_csv_path = os.path.join(output_simspace_dir, output_csv_name)
     logging.info(f"Saving comprehensive similarity space for Main data to {output_csv_path}...")
@@ -388,6 +440,7 @@ if __name__ == "__main__":
     parser.add_argument("--tsne_pca_components", type=int, default=50)
     
     args = parser.parse_args()
+    logging.info(f"Parsed arguments: {args}")
 
     try:
         target_rdkit_features_list = json.loads(args.rdkit_features_list_target_str)
