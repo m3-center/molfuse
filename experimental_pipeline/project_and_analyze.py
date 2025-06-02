@@ -59,7 +59,7 @@ def project_target_ligands_with_models(target_ligands_repr_df_input, scaler_mode
     projected_coords_values = None
     try:
         if CUML_AVAILABLE and 'umap' in dr_method_key.lower() and hasattr(dr_model, 'transform'):
-            with using_device_type('cpu'): projected_coords_values = dr_model.transform(X_target_scaled)
+            with using_device_type('gpu'): projected_coords_values = dr_model.transform(X_target_scaled)
         else: projected_coords_values = dr_model.transform(X_target_scaled)
     except Exception as e: logging.error(f"Error transforming target ligands with DR model {dr_short_name}: {e}"); return pd.DataFrame()
     projection_cols_names = [f"{dr_short_name}-{i+1}" for i in range(simspace_dim)]
