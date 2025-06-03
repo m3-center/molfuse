@@ -301,10 +301,19 @@ def run_tsne_on_combined_data(args):
         elif logger.level == logging.INFO: cuml_tsne_verbose_level = 1 
         try:
             start_time_cuml = time.time()
-            cuml_tsne = cumlTSNE(n_components=2, perplexity=perplexity_to_use, random_state=42, 
-                                 method='barnes_hut', verbose=cuml_tsne_verbose_level,
-                                 n_neighbors=args.n_neighbors if args.n_neighbors else None) 
-            logger.info(f"Initialized cuML TSNE. Input data shape for t-SNE: {X_input_for_tsne.shape}")
+            tsne_init_kwargs_cuml = {
+                'n_components': 2,
+                'perplexity': perplexity_to_use,
+                'random_state': 42,
+                'method': 'barnes_hut',
+                'verbose': cuml_tsne_verbose_level
+            }
+            if args.n_neighbors is not None: # Only add n_neighbors if explicitly provided
+                tsne_init_kwargs_cuml['n_neighbors'] = args.n_neighbors
+            
+            cuml_tsne = cumlTSNE(**tsne_init_kwargs_cuml) # Unpack kwargs
+                                 
+            logger.info(f"Initialized cuML TSNE with kwargs: {tsne_init_kwargs_cuml}. Input data shape for t-SNE: {X_input_for_tsne.shape}")
             embedding_cuml = cuml_tsne.fit_transform(X_input_for_tsne)
             end_time_cuml = time.time()
             logger.info(f"cuML t-SNE completed in {end_time_cuml - start_time_cuml:.2f} seconds. Embedding shape: {embedding_cuml.shape}")
