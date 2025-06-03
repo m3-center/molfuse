@@ -25,20 +25,20 @@ except ImportError:
 
 # --- MODIFIED LOGGING SETUP ---
 logger = logging.getLogger()
-logger.setLevel(logging.INFO) 
+logger.setLevel(logging.DEBUG) 
 if logger.hasHandlers():
     logger.handlers.clear()
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s')
 try:
     file_handler = logging.FileHandler("calculate_simspaces.log", mode='a')
     file_handler.setFormatter(log_formatter)
-    file_handler.setLevel(logging.INFO) 
+    file_handler.setLevel(logging.DEBUG) 
     logger.addHandler(file_handler)
 except Exception as e:
     print(f"CRITICAL: Failed to initialize file logger for calculate_simspaces.log: {e}")
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(logging.INFO)
+stream_handler.setLevel(logging.DEBUG)
 logger.addHandler(stream_handler)
 
 logging.info("--- calculate_similarityspaces_exp.py script started, logging configured. ---")
