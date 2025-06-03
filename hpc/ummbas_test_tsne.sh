@@ -12,9 +12,21 @@ module load nvidia-hpc/default
 module load cuda
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 
-python tests/standalone_tsne_test.py \
-    --input_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/similarity_spaces/features/dim_2/IsocitrateDehydrogenaseNADP_O75874_features_dim2_similarity_space.csv \
-    --descriptor_prefix fp_ \
+python standalone_tsne_test_combined.py \
+    --run_type features \
+    --chembl_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/temp_data/IsocitrateDehydrogenaseNADP_O75874_chembl_mf_excluded_features.csv \
+    --zinc_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/temp_data/IsocitrateDehydrogenaseNADP_O75874_zinc_excluded_features.csv \
+    --descriptor_cols "DipoleMoment,ABC,nAcid,nBase,nAromAtom,nAtom,nH,nC,nN,nO,nS,nP,nX,nBonds,nBondsO,nBondsS,nBondsD,nBondsT,nBondsA,nBondsM,nBondsKS,nBondsKD,EState_VSA7,nHBAcc,nHBDon,Lipinski,apol,bpol,nRing,n3Ring,n4Ring,n5Ring,n6Ring,n7Ring,n8Ring,nRot,Diameter,TopoShapeIndex,Vabc,MW" \ 
+    --pca_components 50 \
+    --perplexity 30 \
+    --use_cuml \
+    --plot
+
+python standalone_tsne_test_combined.py \
+    --run_type fingerprints \
+    --chembl_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/temp_data/IsocitrateDehydrogenaseNADP_O75874_chembl_mf_excluded_fingerprints.csv \
+    --zinc_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/temp_data/IsocitrateDehydrogenaseNADP_O75874_zinc_excluded_fingerprints.csv \
+    --descriptor_prefix "fp_" \
     --pca_components 50 \
     --perplexity 30 \
     --use_cuml \
