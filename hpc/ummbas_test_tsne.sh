@@ -12,7 +12,7 @@ module load nvidia-hpc/default
 module load cuda
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 
-python standalone_tsne_test.py \
+python tests/standalone_tsne_test.py \
     --input_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/similarity_spaces/features/dim_2/IsocitrateDehydrogenaseNADP_O75874_features_dim2_similarity_space.csv \
     --descriptor_prefix fp_ \
     --pca_components 50 \
