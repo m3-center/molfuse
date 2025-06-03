@@ -12,7 +12,7 @@ module load nvidia-hpc/default
 module load cuda
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 
-python standalone_tsne_test_combined.py \
+python tests/standalone_tsne_test_combined.py \
     --run_type features \
     --chembl_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/temp_data/IsocitrateDehydrogenaseNADP_O75874_chembl_mf_excluded_features.csv \
     --zinc_csv /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace/run_20250531_105000/IsocitrateDehydrogenaseNADP_O75874/temp_data/IsocitrateDehydrogenaseNADP_O75874_zinc_excluded_features.csv \
