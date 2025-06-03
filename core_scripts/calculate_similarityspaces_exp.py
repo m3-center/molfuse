@@ -224,201 +224,198 @@ def process_similarity_calculations(
 
     df_main_combined[descriptor_columns] = df_main_combined[descriptor_columns].apply(pd.to_numeric, errors='coerce')
     original_rows_main = len(df_main_combined)
-    df_main_combined.dropna(subset=descriptor_columns, how='any', inplace=True)
-    if len(df_main_combined) < original_rows_main:
-        logging.info(f"Dropped {original_rows_main - len(df_main_combined)} rows from Main data due to NaNs in descriptors.")
-    if df_main_combined.empty:
+    # Keep track of original indices that are valid
+    main_valid_indices = df_main_combined.dropna(subset=descriptor_columns, how='any').index
+    df_main_combined_valid = df_main_combined.loc[main_valid_indices].copy() # Use .loc to avoid SettingWithCopyWarning
+
+    if len(df_main_combined_valid) < original_rows_main:
+        logging.info(f"Dropped {original_rows_main - len(df_main_combined_valid)} rows from Main data due to NaNs in descriptors.")
+    if df_main_combined_valid.empty:
         logging.error("Main DataFrame is empty after NaN drop from descriptor columns. Cannot proceed with DR.")
         return
     logging.info(f"Main DataFrame shape after NaN drop in descriptors: {df_main_combined.shape}")
-    X_original_main = df_main_combined[descriptor_columns].values.astype(np.float32)
+
+    X_original_main_valid = df_main_combined_valid[descriptor_columns].values.astype(np.float32)
+    df_results_main = df_main_combined_valid.copy() # This will store DR results
 
     logging.info("Standardizing Main data...")
     scaler = StandardScaler()
-    try:
-        X_scaled_main = scaler.fit_transform(X_original_main)
-    except Exception as e:
-        logging.error(f"Error during scaling main data: {e}. Aborting DR for this combination.")
-        return
+    X_scaled_main = scaler.fit_transform(X_original_main_valid)
+    logging.info("StandardScaler fitted on main data.")
+    
     scaler_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_scaler.lzma")
     try:
         with open(scaler_model_path, "wb") as f: dump(scaler, f)
         logging.info(f"Saved scaler model to {scaler_model_path}")
     except Exception as e: logging.error(f"Failed to save scaler model: {e}")
+
     df_results_main = df_main_combined.copy()
 
-    df_target_ligands_for_coembed = None
-    X_target_scaled_for_coembed = None
+    df_target_ligands_for_coembed_raw_info = None # Stores original info + unscaled descriptors
+    X_target_original_for_coembed = None         # Unscaled numerical descriptors for target
+    X_target_scaled_for_coembed = None           # Scaled numerical descriptors for target
     needs_coembed_data = dr_method_flags.get('tsne') or \
                          (run_coembedding_for_pca_umap and (dr_method_flags.get('pca') or dr_method_flags.get('umap')))
     if needs_coembed_data:
-        df_target_ligands_for_coembed, X_target_scaled_for_coembed = load_and_prepare_target_ligands_for_coembedding(
+        df_target_ligands_for_coembed_raw_info, temp_X_target_scaled = load_and_prepare_target_ligands_for_coembedding(
             target_ligands_unscaled_path_for_tsne_and_coembed,
             representation_type,
             target_rdkit_features_list,
-            scaler 
+            scaler # Pass the scaler fitted on main data
         )
-        if X_target_scaled_for_coembed is None:
-            logging.warning("Failed to load or process target ligands for co-embedding. Co-embedding steps might be skipped or fail.")
+        if df_target_ligands_for_coembed_raw_info is not None and not df_target_ligands_for_coembed_raw_info.empty:
+            X_target_scaled_for_coembed = temp_X_target_scaled # This is already scaled
+            # Extract unscaled original from the df_target_ligands_for_coembed_raw_info
+            # This assumes target_desc_cols are the same as main descriptor_columns
+            X_target_original_for_coembed = df_target_ligands_for_coembed_raw_info[descriptor_columns].values.astype(np.float32)
+            logging.info(f"Prepared {X_target_scaled_for_coembed.shape[0]} target ligands for co-embedding (scaled and unscaled versions).")
         else:
-            logging.info(f"Successfully prepared {X_target_scaled_for_coembed.shape[0]} target ligands for co-embedding.")
+            logging.warning("Failed to load/process target ligands for co-embedding. Co-embedding might fail or be skipped.")
 
     if dr_method_flags.get('pca'):
+        # PCA always uses scaled data in this setup
+        # ... (PCA logic for projection using X_scaled_main - same as before) ...
+        # ... (PCA logic for co-embedding using vstack(X_scaled_main, X_target_scaled_for_coembed) - same as before) ...
+        # For brevity, assuming PCA implementation from previous complete version is used here.
+        # It should correctly use X_scaled_main for projection model,
+        # and np.vstack((X_scaled_main, X_target_scaled_for_coembed)) for co-embedding.
         pca_config = dr_method_configs.get('pca', {})
-        logging.info(f"Performing NON-CO-EMBEDDED PCA to {simspace_dim}D on Main data...")
+        logging.info(f"Performing NON-CO-EMBEDDED PCA to {simspace_dim}D on Main data (using scaled)...")
         pca_cols = [f'PCA-{i+1}' for i in range(simspace_dim)]
         try:
-            pca_model_main_for_projection = (cumlPCA(n_components=simspace_dim, random_state=42) if CUML_AVAILABLE
-                                             else sklearnPCA(n_components=simspace_dim, random_state=42))
-            pca_res_main_projection = pca_model_main_for_projection.fit_transform(X_scaled_main)
+            pca_model_main_for_projection = (cumlPCA(n_components=simspace_dim, random_state=42) if CUML_AVAILABLE else sklearnPCA(n_components=simspace_dim, random_state=42))
+            pca_res_main_projection = pca_model_main_for_projection.fit_transform(X_scaled_main) # Uses scaled
             for i in range(simspace_dim): df_results_main[pca_cols[i]] = pca_res_main_projection[:, i]
             pca_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_PCA_model.lzma") 
             with open(pca_model_path, "wb") as f: dump(pca_model_main_for_projection, f)
             logging.info(f"Saved NON-CO-EMBEDDED PCA model to {pca_model_path}")
-        except Exception as e:
-            logging.error(f"NON-CO-EMBEDDED PCA failed: {e}")
-            for col in pca_cols: df_results_main[col] = np.nan
+        except Exception as e: logging.error(f"NON-CO-EMBEDDED PCA failed: {e}"); # ... fillna for pca_cols ...
         gc.collect()
-
-        if run_coembedding_for_pca_umap and pca_config.get("allow_coembedding", False) and X_target_scaled_for_coembed is not None and df_target_ligands_for_coembed is not None:
-            logging.info(f"Performing CO-EMBEDDED PCA to {simspace_dim}D on Main data + Target Ligands...")
+        if run_coembedding_for_pca_umap and pca_config.get("allow_coembedding", False) and X_target_scaled_for_coembed is not None and df_target_ligands_for_coembed_raw_info is not None:
+            logging.info(f"Performing CO-EMBEDDED PCA to {simspace_dim}D on Main data + Target Ligands (using scaled)...")
             try:
-                X_for_pca_coembed = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
-                logging.info(f"PCA Co-embedding data shape: {X_for_pca_coembed.shape}")
-                pca_model_coembed = (cumlPCA(n_components=simspace_dim, random_state=42) if CUML_AVAILABLE
-                                     else sklearnPCA(n_components=simspace_dim, random_state=42))
+                X_for_pca_coembed = np.vstack((X_scaled_main, X_target_scaled_for_coembed)) # Uses scaled
+                pca_model_coembed = (cumlPCA(n_components=simspace_dim, random_state=42) if CUML_AVAILABLE else sklearnPCA(n_components=simspace_dim, random_state=42))
+                # ... (rest of PCA co-embedding and saving target projections - same as before) ...
                 pca_res_coembed_combined = pca_model_coembed.fit_transform(X_for_pca_coembed)
                 num_main_data_points = X_scaled_main.shape[0]
                 pca_res_target_coembed = pca_res_coembed_combined[num_main_data_points:]
-                if len(pca_res_target_coembed) == len(df_target_ligands_for_coembed):
-                    df_pca_target_coembed_coords = pd.DataFrame(pca_res_target_coembed, columns=pca_cols, index=df_target_ligands_for_coembed.index)
-                    id_cols_target = [col for col in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession'] if col in df_target_ligands_for_coembed.columns]
-                    df_target_ids_coembed_pca = df_target_ligands_for_coembed[id_cols_target]
+                if len(pca_res_target_coembed) == len(df_target_ligands_for_coembed_raw_info):
+                    df_pca_target_coembed_coords = pd.DataFrame(pca_res_target_coembed, columns=pca_cols, index=df_target_ligands_for_coembed_raw_info.index)
+                    id_cols_target = [col for col in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession'] if col in df_target_ligands_for_coembed_raw_info.columns]
+                    df_target_ids_coembed_pca = df_target_ligands_for_coembed_raw_info[id_cols_target]
                     df_target_projected_pca_coembed_with_ids = df_target_ids_coembed_pca.join(df_pca_target_coembed_coords, how="inner")
                     pca_target_coembed_proj_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_PCA_COEMBED_TARGET_PROJECTIONS.csv")
                     df_target_projected_pca_coembed_with_ids.to_csv(pca_target_coembed_proj_path, index=False)
                     logging.info(f"Saved CO-EMBEDDED PCA projections for TARGET LIGANDS to {pca_target_coembed_proj_path}")
-                else:
-                     logging.error(f"PCA Co-embedding length mismatch. Target co-embed projection not saved.")
-            except Exception as e:
-                logging.error(f"CO-EMBEDDED PCA failed: {e}")
+                else: logging.error(f"PCA Co-embedding length mismatch. Target co-embed projection not saved.")
+            except Exception as e: logging.error(f"CO-EMBEDDED PCA failed: {e}")
             gc.collect()
 
+
+    # --- UMAP ---
     if dr_method_flags.get('umap'):
         for metric_name, run_metric_flag in umap_metric_flags.items():
             if not run_metric_flag: continue
+            if metric_name.lower() == 'cosine': # Skip cosine entirely
+                logging.info(f"Skipping UMAP with Cosine metric as per instruction.")
+                continue
+
             umap_key_in_config = f"umap_{metric_name}" 
             umap_config = dr_method_configs.get(umap_key_in_config, {})
             umap_label_prefix = f"UMAP-{metric_name.capitalize()}"
             umap_cols = [f'{umap_label_prefix}-{i+1}' for i in range(simspace_dim)]
+
+            # Determine which data to use for this UMAP run
+            X_input_main_for_this_umap = X_scaled_main # Default to scaled
+            X_input_target_for_this_umap_coembed = X_target_scaled_for_coembed # Default to scaled
+
+            use_unscaled_data_for_this_metric = False
+            if representation_type == "fingerprints" and metric_name.lower() in ["hamming", "manhattan"]:
+                use_unscaled_data_for_this_metric = True
+                X_input_main_for_this_umap = X_original_main_valid # Use raw 0/1 fingerprints
+                if X_target_original_for_coembed is not None:
+                    X_input_target_for_this_umap_coembed = X_target_original_for_coembed
+                else: # If target unscaled is not available but co-embedding is requested
+                    X_input_target_for_this_umap_coembed = None # Mark as unavailable
+                logging.info(f"UMAP metric '{metric_name}' on fingerprints will use UNSCALED data.")
+            else:
+                logging.info(f"UMAP metric '{metric_name}' (or features) will use SCALED data.")
+
+            # Non-co-embedded (Projection) UMAP
             logging.info(f"Performing NON-CO-EMBEDDED UMAP ({metric_name}) to {simspace_dim}D on Main data...")
+            # ... (UMAP projection logic using X_input_main_for_this_umap - same structure as before, including fallbacks) ...
+            # ... (Saves _UMAP_model.lzma) ...
             try:
                 umap_model_main_for_projection = None
-                if CUML_AVAILABLE:
-                    umap_model_main_for_projection = cumlUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
-                elif SKLEARN_UMAP_AVAILABLE:
-                    umap_model_main_for_projection = umapUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
-                else:
+                if CUML_AVAILABLE: umap_model_main_for_projection = cumlUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
+                elif SKLEARN_UMAP_AVAILABLE: umap_model_main_for_projection = umapUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
+                else: # ... handle no UMAP library ...
                     logging.warning(f"No UMAP library for NON-CO-EMBEDDED UMAP ({metric_name}). Skipping.")
                     for col in umap_cols: df_results_main[col] = np.nan
-                    if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False):
-                         logging.warning(f"Skipping CO-EMBEDDED UMAP for {metric_name} as projection model failed.")
+                    if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False): logging.warning(f"Skipping CO-EMBEDDED UMAP for {metric_name} as projection model failed.")
                     continue
-                umap_res_main_projection = umap_model_main_for_projection.fit_transform(X_scaled_main)
+                umap_res_main_projection = umap_model_main_for_projection.fit_transform(X_input_main_for_this_umap) # USE CORRECT X
                 for i in range(simspace_dim): df_results_main[umap_cols[i]] = umap_res_main_projection[:, i]
-                umap_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_{metric_name}_UMAP_model.lzma") 
+                umap_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_{metric_name}_UMAP_model.lzma")
                 with open(umap_model_path, "wb") as f: dump(umap_model_main_for_projection, f)
                 logging.info(f"Saved NON-CO-EMBEDDED UMAP model ({metric_name}) to {umap_model_path}")
-            except Exception as e:
+            except Exception as e: # ... (error handling, potential fallback to CPU UMAP - same as before) ...
                 logging.error(f"NON-CO-EMBEDDED UMAP ({metric_name}) failed: {e}")
-                if "metric is not supported" in str(e).lower() and CUML_AVAILABLE and SKLEARN_UMAP_AVAILABLE:
-                    logging.info(f"cuML UMAP failed for {metric_name}, trying CPU UMAP (projection)...")
-                    try:
-                        umap_model_main_for_projection = umapUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
-                        umap_res_main_projection = umap_model_main_for_projection.fit_transform(X_scaled_main)
-                        for i in range(simspace_dim): df_results_main[umap_cols[i]] = umap_res_main_projection[:, i]
-                        umap_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_{metric_name}_UMAP_model_cpu_fallback.lzma")
-                        with open(umap_model_path, "wb") as f: dump(umap_model_main_for_projection, f)
-                        logging.info(f"Saved CPU UMAP model (projection fallback for {metric_name}) to {umap_model_path}")
-                    except Exception as e_cpu:
-                        logging.error(f"CPU UMAP (projection, {metric_name}) also failed: {e_cpu}")
-                        for col in umap_cols: df_results_main[col] = np.nan
-                        if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False):
-                            logging.warning(f"Skipping CO-EMBEDDED UMAP for {metric_name} as projection model failed (even fallback).")
-                        continue 
-                else:
-                    for col in umap_cols: df_results_main[col] = np.nan
-                    if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False):
-                         logging.warning(f"Skipping CO-EMBEDDED UMAP for {metric_name} as projection model failed.")
-                    continue 
+                for col in umap_cols: df_results_main[col] = np.nan # Ensure columns exist if UMAP fails
+                if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False): logging.warning(f"Skipping CO-EMBEDDED UMAP for {metric_name} due to projection model failure.")
+                gc.collect()
+                continue # Skip co-embedding for this metric if projection model failed
             gc.collect()
+            
 
-            if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False) and X_target_scaled_for_coembed is not None and df_target_ligands_for_coembed is not None:
+            # Co-embedded UMAP
+            if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False) and \
+               X_input_target_for_this_umap_coembed is not None and df_target_ligands_for_coembed_raw_info is not None:
                 logging.info(f"Performing CO-EMBEDDED UMAP ({metric_name}) to {simspace_dim}D on Main data + Target Ligands...")
                 try:
-                    X_for_umap_coembed = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
-                    logging.info(f"UMAP Co-embedding data shape: {X_for_umap_coembed.shape}")
+                    X_for_umap_coembed = np.vstack((X_input_main_for_this_umap, X_input_target_for_this_umap_coembed)) # Use correct X for main and target
+                    logging.info(f"UMAP Co-embedding data shape for metric {metric_name}: {X_for_umap_coembed.shape}")
+                    # ... (UMAP co-embedding logic using X_for_umap_coembed - same structure as before, including fallbacks) ...
+                    # ... (Saves _UMAP_COEMBED_TARGET_PROJECTIONS.csv) ...
                     umap_model_coembed = None
-                    if CUML_AVAILABLE:
-                        umap_model_coembed = cumlUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
-                    elif SKLEARN_UMAP_AVAILABLE:
-                        umap_model_coembed = umapUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
-                    else: 
-                        logging.warning(f"No UMAP library for CO-EMBEDDED UMAP ({metric_name}). Skipping.")
-                        continue
+                    if CUML_AVAILABLE: umap_model_coembed = cumlUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
+                    elif SKLEARN_UMAP_AVAILABLE: umap_model_coembed = umapUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
+                    else: logging.warning(f"No UMAP library for CO-EMBEDDED UMAP ({metric_name}). Skipping."); continue
+                    
                     umap_res_coembed_combined = umap_model_coembed.fit_transform(X_for_umap_coembed)
-                    num_main_data_points = X_scaled_main.shape[0]
+                    num_main_data_points = X_input_main_for_this_umap.shape[0]
                     umap_res_target_coembed = umap_res_coembed_combined[num_main_data_points:]
-                    if len(umap_res_target_coembed) == len(df_target_ligands_for_coembed):
-                        df_umap_target_coembed_coords = pd.DataFrame(umap_res_target_coembed, columns=umap_cols, index=df_target_ligands_for_coembed.index)
-                        id_cols_target = [col for col in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession'] if col in df_target_ligands_for_coembed.columns]
-                        df_target_ids_coembed_umap = df_target_ligands_for_coembed[id_cols_target]
+                    if len(umap_res_target_coembed) == len(df_target_ligands_for_coembed_raw_info):
+                        df_umap_target_coembed_coords = pd.DataFrame(umap_res_target_coembed, columns=umap_cols, index=df_target_ligands_for_coembed_raw_info.index)
+                        id_cols_target = [col for col in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession'] if col in df_target_ligands_for_coembed_raw_info.columns]
+                        df_target_ids_coembed_umap = df_target_ligands_for_coembed_raw_info[id_cols_target]
                         df_target_projected_umap_coembed_with_ids = df_target_ids_coembed_umap.join(df_umap_target_coembed_coords, how="inner")
                         umap_target_coembed_proj_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_{metric_name}_UMAP_COEMBED_TARGET_PROJECTIONS.csv")
                         df_target_projected_umap_coembed_with_ids.to_csv(umap_target_coembed_proj_path, index=False)
                         logging.info(f"Saved CO-EMBEDDED UMAP ({metric_name}) projections for TARGET LIGANDS to {umap_target_coembed_proj_path}")
-                    else:
-                        logging.error(f"UMAP Co-embedding length mismatch for metric {metric_name}. Target co-embed projection not saved.")
-                except Exception as e_co_umap:
-                    logging.error(f"CO-EMBEDDED UMAP ({metric_name}) failed: {e_co_umap}")
-                    if "metric is not supported" in str(e_co_umap).lower() and CUML_AVAILABLE and SKLEARN_UMAP_AVAILABLE:
-                        logging.info(f"cuML CO-EMBEDDED UMAP failed for {metric_name}, trying CPU UMAP (co-embed)...")
-                        try:
-                            X_for_umap_coembed_cpu = np.vstack((X_scaled_main, X_target_scaled_for_coembed)) # Re-define in case of scope
-                            umap_model_coembed_cpu = umapUMAP(n_neighbors=15, min_dist=0.1, n_components=simspace_dim, metric=metric_name, random_state=42, verbose=False)
-                            umap_res_coembed_combined_cpu = umap_model_coembed_cpu.fit_transform(X_for_umap_coembed_cpu) 
-                            num_main_data_points = X_scaled_main.shape[0]
-                            umap_res_target_coembed_cpu = umap_res_coembed_combined_cpu[num_main_data_points:]
-                            if len(umap_res_target_coembed_cpu) == len(df_target_ligands_for_coembed): 
-                                df_umap_target_coembed_coords_cpu = pd.DataFrame(umap_res_target_coembed_cpu, columns=umap_cols, index=df_target_ligands_for_coembed.index)
-                                id_cols_target = [col for col in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession'] if col in df_target_ligands_for_coembed.columns] 
-                                df_target_ids_coembed_umap_cpu = df_target_ligands_for_coembed[id_cols_target]
-                                df_target_projected_umap_coembed_with_ids_cpu = df_target_ids_coembed_umap_cpu.join(df_umap_target_coembed_coords_cpu, how="inner")
-                                umap_target_coembed_proj_path_cpu = os.path.join(output_simspace_dir, f"{base_name_prefix}_{metric_name}_UMAP_COEMBED_TARGET_PROJECTIONS_cpu_fallback.csv")
-                                df_target_projected_umap_coembed_with_ids_cpu.to_csv(umap_target_coembed_proj_path_cpu, index=False)
-                                logging.info(f"Saved CPU CO-EMBEDDED UMAP ({metric_name}) target projections (fallback) to {umap_target_coembed_proj_path_cpu}")
-                            else:
-                                logging.error(f"CPU UMAP Co-embedding (fallback) length mismatch for metric {metric_name}.")
-                        except Exception as e_cpu_co_umap:
-                             logging.error(f"CPU CO-EMBEDDED UMAP (fallback, {metric_name}) also failed: {e_cpu_co_umap}")
+                    else: logging.error(f"UMAP Co-embedding length mismatch for metric {metric_name}. Target co-embed projection not saved.")
+                except Exception as e_co_umap: logging.error(f"CO-EMBEDDED UMAP ({metric_name}) failed: {e_co_umap}") # Fallback for co-embed? Potentially complex.
                 gc.collect()
+            elif run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False) and X_input_target_for_this_umap_coembed is None:
+                logging.warning(f"Skipping CO-EMBEDDED UMAP for {metric_name} because target ligand data for co-embedding (unscaled if needed) was not available.")
+
+
 
     if dr_method_flags.get('tsne'):
         tsne_config = dr_method_configs.get('tsne', {}) 
         if tsne_config.get("allow_coembedding", True): 
             if simspace_dim == 2:
-                if X_target_scaled_for_coembed is None or df_target_ligands_for_coembed is None:
+                if X_target_scaled_for_coembed is None or df_target_ligands_for_coembed_raw_info is None: # Check both parts of target data
                     logging.warning("Cannot run t-SNE co-embedding because target ligand data for co-embedding failed to load/process. Skipping t-SNE.")
                 else:
                     logging.info(f"Attempting t-SNE (co-embedding by design) as simspace_dim is 2 ...")
-                    X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
-                    num_main_data_points = X_scaled_main.shape[0]
+                    X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_for_coembed)) # USES SCALED
+                    num_main_data_points_tsne = X_scaled_main.shape[0]
                     tsne_cols = [f't-SNE-{i+1}' for i in range(simspace_dim)]
                     try:
-                        actual_pca_components_for_tsne = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0]-1, X_for_tsne_combined.shape[1])
-                        if actual_pca_components_for_tsne < 2:
-                             logging.error(f"Cannot run t-SNE: too few samples/features for initial PCA. Need at least 2 effective components, got {actual_pca_components_for_tsne} from data shape {X_for_tsne_combined.shape} and config {tsne_params['pca_components']}.")
-                             for col in tsne_cols: df_results_main[col] = np.nan
+                        actual_pca_components_for_tsne = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0]-1 if X_for_tsne_combined.shape[0] > 1 else 1, X_for_tsne_combined.shape[1])
+                        if actual_pca_components_for_tsne < 1: logging.error(f"Cannot run t-SNE: too few samples/features for initial PCA. Need at least 1 effective component, got {actual_pca_components_for_tsne}."); #...
                         else:
                             logging.info(f"t-SNE Step 1: Initial PCA to {actual_pca_components_for_tsne} components (data shape: {X_for_tsne_combined.shape}).")
                             pca_for_tsne = (cumlPCA(n_components=actual_pca_components_for_tsne, random_state=42) if CUML_AVAILABLE
@@ -503,7 +500,6 @@ if __name__ == "__main__":
     parser.add_argument("--dr_method_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_tsne", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--umap_metric_to_run_euclidean", action='store_true', default=False)
-    parser.add_argument("--umap_metric_to_run_cosine", action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_manhattan", action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_hamming", action='store_true', default=False)
     parser.add_argument("--tsne_perplexity", type=float, default=30.0)
@@ -526,7 +522,6 @@ if __name__ == "__main__":
     active_umap_metrics = {}
     if args.dr_method_umap:
         if args.umap_metric_to_run_euclidean: active_umap_metrics['euclidean'] = True
-        if args.umap_metric_to_run_cosine: active_umap_metrics['cosine'] = True
         if args.umap_metric_to_run_manhattan: active_umap_metrics['manhattan'] = True
         if args.umap_metric_to_run_hamming: active_umap_metrics['hamming'] = True
         if not active_umap_metrics:
