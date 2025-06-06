@@ -72,7 +72,7 @@ held-out target actives are subsequently projected; and (2) \textbf{Co-embedding
 are included with the main dataset during the dimensionality reduction model training. t-SNE is inherently
 a co-embedding method in this setup. Experiments encompassed multiple target proteins, two molecular
 representations (physicochemical features and ECFP4 fingerprints), various dimensionality reduction (DR)
-techniques (PCA; UMAP with Euclidean, Cosine, Manhattan, and Hamming metrics; and t-SNE with pre-
+techniques (PCA; UMAP with Euclidean, Manhattan, and Hamming metrics; and t-SNE with pre-
 PCA), and a range of similarity space dimensionalities. Evaluation primarily focused on rank-based metrics
 (ROC-AUC, PR-AUC, Enrichment Factors) derived from the proximity of projected/co-embedded known
 target ligands to the molecular function (MF) cloud relative to decoy compounds, as well as correlation with

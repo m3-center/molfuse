@@ -235,13 +235,21 @@ def process_similarity_calculations(
         return
     logging.info(f"Main DataFrame shape after NaN drop in descriptors: {df_main_combined.shape}")
 
-    X_original_main_valid = df_main_combined_valid[descriptor_columns].values.astype(np.float32)
-    df_results_main = df_main_combined_valid.copy() # This will store DR results
+    df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy() # This will store DR results
 
+    if len(df_results_main) < original_rows_main:
+        logging.info(f"Dropped {original_rows_main - len(df_results_main)} rows from Main data due to NaNs in descriptors.")
+    
+    if df_results_main.empty:
+        logging.error("Main DataFrame (df_results_main) is empty after NaN drop from descriptor columns. Cannot proceed.")
+        return
+
+    X_original_main_valid = df_results_main[descriptor_columns].values.astype(np.float32)
+    
     logging.info("Standardizing Main data...")
     scaler = StandardScaler()
-    X_scaled_main = scaler.fit_transform(X_original_main_valid)
-    logging.info("StandardScaler fitted on main data.")
+    X_scaled_main = scaler.fit_transform(X_original_main_valid) # This will have same length as df_results_main
+    logging.info(f"StandardScaler fitted on main data. X_scaled_main shape: {X_scaled_main.shape}, df_results_main shape: {df_results_main.shape}")
     
     scaler_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_scaler.lzma")
     try:

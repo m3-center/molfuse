@@ -24,6 +24,8 @@
         "nBondsKS","nBondsKD","EState_VSA7","nHBAcc","nHBDon","Lipinski","apol","bpol",
         "nRing","n3Ring","n4Ring","n5Ring","n6Ring","n7Ring","n8Ring","nRot","Diameter",
         "TopoShapeIndex","Vabc","MW"
+
+        
     ],
     "run_coembedding_for_pca_umap": true 
   },
