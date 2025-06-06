@@ -77,7 +77,7 @@ desc_list = [
 ]
 # Initialize Mordred Calculator using the defined list
 # ignore_3D=False because some listed descriptors are 3D and _process_smiles generates 3D conformer.
-mordred_calc_instance = Calculator(desc_list, ignore_3D=False) 
+mordred_calc_instance = Calculator(desc_list, ignore_3D=True) 
 # Get string names of descriptors for column headers and NaN initialization
 MORDRED_DESCRIPTOR_NAMES = [str(d) for d in mordred_calc_instance.descriptors]
 
