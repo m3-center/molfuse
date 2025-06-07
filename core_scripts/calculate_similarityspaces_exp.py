@@ -1,15 +1,15 @@
-import time
-import json
-import logging
 from sklearn.manifold import TSNE as sklearnTSNE
 from sklearn.decomposition import PCA as sklearnPCA
-import argparse
-from sklearn.preprocessing import StandardScaler
-from compress_pickle import dump  # For saving models
-import gc
-import pandas as pd
-import numpy as np
 import os
+import numpy as np
+import pandas as pd
+import logging
+import gc
+from compress_pickle import dump  # For saving models
+from sklearn.preprocessing import StandardScaler
+import argparse
+import json
+import time
 
 # CUML / Sklearn imports
 CUML_AVAILABLE = False
@@ -19,13 +19,13 @@ try:
     from cuml import PCA as cumlPCA, UMAP as cumlUMAP, TSNE as cumlTSNE
     CUML_AVAILABLE = True
 except ImportError:
-    pass  # Will log availability later
+    pass
 
 try:
     from umap import UMAP as umapUMAP
     SKLEARN_UMAP_AVAILABLE = True
 except ImportError:
-    pass  # Will log availability later
+    pass
 
 # --- Logging Setup ---
 logger = logging.getLogger()
@@ -139,7 +139,6 @@ def get_descriptor_columns(df, representation_type, target_rdkit_features_list, 
                 logger.error(
                     f"FP repr selected, but expected string column '{PRECALCULATED_FP_STRING_COLUMN_NAME}' not found.")
                 return None
-            # This signals that parsing is needed
             return [PRECALCULATED_FP_STRING_COLUMN_NAME]
     else:
         logger.error(f"Invalid representation_type: {representation_type}")
@@ -152,7 +151,6 @@ def load_and_prepare_target_ligands_for_coembedding(
     if not target_ligands_unscaled_path or not os.path.exists(target_ligands_unscaled_path):
         logger.warning(
             f"Target ligands file for co-embedding not provided or not found: '{target_ligands_unscaled_path}'.")
-        # df_info_with_unscaled_descriptors, X_scaled, X_unscaled_numeric
         return None, None, None
     try:
         logging.info(
@@ -191,7 +189,6 @@ def load_and_prepare_target_ligands_for_coembedding(
             np.float32)
         X_target_scaled_numeric = scaler_main_data.transform(
             X_target_unscaled_numeric)
-        # df_target_ligands_processed now contains original info columns AND the unscaled numeric descriptors for valid rows
         return df_target_ligands_processed, X_target_scaled_numeric, X_target_unscaled_numeric
     except Exception as e:
         logger.error(
@@ -257,8 +254,7 @@ def process_similarity_calculations(
         for col in all_cols_to_align:
             if col not in df_c.columns:
                 df_c[col] = pd.NA
-        temp_dfs_for_concat.append(
-            df_c[all_cols_to_align])  # Enforce column order
+        temp_dfs_for_concat.append(df_c[all_cols_to_align])
     if not df_zinc.empty:
         df_z = df_zinc.copy()
         for col in all_cols_to_align:
@@ -346,7 +342,7 @@ def process_similarity_calculations(
     if dr_method_flags.get('pca'):
         pca_config = dr_method_configs.get('pca', {})
         pca_cols = [f'PCA-{i+1}' for i in range(simspace_dim)]
-        try:  # Non-co-embedded PCA
+        try:
             logging.info(
                 f"NON-CO-EMBEDDED PCA on data shape {X_scaled_main.shape}")
             pca_model_main = (cumlPCA(n_components=simspace_dim, random_state=42)
@@ -357,18 +353,21 @@ def process_similarity_calculations(
                     df_results_main[pca_cols[i]] = pca_res_main[:, i]
                 pca_model_path = os.path.join(
                     output_model_dir, f"{base_name_prefix}_PCA_model.lzma")
-                dump(pca_model_main, open(pca_model_path, "wb"))
+                with open(pca_model_path, "wb") as f:
+                    dump(pca_model_main, f)
                 logging.info(f"Saved NON-CO PCA model: {pca_model_path}")
             else:
                 logging.error(
                     f"PCA projection length mismatch: {pca_res_main.shape[0]} vs {len(df_results_main)}")
         except Exception as e:
             logging.error(f"NON-CO PCA failed: {e}", exc_info=True)
-            # Clean up partial results
-            [df_results_main.pop(c) for c in pca_cols if c in df_results_main]
+            for col in pca_cols:  # Ensure columns are added with NaN if PCA fails
+                if col not in df_results_main:
+                    df_results_main[col] = np.nan
         gc.collect()
+
         if run_coembedding_for_pca_umap and pca_config.get("allow_coembedding", False) and X_target_scaled_for_coembed is not None and df_target_ligands_for_coembed_info is not None:
-            try:  # Co-embedded PCA
+            try:
                 X_for_pca_coembed = np.vstack(
                     (X_scaled_main, X_target_scaled_for_coembed))
                 logging.info(
@@ -401,65 +400,124 @@ def process_similarity_calculations(
         for metric_name, run_metric_flag in umap_metric_flags.items():
             if not run_metric_flag:
                 continue
+
             umap_config = dr_method_configs.get(f"umap_{metric_name}", {})
             umap_cols = [
                 f"UMAP-{metric_name.capitalize()}-{i+1}" for i in range(simspace_dim)]
 
             current_X_main_umap = X_scaled_main
             current_X_target_coembed_umap = X_target_scaled_for_coembed
-            attempt_cuml = CUML_AVAILABLE
-            if representation_type == "fingerprints" and metric_name.lower() in ["hamming", "manhattan"]:
-                current_X_main_umap = X_original_main_valid
-                current_X_target_coembed_umap = X_target_original_for_coembed
-                attempt_cuml = False
-                logging.info(
-                    f"UMAP '{metric_name}' on fingerprints: UNSCALED data, forcing scikit-learn.")
+            attempt_cuml_umap = CUML_AVAILABLE
+
+            if representation_type == "fingerprints":
+                if metric_name.lower() in ["hamming", "manhattan"]:
+                    current_X_main_umap = X_original_main_valid
+                    current_X_target_coembed_umap = X_target_original_for_coembed
+                    attempt_cuml_umap = False
+                    logging.info(
+                        f"UMAP '{metric_name}' on fingerprints: using UNSCALED data and forcing scikit-learn.")
+                else:
+                    logging.info(
+                        f"UMAP '{metric_name}' on fingerprints: using SCALED data, will attempt cuML if available (attempt_cuml_umap={attempt_cuml_umap}).")
             else:
                 logging.info(
-                    f"UMAP '{metric_name}': SCALED data, will attempt cuML if available (attempt_cuml={attempt_cuml}).")
+                    f"UMAP '{metric_name}' on features: using SCALED data, will attempt cuML if available (attempt_cuml_umap={attempt_cuml_umap}).")
 
-            try:  # Non-co-embedded UMAP
-                umap_model_proj = None
-                if attempt_cuml:
-                    umap_model_proj = cumlUMAP(n_components=simspace_dim, metric=metric_name,
-                                               random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
+            # Non-co-embedded UMAP (Projection Model)
+            # Define outside try for potential use in co-embed fallback
+            umap_model_main_for_projection = None
+            try:
+                if attempt_cuml_umap:
+                    logging.info(
+                        f"Attempting cuML UMAP for {metric_name} (projection).")
+                    umap_model_main_for_projection = cumlUMAP(
+                        n_components=simspace_dim, metric=metric_name, random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
                 elif SKLEARN_UMAP_AVAILABLE:
-                    umap_model_proj = umapUMAP(n_components=simspace_dim, metric=metric_name,
-                                               random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
+                    logging.info(
+                        f"Using scikit-learn UMAP for {metric_name} (projection).")
+                    umap_model_main_for_projection = umapUMAP(
+                        n_components=simspace_dim, metric=metric_name, random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
                 else:
                     logging.warning(
-                        f"No UMAP lib for {metric_name}. Skip projection.")
+                        f"No suitable UMAP library for NON-CO-EMBEDDED UMAP ({metric_name}). Skipping.")
+                    for col in umap_cols:
+                        df_results_main[col] = np.nan  # Ensure columns exist
+                    if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False):
+                        logging.warning(
+                            f"Skipping CO-EMBEDDED UMAP for {metric_name} as projection model cannot be built.")
                     continue
+
                 logging.info(
-                    f"NON-CO UMAP ({metric_name}) on main data shape {current_X_main_umap.shape}")
-                umap_res_main = umap_model_proj.fit_transform(
+                    f"Fitting projection UMAP ({metric_name}) on main data of shape {current_X_main_umap.shape}")
+                umap_res_main = umap_model_main_for_projection.fit_transform(
                     current_X_main_umap)
                 if umap_res_main.shape[0] == len(df_results_main):
                     for i in range(simspace_dim):
                         df_results_main[umap_cols[i]] = umap_res_main[:, i]
-                    # ... save umap_model_proj ...
+                    umap_model_path = os.path.join(
+                        output_model_dir, f"{base_name_prefix}_{metric_name}_UMAP_model.lzma")
+                    with open(umap_model_path, "wb") as f:
+                        # SAVE THE PROJECTION MODEL
+                        dump(umap_model_main_for_projection, f)
+                    logging.info(
+                        f"Saved NON-CO-EMBEDDED UMAP model ({metric_name}) to {umap_model_path}")
                 else:
                     logging.error(
-                        f"UMAP projection length mismatch: {umap_res_main.shape[0]} vs {len(df_results_main)} for {metric_name}.")
+                        f"UMAP projection result length mismatch for {metric_name}: {umap_res_main.shape[0]} vs {len(df_results_main)}")
+                    for col in umap_cols:
+                        df_results_main[col] = np.nan  # Ensure columns exist
             except Exception as e:
                 logging.error(
-                    f"NON-CO UMAP ({metric_name}) failed: {e}", exc_info=True)
-                # ... (Fallback logic, ensuring SKLEARN_UMAP_AVAILABLE is checked) ...
-                for col in umap_cols:
-                    df_results_main[col] = np.nan
+                    f"NON-CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
+                # Fallback logic
+                can_fallback_sklearn = SKLEARN_UMAP_AVAILABLE
+                if attempt_cuml_umap and can_fallback_sklearn and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
+                    logging.info(
+                        f"cuML UMAP failed for {metric_name}, trying scikit-learn UMAP (projection) as fallback...")
+                    try:
+                        umap_model_main_for_projection = umapUMAP(
+                            n_components=simspace_dim, metric=metric_name, random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
+                        umap_res_main_fb = umap_model_main_for_projection.fit_transform(
+                            current_X_main_umap)
+                        if umap_res_main_fb.shape[0] == len(df_results_main):
+                            for i in range(simspace_dim):
+                                df_results_main[umap_cols[i]
+                                                ] = umap_res_main_fb[:, i]
+                            umap_model_path_fb = os.path.join(
+                                output_model_dir, f"{base_name_prefix}_{metric_name}_UMAP_model_sklearn_fallback.lzma")
+                            with open(umap_model_path_fb, "wb") as f:
+                                # SAVE FALLBACK PROJECTION MODEL
+                                dump(umap_model_main_for_projection, f)
+                            logging.info(
+                                f"Saved scikit-learn UMAP model (projection fallback for {metric_name}) to {umap_model_path_fb}")
+                        else:
+                            logging.error(
+                                f"UMAP projection fallback length mismatch for {metric_name}.")
+                    except Exception as e_fb:
+                        logging.error(
+                            f"scikit-learn UMAP (projection fallback for {metric_name}) also failed: {e_fb}", exc_info=True)
+                        for col in umap_cols:
+                            df_results_main[col] = np.nan
+                else:
+                    for col in umap_cols:
+                        df_results_main[col] = np.nan
+                if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False):
+                    logging.warning(
+                        f"Skipping CO-EMBEDDED UMAP for {metric_name} due to projection model failure.")
                 gc.collect()
-                continue  # Skip co-embedding if projection model fails
+                continue
             gc.collect()
 
+            # Co-embedded UMAP
             if run_coembedding_for_pca_umap and umap_config.get("allow_coembedding", False) and \
                current_X_target_coembed_umap is not None and df_target_ligands_for_coembed_info is not None:
-                try:  # Co-embedded UMAP
+                try:
                     X_coembed_umap = np.vstack(
                         (current_X_main_umap, current_X_target_coembed_umap))
                     logging.info(
                         f"CO-EMBEDDED UMAP ({metric_name}) on data shape {X_coembed_umap.shape}")
                     umap_model_co = None
-                    if attempt_cuml:
+                    if attempt_cuml_umap:
                         umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name,
                                                  random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
                     elif SKLEARN_UMAP_AVAILABLE:
@@ -469,10 +527,10 @@ def process_similarity_calculations(
                         logging.warning(
                             f"No UMAP lib for {metric_name}. Skip co-embedding.")
                         continue
+
                     umap_res_co = umap_model_co.fit_transform(X_coembed_umap)
                     umap_res_target_co = umap_res_co[current_X_main_umap.shape[0]:]
                     if len(umap_res_target_co) == len(df_target_ligands_for_coembed_info):
-                        # ... (save UMAP co-embedded target projections) ...
                         df_umap_target_co_coords = pd.DataFrame(
                             umap_res_target_co, columns=umap_cols, index=df_target_ligands_for_coembed_info.index)
                         id_cols = [c for c in ['SMILES', 'Compound ChEMBL ID', 'Activity Type',
@@ -492,11 +550,41 @@ def process_similarity_calculations(
                 except Exception as e:
                     logging.error(
                         f"CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
+                    # Fallback logic for co-embedded UMAP
+                    can_fallback_sklearn_co = SKLEARN_UMAP_AVAILABLE
+                    if attempt_cuml_umap and can_fallback_sklearn_co and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
+                        logging.info(
+                            f"cuML CO-EMBEDDED UMAP failed for {metric_name}, trying scikit-learn UMAP (co-embedding) as fallback...")
+                        try:
+                            umap_model_co_fb = umapUMAP(
+                                n_components=simspace_dim, metric=metric_name, random_state=42, n_neighbors=15, min_dist=0.1, verbose=False)
+                            umap_res_co_fb = umap_model_co_fb.fit_transform(
+                                X_coembed_umap)  # X_coembed_umap already prepared
+                            umap_res_target_co_fb = umap_res_co_fb[current_X_main_umap.shape[0]:]
+                            if len(umap_res_target_co_fb) == len(df_target_ligands_for_coembed_info):
+                                df_umap_target_co_coords_fb = pd.DataFrame(
+                                    umap_res_target_co_fb, columns=umap_cols, index=df_target_ligands_for_coembed_info.index)
+                                df_target_ids_coembed_umap_fb = df_target_ligands_for_coembed_info[
+                                    id_cols]
+                                df_target_projected_umap_coembed_with_ids_fb = df_target_ids_coembed_umap_fb.join(
+                                    df_umap_target_co_coords_fb, how="inner")
+                                umap_target_coembed_proj_path_fb = os.path.join(
+                                    output_simspace_dir, f"{base_name_prefix}_{metric_name}_UMAP_COEMBED_TARGET_PROJECTIONS_sklearn_fallback.csv")
+                                df_target_projected_umap_coembed_with_ids_fb.to_csv(
+                                    umap_target_coembed_proj_path_fb, index=False)
+                                logging.info(
+                                    f"Saved scikit-learn CO-EMBEDDED UMAP ({metric_name}) target projections (fallback) to {umap_target_coembed_proj_path_fb}")
+                            else:
+                                logging.error(
+                                    f"scikit-learn UMAP Co-embedding (fallback) length mismatch for metric {metric_name}.")
+                        except Exception as e_co_umap_fb:
+                            logging.error(
+                                f"scikit-learn CO-EMBEDDED UMAP (fallback, {metric_name}) also failed: {e_co_umap_fb}", exc_info=True)
                 gc.collect()
 
     # --- t-SNE ---
     if dr_method_flags.get('tsne'):
-        if simspace_dim == 2:  # Only run for 2D
+        if simspace_dim == 2:
             if X_target_scaled_for_coembed is None or df_target_ligands_for_coembed_info is None:
                 logging.warning(
                     "Skipping t-SNE: target co-embedding data not fully available.")
@@ -505,13 +593,13 @@ def process_similarity_calculations(
                     (X_scaled_main, X_target_scaled_for_coembed))
                 tsne_cols = [f't-SNE-{i+1}' for i in range(simspace_dim)]
                 try:
-                    # Initial PCA for t-SNE
                     actual_pca_comps = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0] -
                                            1 if X_for_tsne_combined.shape[0] > 1 else 1, X_for_tsne_combined.shape[1])
                     if actual_pca_comps < 1:
-                        # ... (fill df_results_main with NaNs for tsne_cols) ...
                         logging.error(
                             f"t-SNE PCA components too low ({actual_pca_comps}). Skipping.")
+                        for col in tsne_cols:
+                            df_results_main[col] = np.nan
                     else:
                         logging.info(
                             f"t-SNE initial PCA to {actual_pca_comps} components on shape {X_for_tsne_combined.shape}")
@@ -519,45 +607,47 @@ def process_similarity_calculations(
                             n_components=actual_pca_comps, random_state=42))
                         X_tsne_pca_reduced = pca_tsne.fit_transform(
                             X_for_tsne_combined)
+                        pca_for_tsne_model_path = os.path.join(
+                            output_model_dir, f"{base_name_prefix}_tSNE_internal_PCA_model.lzma")
+                        with open(pca_for_tsne_model_path, "wb") as f:
+                            dump(pca_tsne, f)
+                            logging.info(
+                                f"Saved t-SNE's internal PCA model to {pca_for_tsne_model_path}")
 
-                        attempt_cuml_tsne = CUML_AVAILABLE
+                        attempt_cuml_tsne_final = CUML_AVAILABLE
                         if representation_type == "fingerprints":
-                            attempt_cuml_tsne = False
+                            attempt_cuml_tsne_final = False
                             logging.info(
                                 "Forcing scikit-learn t-SNE for fingerprints.")
 
-                        perp_final = min(
-                            tsne_params['perplexity'], X_tsne_pca_reduced.shape[0]-2 if X_tsne_pca_reduced.shape[0] > 1 else 0)
-                        if X_tsne_pca_reduced.shape[0] <= 1 or perp_final < 1:
-                            # ...
+                        perp_final = min(float(
+                            tsne_params['perplexity']), X_tsne_pca_reduced.shape[0]-2 if X_tsne_pca_reduced.shape[0] > 1 else 0.0)
+                        if X_tsne_pca_reduced.shape[0] <= 1 or perp_final < 1.0:
                             logging.error(
-                                f"Too few samples or invalid perplexity for t-SNE ({perp_final}). Skipping.")
+                                f"Too few samples ({X_tsne_pca_reduced.shape[0]}) or invalid perplexity ({perp_final}) for t-SNE after PCA. Skipping t-SNE.")
+                            for col in tsne_cols:
+                                df_results_main[col] = np.nan
                         else:
-                            if perp_final != tsne_params['perplexity']:
+                            if perp_final != float(tsne_params['perplexity']):
                                 logging.info(
                                     f"Adjusted t-SNE perplexity to {perp_final}")
                             tsne_model = None
                             tsne_kwargs = {'n_components': simspace_dim,
                                            'perplexity': perp_final, 'random_state': 42}
-                            if attempt_cuml_tsne:
-                                cuml_verbose = 1 if logger.isEnabledFor(
-                                    logging.DEBUG) else 0
+                            cuml_verbose = 1 if logger.isEnabledFor(
+                                logging.DEBUG) else 0
+                            sklearn_verbose = 1 if logger.isEnabledFor(
+                                logging.DEBUG) else 0
+                            if attempt_cuml_tsne_final:
                                 tsne_kwargs.update(
                                     {'method': 'barnes_hut', 'verbose': cuml_verbose})
-                                if 'n_neighbors' in dr_method_configs.get('tsne', {}):
-                                    # Using this more directly
-                                    tsne_kwargs['n_neighbors'] = dr_method_configs['tsne']['n_neighbors']
-                                elif args_main.n_neighbors is not None:
-                                    # from main args if passed by orchestrator
-                                    tsne_kwargs['n_neighbors'] = args_main.n_neighbors
+                                if 'n_neighbors' in tsne_params:
+                                    tsne_kwargs['n_neighbors'] = tsne_params['n_neighbors']
                                 tsne_model = cumlTSNE(**tsne_kwargs)
                                 logging.info("Using cuML t-SNE")
                             else:
-                                sklearn_verbose = 1 if logger.isEnabledFor(
-                                    logging.DEBUG) else 0
                                 tsne_kwargs.update(
                                     {'init': 'pca', 'method': 'barnes_hut', 'n_jobs': -1, 'verbose': sklearn_verbose})
-                                # Add n_iter, learning_rate if they are in tsne_params
                                 if 'n_iter' in tsne_params:
                                     tsne_kwargs['n_iter'] = tsne_params['n_iter']
                                 if 'learning_rate' in tsne_params:
@@ -575,11 +665,33 @@ def process_similarity_calculations(
                             else:
                                 logging.error(
                                     "t-SNE main result length mismatch.")
-                            # ... (save t-SNE target projections using df_target_ligands_for_coembed_info) ...
+
+                            tsne_emb_target = tsne_embedding[X_scaled_main.shape[0]:]
+                            if len(tsne_emb_target) == len(df_target_ligands_for_coembed_info):
+                                df_tsne_target_coords = pd.DataFrame(
+                                    tsne_emb_target, columns=tsne_cols, index=df_target_ligands_for_coembed_info.index)
+                                id_cols_tsne = [c for c in ['SMILES', 'Compound ChEMBL ID', 'Activity Type',
+                                                            'Standard Value (nM)', 'accession'] if c in df_target_ligands_for_coembed_info]
+                                df_target_ids_tsne = df_target_ligands_for_coembed_info[id_cols_tsne]
+                                df_target_tsne_full = df_target_ids_tsne.join(
+                                    df_tsne_target_coords, how="inner")
+                                tsne_target_path = os.path.join(
+                                    output_simspace_dir, f"{base_name_prefix}_tSNE_TARGET_PROJECTIONS.csv")
+                                df_target_tsne_full.to_csv(
+                                    tsne_target_path, index=False)
+                                logging.info(
+                                    f"Saved t-SNE target projections: {tsne_target_path}")
+                            else:
+                                logging.error(
+                                    "t-SNE target result length mismatch.")
                 except Exception as e:
-                    logging.error(f"t-SNE failed: {e}", exc_info=True)  # ...
+                    logging.error(f"t-SNE failed: {e}", exc_info=True)
+                    for col in tsne_cols:
+                        # Ensure columns if tSNE fails
+                        df_results_main[col] = np.nan
         else:
             logging.info("Skipping t-SNE (dim != 2).")
+        gc.collect()
 
     # --- Save Comprehensive Similarity Space CSV ---
     output_csv_path = os.path.join(
@@ -589,6 +701,7 @@ def process_similarity_calculations(
             ('PCA-', 'UMAP-', 't-SNE-'))]
         dr_cols = [c for c in df_results_main.columns if c.startswith(
             ('PCA-', 'UMAP-', 't-SNE-'))]
+        # Ensure only existing columns are selected
         cols_to_save = [c for c in info_cols +
                         dr_cols if c in df_results_main.columns]
         if cols_to_save:
@@ -602,6 +715,7 @@ def process_similarity_calculations(
         logging.error(
             f"Failed to save simspace file {output_csv_path}: {e}", exc_info=True)
 
+    # Clean up large objects
     del df_main_combined, df_results_main, X_original_main_valid, X_scaled_main
     if df_target_ligands_for_coembed_info is not None:
         del df_target_ligands_for_coembed_info
@@ -639,12 +753,10 @@ if __name__ == "__main__":
                         action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_hamming",
                         action='store_true', default=False)
-    # Removed cosine specific arg
     parser.add_argument("--tsne_perplexity", type=float, default=30.0)
     parser.add_argument("--tsne_pca_components", type=int, default=50)
     parser.add_argument("--n_neighbors", type=int, default=None,
-                        # Added n_neighbors arg
-                        help="N_neighbors for cuML tSNE (from orchestrator, if needed by main script).")
+                        help="N_neighbors for cuML tSNE (passed from orchestrator).")
     parser.add_argument("--run_coembedding_for_pca_umap",
                         type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_configs_json_str", required=True)
@@ -677,11 +789,15 @@ if __name__ == "__main__":
     else:
         logging.info("UMAP method not requested.")
 
-    # Ensure tsne_params includes n_neighbors if passed
     tsne_params_dict_main = {'perplexity': args_main.tsne_perplexity,
                              'pca_components': args_main.tsne_pca_components}
-    if args_main.n_neighbors is not None:  # If orchestrator passes it
+    # Pass n_neighbors to tsne_params if provided by orchestrator through args_main
+    if args_main.n_neighbors is not None:
         tsne_params_dict_main['n_neighbors'] = args_main.n_neighbors
+    # Add other tSNE params if passed via args_main and needed by sklearn or cuml versions
+    # For example, if n_iter and learning_rate were added to args_main:
+    # if hasattr(args_main, 'n_iter'): tsne_params_dict_main['n_iter'] = args_main.n_iter
+    # if hasattr(args_main, 'learning_rate'): tsne_params_dict_main['learning_rate'] = args_main.learning_rate
 
     process_similarity_calculations(
         args_main.chembl_mf_data_path, args_main.zinc_data_path, args_main.target_ligands_unscaled_path_for_tsne_and_coembed,
