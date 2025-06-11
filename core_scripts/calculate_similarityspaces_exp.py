@@ -413,9 +413,9 @@ def process_similarity_calculations(
                 if metric_name.lower() in ["hamming", "manhattan"]:
                     current_X_main_umap = X_original_main_valid
                     current_X_target_coembed_umap = X_target_original_for_coembed
-                    attempt_cuml_umap = False
+                    attempt_cuml_umap = True
                     logging.info(
-                        f"UMAP '{metric_name}' on fingerprints: using UNSCALED data and forcing scikit-learn.")
+                        f"UMAP '{metric_name}' on fingerprints: using UNSCALED data and NOT(!) forcing scikit-learn.")
                 else:
                     logging.info(
                         f"UMAP '{metric_name}' on fingerprints: using SCALED data, will attempt cuML if available (attempt_cuml_umap={attempt_cuml_umap}).")
@@ -616,9 +616,9 @@ def process_similarity_calculations(
 
                         attempt_cuml_tsne_final = CUML_AVAILABLE
                         if representation_type == "fingerprints":
-                            attempt_cuml_tsne_final = False
+                            attempt_cuml_tsne_final = True
                             logging.info(
-                                "Forcing scikit-learn t-SNE for fingerprints.")
+                                "NOT(!) forcing scikit-learn t-SNE for fingerprints.")
 
                         perp_final = min(float(
                             tsne_params['perplexity']), X_tsne_pca_reduced.shape[0]-2 if X_tsne_pca_reduced.shape[0] > 1 else 0.0)
