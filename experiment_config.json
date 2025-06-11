@@ -71,7 +71,7 @@
       "molecular_function_display_name": "Hydrolase"
     }
   ],
-  "representations": ["features", "fingerprints"],
+  "representations": ["fingerprints"],
   "dimensionality_reduction_methods": {
       "pca": {"short_name": "PCA", "allow_coembedding": true},
       "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean", "allow_coembedding": true},
