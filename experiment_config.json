@@ -60,7 +60,8 @@
       "uniprot_id": "P60709",
       "molecular_function_canonical_name": "Hydrolase",
       "molecular_function_filename_segment": "Hydrolase",
-      "molecular_function_display_name": "Hydrolase"
+      "molecular_function_display_name": "Hydrolase",
+      "processing_mode": "similarity_space_only"
     },
     {
       "id_name": "ActinCytoplasmic2_P63261",
@@ -68,14 +69,15 @@
       "uniprot_id": "P63261",
       "molecular_function_canonical_name": "Hydrolase",
       "molecular_function_filename_segment": "Hydrolase",
-      "molecular_function_display_name": "Hydrolase"
+      "molecular_function_display_name": "Hydrolase",
+      "processing_mode": "similarity_space_only"
     }
   ],
   "representations": ["features", "fingerprints"],
   "dimensionality_reduction_methods": {
       "pca": {"short_name": "PCA", "allow_coembedding": true},
       "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean", "allow_coembedding": true},
-      "umap_cosine": {"short_name": "UMAP-Manhattan", "metric": "cosine", "allow_coembedding": true},
+      "umap_cosine": {"short_name": "UMAP-Cosine", "metric": "cosine", "allow_coembedding": true},
       "umap_manhattan": {"short_name": "UMAP-Manhattan", "metric": "manhattan", "allow_coembedding": true},
       "umap_hamming": {"short_name": "UMAP-Hamming", "metric": "hamming", "allow_coembedding": true},
       "tsne": {"short_name": "t-SNE", "perplexity": 30, "allow_coembedding": true} 
