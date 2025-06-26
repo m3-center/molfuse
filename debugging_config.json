@@ -34,8 +34,7 @@
       "uniprot_id": "P14618",
       "molecular_function_canonical_name": "Protein kinase inhibitor",
       "molecular_function_filename_segment": "Protein_kinase_inhibitor",
-      "molecular_function_display_name": "Protein kinase inhibitor",
-      "processing_mode": "similarity_space_only"
+      "molecular_function_display_name": "Protein kinase inhibitor"
     }
   ],
   "representations": ["features", "fingerprints"],

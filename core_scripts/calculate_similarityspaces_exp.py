@@ -28,27 +28,33 @@ except ImportError:
     pass 
 
 # --- Logging Setup ---
-logger = logging.getLogger() 
+logger = logging.getLogger() # Get the root logger
+# It's good practice to clear handlers if you're reconfiguring the root logger in a script
+# that might be imported or run in an environment where logging was already set up.
 if logger.hasHandlers(): 
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
-        handler.close()
-logger.setLevel(logging.DEBUG) 
+        handler.close() # Important to close file handlers
 
-log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-2fs - %(lineno)-4d - %(message)s')
+# Set the overall level for the root logger. 
+# Messages below this level will be ignored entirely.
+logger.setLevel(logging.DEBUG) # <<<<<<< ENSURE THIS IS DEBUG TO ALLOW ALL MESSAGES TO PASS TO HANDLERS
+
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s') # Corrected funcName format
 
 try:
     cs_log_file_path = "calculate_simspaces_internal.log" 
     file_handler = logging.FileHandler(cs_log_file_path, mode='w') 
     file_handler.setFormatter(log_formatter)
-    file_handler.setLevel(logging.DEBUG) 
+    # The handler can have its own level, more restrictive or same as logger.
+    file_handler.setLevel(logging.DEBUG) # File handler will log DEBUG and above
     logger.addHandler(file_handler)
 except Exception as e:
     print(f"CRITICAL: Failed to initialize file logger for {cs_log_file_path}: {e}")
 
-stream_handler = logging.StreamHandler()
+stream_handler = logging.StreamHandler() # To sys.stdout/stderr
 stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(logging.INFO) 
+stream_handler.setLevel(logging.INFO) # Console can be less verbose
 logger.addHandler(stream_handler)
 # --- End Logging Setup ---
 
