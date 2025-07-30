@@ -2,7 +2,7 @@
 #SBATCH --partition=gpu4          # partition / wait queue
 #SBATCH --nodes=1                # number of nodes
 #SBATCH --ntasks-per-node=32     # number of tasks per node
-#SBATCH --mem=90G               # memory per node in MB (different units with suffix K|M|G|T)
+#SBATCH --mem=180G               # memory per node in MB (different units with suffix K|M|G|T)
 #SBATCH --time=3-00:00:00              # total runtime of job allocation (format D-HH:MM:SS; first parts optional)
 #SBATCH --output=slurm.%j.out    # filename for STDOUT (%N: nodename, %j: job-ID)
 #SBATCH --error=slurm.%j.err     # filename for STDERR
