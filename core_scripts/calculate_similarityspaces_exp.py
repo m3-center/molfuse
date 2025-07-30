@@ -200,29 +200,34 @@ def process_similarity_calculations(
         if not df_zinc.empty and PRECALCULATED_FP_STRING_COLUMN_NAME in df_zinc.columns: 
             df_zinc = parse_fingerprint_string_column_in_df(df_zinc)
     
-    all_cols_to_align = list(set(df_chembl_mf.columns) | (set(df_zinc.columns) if not df_zinc.empty else set()))
-    for id_col in ['Compound ChEMBL ID', 'ZINC_ID', 'SMILES', 'DataSource']: 
-        if id_col not in all_cols_to_align and (id_col in df_chembl_mf.columns or (not df_zinc.empty and id_col in df_zinc.columns)): 
-            all_cols_to_align.append(id_col)
-    all_cols_to_align = sorted(list(set(all_cols_to_align)))
+    # Standardize Columns BEFORE Concatenation
+    temp_df_for_cols = df_chembl_mf if not df_chembl_mf.empty else df_zinc
+    descriptor_columns = get_descriptor_columns(temp_df_for_cols, representation_type, 
+                                                target_rdkit_features_list, 
+                                                is_parsed_fp=(representation_type == "fingerprints"))
+    if not descriptor_columns: 
+        logging.error(f"No descriptor columns determined for {representation_type}. Aborting {base_name_prefix}."); return
+
+    info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
     
-    temp_dfs_for_concat = []
+    df_chembl_mf_std = pd.DataFrame()
     if not df_chembl_mf.empty:
-        df_c = df_chembl_mf.copy()
-        for col in all_cols_to_align: 
-            if col not in df_c.columns: df_c[col] = pd.NA
-        temp_dfs_for_concat.append(df_c[all_cols_to_align])
+        cols_to_keep_chembl = [col for col in info_cols_to_keep if col in df_chembl_mf.columns] + \
+                              [col for col in descriptor_columns if col in df_chembl_mf.columns]
+        df_chembl_mf_std = df_chembl_mf[cols_to_keep_chembl].copy()
+
+    df_zinc_std = pd.DataFrame()
     if not df_zinc.empty:
-        df_z = df_zinc.copy()
-        for col in all_cols_to_align:
-            if col not in df_z.columns: df_z[col] = pd.NA
-        temp_dfs_for_concat.append(df_z[all_cols_to_align])
+        cols_to_keep_zinc = [col for col in info_cols_to_keep if col in df_zinc.columns] + \
+                            [col for col in descriptor_columns if col in df_zinc.columns]
+        df_zinc_std = df_zinc[cols_to_keep_zinc].copy()
 
-    if not temp_dfs_for_concat:
-        logging.error(f"Both ChEMBL and ZINC dataframes are empty for {base_name_prefix}. Aborting."); return
-    df_main_combined = pd.concat(temp_dfs_for_concat, ignore_index=True)
-    logging.info(f"Combined Main (ChEMBL MF + ZINC) DataFrame shape: {df_main_combined.shape}")
+    logging.info(f"Standardized ChEMBL df shape: {df_chembl_mf_std.shape}")
+    logging.info(f"Standardized ZINC df shape: {df_zinc_std.shape}")
 
+    df_main_combined = pd.concat([df_chembl_mf_std, df_zinc_std], ignore_index=True)
+    logging.info(f"Combined Main DataFrame shape after standardizing columns: {df_main_combined.shape}")
+    
     if 'Compound ChEMBL ID' in df_main_combined.columns and 'ZINC_ID' in df_main_combined.columns: 
         df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID'].fillna(df_main_combined['ZINC_ID'])
     elif 'Compound ChEMBL ID' in df_main_combined.columns: df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID']
@@ -231,13 +236,7 @@ def process_similarity_calculations(
         if 'SMILES' in df_main_combined.columns: df_main_combined['MOLECULE ID'] = df_main_combined['SMILES']
         else: df_main_combined['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_main_combined.index).astype(str)
     df_main_combined['MOLECULE ID'] = df_main_combined['MOLECULE ID'].astype(str).fillna('MISSING_ID')
-
-    descriptor_columns = get_descriptor_columns(df_main_combined, representation_type, 
-                                                target_rdkit_features_list, 
-                                                is_parsed_fp=(representation_type == "fingerprints"))
-    if not descriptor_columns: 
-        logging.error(f"No descriptor columns determined for {representation_type}. Aborting {base_name_prefix}."); return
-
+    
     df_main_combined[descriptor_columns] = df_main_combined[descriptor_columns].apply(pd.to_numeric, errors='coerce')
     original_rows_main_before_dropna = len(df_main_combined)
     df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy()
@@ -269,13 +268,12 @@ def process_similarity_calculations(
             logging.warning("Failed to fully load/process target ligands for co-embedding. Some co-embedding steps will be skipped.")
         else: logging.info(f"Prepared {X_target_scaled_for_coembed.shape[0]} target ligands for co-embedding.")
 
-    # --- Pre-reduction with PCA for Fingerprints before UMAP/t-SNE ---
     X_main_pre_reduced_for_manifold = None
     X_target_pre_reduced_for_manifold_coembed = None
     if representation_type == "fingerprints":
         n_pca_components_for_manifold = tsne_params.get('pca_components', 50)
         logging.info(f"Fingerprints detected. Applying initial PCA to {n_pca_components_for_manifold} components before UMAP/t-SNE.")
-        n_effective_pca_components = min(n_pca_components_for_manifold, X_scaled_main.shape[0] - 1, X_scaled_main.shape[1])
+        n_effective_pca_components = min(n_pca_components_for_manifold, X_scaled_main.shape[0] - 1 if X_scaled_main.shape[0]>1 else 1, X_scaled_main.shape[1])
         if n_effective_pca_components < 2:
             logging.error(f"Cannot perform pre-reduction PCA, effective components ({n_effective_pca_components}) is too low. Using full-dimensional scaled data for UMAP/t-SNE.")
             X_main_pre_reduced_for_manifold = X_scaled_main
@@ -298,7 +296,6 @@ def process_similarity_calculations(
         X_main_pre_reduced_for_manifold = X_scaled_main
         X_target_pre_reduced_for_manifold_coembed = X_target_scaled_for_coembed
 
-    # --- PCA ---
     if dr_method_flags.get('pca'):
         pca_config = dr_method_configs.get('pca', {})
         pca_cols = [f'PCA-{i+1}' for i in range(simspace_dim)]
@@ -336,7 +333,6 @@ def process_similarity_calculations(
             except Exception as e: logging.error(f"CO-EMBEDDED PCA failed: {e}", exc_info=True)
             gc.collect()
 
-    # --- UMAP ---
     if dr_method_flags.get('umap'):
         for metric_name, run_metric_flag in umap_metric_flags.items():
             if not run_metric_flag: continue
@@ -349,7 +345,6 @@ def process_similarity_calculations(
             attempt_cuml_umap = CUML_AVAILABLE 
 
             if representation_type == "fingerprints":
-                # For fingerprints, UMAP runs on the PCA-reduced data for all metrics
                 logging.info(f"For fingerprints, UMAP ({metric_name}) will run on the PCA pre-reduced data.")
                 current_X_main_umap = X_main_pre_reduced_for_manifold
                 current_X_target_coembed_umap = X_target_pre_reduced_for_manifold_coembed
@@ -357,7 +352,6 @@ def process_similarity_calculations(
                     attempt_cuml_umap = False 
                     logging.info(f"Forcing scikit-learn UMAP for '{metric_name}' on fingerprints (after PCA).")
             
-            # Non-co-embedded UMAP (Projection Model)
             umap_model_main_for_projection = None 
             try: 
                 if attempt_cuml_umap: 
@@ -427,6 +421,7 @@ def process_similarity_calculations(
                     else: logging.error(f"UMAP co-embed length mismatch for {metric_name}.")
                 except Exception as e: 
                     logging.error(f"CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
+                    # Fallback logic for co-embedded UMAP
                     if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
                         logging.info(f"cuML CO-EMBEDDED UMAP failed for {metric_name}, trying scikit-learn UMAP (co-embedding) as fallback...")
                         try:
@@ -517,7 +512,6 @@ def process_similarity_calculations(
         else: logging.info("Skipping t-SNE (dim != 2).")
         gc.collect()
 
-    # --- Save Comprehensive Similarity Space CSV ---
     output_csv_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_similarity_space.csv")
     try:
         info_cols = [c for c in df_results_main.columns if c not in descriptor_columns and not c.startswith(('PCA-','UMAP-','t-SNE-'))]
