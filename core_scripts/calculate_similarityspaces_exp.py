@@ -219,8 +219,7 @@ def process_similarity_calculations(
         temp_dfs_for_concat.append(df_z[all_cols_to_align])
 
     if not temp_dfs_for_concat:
-        logging.error("Both ChEMBL and ZINC dataframes are empty or failed to process before concatenation for {base_name_prefix}.")
-        return
+        logging.error(f"Both ChEMBL and ZINC dataframes are empty for {base_name_prefix}. Aborting."); return
     df_main_combined = pd.concat(temp_dfs_for_concat, ignore_index=True)
     logging.info(f"Combined Main (ChEMBL MF + ZINC) DataFrame shape: {df_main_combined.shape}")
 
@@ -241,15 +240,14 @@ def process_similarity_calculations(
 
     df_main_combined[descriptor_columns] = df_main_combined[descriptor_columns].apply(pd.to_numeric, errors='coerce')
     original_rows_main_before_dropna = len(df_main_combined)
-    df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy() # IMPORTANT: .copy()
+    df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy()
     if len(df_results_main) < original_rows_main_before_dropna: 
         logging.info(f"Dropped {original_rows_main_before_dropna - len(df_results_main)} rows from Main data due to NaNs in descriptors.")
     if df_results_main.empty: 
         logging.error(f"Main DataFrame (df_results_main) empty after NaN drop for {base_name_prefix}. Cannot proceed."); return
     
-    # X_original_main_valid = df_results_main[descriptor_columns].values.astype(np.float32)
-    # logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, df_results_main shape: {df_results_main.shape}")
-    X_original_main_valid = df_results_main[descriptor_columns].values.astype(np.int8) if representation_type == "fingerprints" else df_results_main[descriptor_columns].values.astype(np.float32)
+    dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
+    X_original_main_valid = df_results_main[descriptor_columns].values.astype(dtype_to_use)
     logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
     
     scaler = StandardScaler()
@@ -268,8 +266,37 @@ def process_similarity_calculations(
             load_and_prepare_target_ligands_for_coembedding( target_ligands_unscaled_path_for_tsne_and_coembed,
                 representation_type, target_rdkit_features_list, scaler )
         if not (X_target_scaled_for_coembed is not None and X_target_original_for_coembed is not None and df_target_ligands_for_coembed_info is not None):
-            logging.warning("Failed to fully load/process target ligands for co-embedding. Some co-embedding steps might be skipped or use main data only for target part.")
+            logging.warning("Failed to fully load/process target ligands for co-embedding. Some co-embedding steps will be skipped.")
         else: logging.info(f"Prepared {X_target_scaled_for_coembed.shape[0]} target ligands for co-embedding.")
+
+    # --- Pre-reduction with PCA for Fingerprints before UMAP/t-SNE ---
+    X_main_pre_reduced_for_manifold = None
+    X_target_pre_reduced_for_manifold_coembed = None
+    if representation_type == "fingerprints":
+        n_pca_components_for_manifold = tsne_params.get('pca_components', 50)
+        logging.info(f"Fingerprints detected. Applying initial PCA to {n_pca_components_for_manifold} components before UMAP/t-SNE.")
+        n_effective_pca_components = min(n_pca_components_for_manifold, X_scaled_main.shape[0] - 1, X_scaled_main.shape[1])
+        if n_effective_pca_components < 2:
+            logging.error(f"Cannot perform pre-reduction PCA, effective components ({n_effective_pca_components}) is too low. Using full-dimensional scaled data for UMAP/t-SNE.")
+            X_main_pre_reduced_for_manifold = X_scaled_main
+        else:
+            try:
+                pca_for_manifold_model = (cumlPCA(n_components=n_effective_pca_components, random_state=current_random_state) 
+                                          if CUML_AVAILABLE 
+                                          else sklearnPCA(n_components=n_effective_pca_components, random_state=current_random_state))
+                X_main_pre_reduced_for_manifold = pca_for_manifold_model.fit_transform(X_scaled_main)
+                logging.info(f"Pre-reduction PCA complete for main data. Shape: {X_main_pre_reduced_for_manifold.shape}")
+                if run_coembedding_for_pca_umap and X_target_scaled_for_coembed is not None:
+                    X_target_pre_reduced_for_manifold_coembed = pca_for_manifold_model.transform(X_target_scaled_for_coembed)
+                    logging.info(f"Pre-reduction PCA complete for target co-embedding data. Shape: {X_target_pre_reduced_for_manifold_coembed.shape}")
+            except Exception as e:
+                logging.error(f"Failed to perform pre-reduction PCA for UMAP/t-SNE: {e}", exc_info=True)
+                X_main_pre_reduced_for_manifold = X_scaled_main
+                X_target_pre_reduced_for_manifold_coembed = X_target_scaled_for_coembed
+    else:
+        logging.info("Features detected. UMAP will run on original scaled feature space.")
+        X_main_pre_reduced_for_manifold = X_scaled_main
+        X_target_pre_reduced_for_manifold_coembed = X_target_scaled_for_coembed
 
     # --- PCA ---
     if dr_method_flags.get('pca'):
@@ -322,16 +349,15 @@ def process_similarity_calculations(
             attempt_cuml_umap = CUML_AVAILABLE 
 
             if representation_type == "fingerprints":
+                # For fingerprints, UMAP runs on the PCA-reduced data for all metrics
+                logging.info(f"For fingerprints, UMAP ({metric_name}) will run on the PCA pre-reduced data.")
+                current_X_main_umap = X_main_pre_reduced_for_manifold
+                current_X_target_coembed_umap = X_target_pre_reduced_for_manifold_coembed
                 if metric_name.lower() in ["hamming", "manhattan"]:
-                    current_X_main_umap = X_original_main_valid
-                    current_X_target_coembed_umap = X_target_original_for_coembed
                     attempt_cuml_umap = False 
-                    logging.info(f"UMAP '{metric_name}' on fingerprints: using UNSCALED data and forcing scikit-learn.")
-                else: 
-                    logging.info(f"UMAP '{metric_name}' on fingerprints: using SCALED data, will attempt cuML if available (attempt_cuml_umap={attempt_cuml_umap}).")
-            else: 
-                logging.info(f"UMAP '{metric_name}' on features: using SCALED data, will attempt cuML if available (attempt_cuml_umap={attempt_cuml_umap}).")
-
+                    logging.info(f"Forcing scikit-learn UMAP for '{metric_name}' on fingerprints (after PCA).")
+            
+            # Non-co-embedded UMAP (Projection Model)
             umap_model_main_for_projection = None 
             try: 
                 if attempt_cuml_umap: 
@@ -358,8 +384,7 @@ def process_similarity_calculations(
                     for col in umap_cols: df_results_main[col] = np.nan 
             except Exception as e: 
                 logging.error(f"NON-CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
-                can_fallback_sklearn = SKLEARN_UMAP_AVAILABLE
-                if attempt_cuml_umap and can_fallback_sklearn and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
+                if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
                     logging.info(f"cuML UMAP failed for {metric_name}, trying scikit-learn UMAP (projection) as fallback...")
                     try:
                         umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
@@ -402,9 +427,7 @@ def process_similarity_calculations(
                     else: logging.error(f"UMAP co-embed length mismatch for {metric_name}.")
                 except Exception as e: 
                     logging.error(f"CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
-                    # Fallback for co-embedded UMAP
-                    can_fallback_sklearn_co = SKLEARN_UMAP_AVAILABLE
-                    if attempt_cuml_umap and can_fallback_sklearn_co and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
+                    if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
                         logging.info(f"cuML CO-EMBEDDED UMAP failed for {metric_name}, trying scikit-learn UMAP (co-embedding) as fallback...")
                         try:
                             umap_model_co_fb = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
@@ -428,20 +451,26 @@ def process_similarity_calculations(
             if X_target_scaled_for_coembed is None or df_target_ligands_for_coembed_info is None:
                 logging.warning("Skipping t-SNE: target co-embedding data not fully available.")
             else:
-                X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_for_coembed)) 
                 tsne_cols = [f't-SNE-{i+1}' for i in range(simspace_dim)]
                 try:
-                    actual_pca_comps = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0]-1 if X_for_tsne_combined.shape[0]>1 else 1, X_for_tsne_combined.shape[1])
-                    if actual_pca_comps < 1: 
-                        logging.error(f"t-SNE PCA components too low ({actual_pca_comps}). Skipping."); 
-                        for col in tsne_cols: df_results_main[col] = np.nan
-                    else:
-                        logging.info(f"t-SNE initial PCA to {actual_pca_comps} components on shape {X_for_tsne_combined.shape}")
-                        pca_tsne = (cumlPCA(n_components=actual_pca_comps,random_state=current_random_state) if CUML_AVAILABLE else sklearnPCA(n_components=actual_pca_comps,random_state=current_random_state))
-                        X_tsne_pca_reduced = pca_tsne.fit_transform(X_for_tsne_combined)
-                        pca_for_tsne_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_tSNE_internal_PCA_model.lzma")
-                        with open(pca_for_tsne_model_path, "wb") as f: dump(pca_tsne, f); logging.info(f"Saved t-SNE's internal PCA model to {pca_for_tsne_model_path}")
-                        
+                    X_tsne_pca_reduced = None
+                    if representation_type == "fingerprints":
+                        logging.info("For fingerprints, t-SNE will use the already computed pre-reduced data.")
+                        if X_main_pre_reduced_for_manifold is not None and X_target_pre_reduced_for_manifold_coembed is not None:
+                            X_tsne_pca_reduced = np.vstack((X_main_pre_reduced_for_manifold, X_target_pre_reduced_for_manifold_coembed))
+                        else:
+                            logging.error("Pre-reduced data for t-SNE (fingerprints) is missing. Skipping.")
+                    else: # For features, run the original t-SNE PCA step
+                        X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
+                        actual_pca_comps = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0]-1 if X_for_tsne_combined.shape[0]>1 else 1, X_for_tsne_combined.shape[1])
+                        if actual_pca_comps < 2:
+                             logging.error(f"Cannot run PCA for t-SNE, effective components too low ({actual_pca_comps}).")
+                        else:
+                            logging.info(f"t-SNE initial PCA to {actual_pca_comps} components on feature data shape {X_for_tsne_combined.shape}")
+                            pca_tsne = (cumlPCA(n_components=actual_pca_comps, random_state=current_random_state) if CUML_AVAILABLE else sklearnPCA(n_components=actual_pca_comps, random_state=current_random_state))
+                            X_tsne_pca_reduced = pca_tsne.fit_transform(X_for_tsne_combined)
+                    
+                    if X_tsne_pca_reduced is not None:
                         attempt_cuml_tsne_final = CUML_AVAILABLE
                         if representation_type == "fingerprints": 
                             attempt_cuml_tsne_final = False; logging.info("Forcing scikit-learn t-SNE for fingerprints.")
@@ -454,12 +483,9 @@ def process_similarity_calculations(
                             if perp_final != float(tsne_params['perplexity']): logging.info(f"Adjusted t-SNE perplexity to {perp_final}")
                             tsne_model = None
                             tsne_init_kwargs = {'n_components': simspace_dim, 'perplexity': perp_final, 'random_state': current_random_state}
-                            
-                            cuml_verbose = 1 if logger.isEnabledFor(logging.INFO) else 0 # Adjusted verbose logic
+                            cuml_verbose = 1 if logger.isEnabledFor(logging.INFO) else 0 
                             if logger.isEnabledFor(logging.DEBUG): cuml_verbose = 4
-
                             sklearn_verbose = 1 if logger.isEnabledFor(logging.DEBUG) else 0
-                            
                             if attempt_cuml_tsne_final:
                                 tsne_init_kwargs.update({'method': 'barnes_hut', 'verbose': cuml_verbose})
                                 if tsne_params.get('n_neighbors') is not None: tsne_init_kwargs['n_neighbors'] = tsne_params['n_neighbors']
