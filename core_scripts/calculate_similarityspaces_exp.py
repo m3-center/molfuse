@@ -247,7 +247,9 @@ def process_similarity_calculations(
     if df_results_main.empty: 
         logging.error(f"Main DataFrame (df_results_main) empty after NaN drop for {base_name_prefix}. Cannot proceed."); return
     
-    df_results_main[descriptor_columns].values.astype(np.int8) if representation_type == "fingerprints" else df_results_main[descriptor_columns].values.astype(np.float32)
+    # X_original_main_valid = df_results_main[descriptor_columns].values.astype(np.float32)
+    # logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, df_results_main shape: {df_results_main.shape}")
+    X_original_main_valid = df_results_main[descriptor_columns].values.astype(np.int8) if representation_type == "fingerprints" else df_results_main[descriptor_columns].values.astype(np.float32)
     logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
     
     scaler = StandardScaler()
