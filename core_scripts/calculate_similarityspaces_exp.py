@@ -160,8 +160,8 @@ def load_and_prepare_target_ligands_for_coembedding(
             logger.warning("Target ligands DataFrame empty after NaN drop for co-embedding.")
             return None, None, None
 
-        X_target_unscaled_numeric = df_target_ligands_processed[target_desc_cols].values.astype(np.float32)
-        X_target_scaled_numeric = scaler_main_data.transform(X_target_unscaled_numeric)
+        X_target_unscaled_numeric = df_target_ligands_processed[target_desc_cols].values.astype(np.int8) if representation_type == "fingerprints" else df_target_ligands_processed[target_desc_cols].values.astype(np.float32)
+        X_target_scaled_numeric = scaler_main_data.transform(X_target_unscaled_numeric) # transform will handle the dtype
         return df_target_ligands_processed, X_target_scaled_numeric, X_target_unscaled_numeric
     except Exception as e:
         logger.error(f"Error loading/processing target ligands from '{target_ligands_unscaled_path}': {e}", exc_info=True)
@@ -247,8 +247,8 @@ def process_similarity_calculations(
     if df_results_main.empty: 
         logging.error(f"Main DataFrame (df_results_main) empty after NaN drop for {base_name_prefix}. Cannot proceed."); return
     
-    X_original_main_valid = df_results_main[descriptor_columns].values.astype(np.float32)
-    logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, df_results_main shape: {df_results_main.shape}")
+    df_results_main[descriptor_columns].values.astype(np.int8) if representation_type == "fingerprints" else df_results_main[descriptor_columns].values.astype(np.float32)
+    logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
     
     scaler = StandardScaler()
     X_scaled_main = scaler.fit_transform(X_original_main_valid)

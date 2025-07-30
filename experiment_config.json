@@ -73,7 +73,7 @@
       "processing_mode": "similarity_space_only"
     }
   ],
-  "representations": ["features", "fingerprints"],
+  "representations": ["fingerprints", "features"],
   "dimensionality_reduction_methods": {
       "pca": {"short_name": "PCA", "allow_coembedding": true},
       "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean", "allow_coembedding": true},
