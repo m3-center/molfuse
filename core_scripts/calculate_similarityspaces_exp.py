@@ -195,7 +195,7 @@ def process_similarity_calculations(
     info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
     valid_info_chunks = []
     valid_descriptor_chunks = []
-    chunksize = 25000 # This can be tuned based on memory. 25k rows * 2048 cols is manageable.
+    chunksize = 100000 # This can be tuned based on memory. 25k rows * 2048 cols is manageable.
 
     input_files_to_process = [chembl_mf_data_path]
     if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path):
