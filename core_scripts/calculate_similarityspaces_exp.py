@@ -235,11 +235,16 @@ def process_similarity_calculations(
     else: 
         if 'SMILES' in df_main_combined.columns: df_main_combined['MOLECULE ID'] = df_main_combined['SMILES']
         else: df_main_combined['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_main_combined.index).astype(str)
-    df_main_combined['MOLECULE ID'] = df_main_combined['MOLECULE ID'].astype(str).fillna('MISSING_ID')
     
+    logging.info(f"MOLECULE ID column created. Shape: {df_main_combined.shape}")
+    df_main_combined['MOLECULE ID'] = df_main_combined['MOLECULE ID'].astype(str).fillna('MISSING_ID')
+    logging.info(f"MOLECULE ID column filled NaNs with 'MISSING_ID'. Shape: {df_main_combined.shape}")
     df_main_combined[descriptor_columns] = df_main_combined[descriptor_columns].apply(pd.to_numeric, errors='coerce')
+    logging.info(f"Converted descriptor columns to numeric. Shape: {df_main_combined.shape}")
     original_rows_main_before_dropna = len(df_main_combined)
+    logging.info(f"Original Main DataFrame rows before NaN drop: {original_rows_main_before_dropna}")
     df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy()
+    logging.info(f"Main DataFrame after NaN drop on descriptors: {df_results_main.shape}")
     if len(df_results_main) < original_rows_main_before_dropna: 
         logging.info(f"Dropped {original_rows_main_before_dropna - len(df_results_main)} rows from Main data due to NaNs in descriptors.")
     if df_results_main.empty: 
@@ -250,6 +255,7 @@ def process_similarity_calculations(
     logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
     
     scaler = StandardScaler()
+    logging.info(f"Fitting StandardScaler on main data of shape {X_original_main_valid.shape}") 
     X_scaled_main = scaler.fit_transform(X_original_main_valid)
     logging.info(f"StandardScaler fitted. X_scaled_main shape: {X_scaled_main.shape}")
     scaler_model_path = os.path.join(output_model_dir, f"{base_name_prefix}_scaler.lzma")
