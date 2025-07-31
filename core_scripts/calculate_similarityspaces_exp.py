@@ -209,7 +209,7 @@ def process_similarity_calculations(
         logging.info(f"Processing file in chunks: {file_path}")
         try:
             for i, chunk in enumerate(pd.read_csv(file_path, chunksize=chunksize, low_memory=False)):
-                logging.debug(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
+                logging.info(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
                 
                 # 1. Parse fingerprints if needed
                 if representation_type == "fingerprints":
