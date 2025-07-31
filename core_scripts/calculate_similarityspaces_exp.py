@@ -28,31 +28,27 @@ except ImportError:
     pass 
 
 # --- Logging Setup ---
-logger = logging.getLogger() # Get the root logger
-# It's good practice to clear handlers if you're reconfiguring the root logger in a script
-# that might be imported or run in an environment where logging was already set up.
+logger = logging.getLogger() 
 if logger.hasHandlers(): 
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
-        handler.close() # Important to close file handlers
+        handler.close()
+# Root logger level must be the lowest level you want any handler to see.
+logger.setLevel(logging.DEBUG) 
 
-# Set the overall level for the root logger. 
-# Messages below this level will be ignored entirely.
-logger.setLevel(logging.DEBUG) # <<<<<<< ENSURE THIS IS DEBUG TO ALLOW ALL MESSAGES TO PASS TO HANDLERS
-
-log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s') # Corrected funcName format
+# Corrected formatter
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s')
 
 try:
     cs_log_file_path = "calculate_simspaces_internal.log" 
     file_handler = logging.FileHandler(cs_log_file_path, mode='w') 
     file_handler.setFormatter(log_formatter)
-    # The handler can have its own level, more restrictive or same as logger.
     file_handler.setLevel(logging.DEBUG) # File handler will log DEBUG and above
     logger.addHandler(file_handler)
 except Exception as e:
     print(f"CRITICAL: Failed to initialize file logger for {cs_log_file_path}: {e}")
 
-stream_handler = logging.StreamHandler() # To sys.stdout/stderr
+stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(log_formatter)
 stream_handler.setLevel(logging.INFO) # Console can be less verbose
 logger.addHandler(stream_handler)
@@ -143,14 +139,7 @@ def load_and_prepare_target_ligands_for_coembedding(
             return None, None, None
 
         df_target_ligands_processed = df_target_ligands_raw.copy()
-        # Ensure descriptor columns are numeric before operating on them
-        for col in target_desc_cols: # Apply to_numeric individually for better error tracing if one col fails
-            try:
-                df_target_ligands_processed[col] = pd.to_numeric(df_target_ligands_processed[col], errors='coerce')
-            except Exception as e_num:
-                 logger.error(f"Error converting column {col} to numeric in target ligands: {e_num}")
-                 df_target_ligands_processed[col] = np.nan # Coerce to NaN on error
-
+        df_target_ligands_processed[target_desc_cols] = df_target_ligands_processed[target_desc_cols].apply(pd.to_numeric, errors='coerce')
         original_target_rows = len(df_target_ligands_processed)
         df_target_ligands_processed.dropna(subset=target_desc_cols, how='any', inplace=True)
 
@@ -159,9 +148,11 @@ def load_and_prepare_target_ligands_for_coembedding(
         if df_target_ligands_processed.empty:
             logger.warning("Target ligands DataFrame empty after NaN drop for co-embedding.")
             return None, None, None
+            
+        dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
+        X_target_unscaled_numeric = df_target_ligands_processed[target_desc_cols].values.astype(dtype_to_use)
 
-        X_target_unscaled_numeric = df_target_ligands_processed[target_desc_cols].values.astype(np.int8) if representation_type == "fingerprints" else df_target_ligands_processed[target_desc_cols].values.astype(np.float32)
-        X_target_scaled_numeric = scaler_main_data.transform(X_target_unscaled_numeric) # transform will handle the dtype
+        X_target_scaled_numeric = scaler_main_data.transform(X_target_unscaled_numeric)
         return df_target_ligands_processed, X_target_scaled_numeric, X_target_unscaled_numeric
     except Exception as e:
         logger.error(f"Error loading/processing target ligands from '{target_ligands_unscaled_path}': {e}", exc_info=True)
@@ -175,6 +166,12 @@ def process_similarity_calculations(
     run_coembedding_for_pca_umap, dr_method_configs,
     current_random_state 
     ):
+
+    # This logging setup is now done inside the orchestrator's main()
+    # For standalone, a basic config is fine. The orchestrator's log is primary.
+    # Re-doing it here to be safe if run standalone.
+    # The setup_script_logging function is not defined here, let's keep it simple.
+    # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(message)s')
 
     logger.info(f"--- process_similarity_calculations: Random_State: {current_random_state} ---")
     if CUML_AVAILABLE: logger.info("cuML is available.")
@@ -200,7 +197,7 @@ def process_similarity_calculations(
         if not df_zinc.empty and PRECALCULATED_FP_STRING_COLUMN_NAME in df_zinc.columns: 
             df_zinc = parse_fingerprint_string_column_in_df(df_zinc)
     
-    # Standardize Columns BEFORE Concatenation
+    # --- FIX: Standardize Columns BEFORE Concatenation ---
     temp_df_for_cols = df_chembl_mf if not df_chembl_mf.empty else df_zinc
     descriptor_columns = get_descriptor_columns(temp_df_for_cols, representation_type, 
                                                 target_rdkit_features_list, 
@@ -227,6 +224,7 @@ def process_similarity_calculations(
 
     df_main_combined = pd.concat([df_chembl_mf_std, df_zinc_std], ignore_index=True)
     logging.info(f"Combined Main DataFrame shape after standardizing columns: {df_main_combined.shape}")
+    # --- END OF FIX ---
     
     if 'Compound ChEMBL ID' in df_main_combined.columns and 'ZINC_ID' in df_main_combined.columns: 
         df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID'].fillna(df_main_combined['ZINC_ID'])
@@ -239,20 +237,38 @@ def process_similarity_calculations(
     logging.info(f"MOLECULE ID column created. Shape: {df_main_combined.shape}")
     df_main_combined['MOLECULE ID'] = df_main_combined['MOLECULE ID'].astype(str).fillna('MISSING_ID')
     logging.info(f"MOLECULE ID column filled NaNs with 'MISSING_ID'. Shape: {df_main_combined.shape}")
-    df_main_combined[descriptor_columns] = df_main_combined[descriptor_columns].apply(pd.to_numeric, errors='coerce')
-    logging.info(f"Converted descriptor columns to numeric. Shape: {df_main_combined.shape}")
+
+    # --- REVISED/OPTIMIZED DATA PREP FLOW ---
+    logging.info("Starting final data preparation for DR...")
+    if representation_type == "features":
+        logging.info("Applying pd.to_numeric to feature columns...")
+        # Iterating is more memory-friendly than a single massive .apply()
+        for col in descriptor_columns:
+            df_main_combined[col] = pd.to_numeric(df_main_combined[col], errors='coerce')
+        logging.info("Completed converting feature columns to numeric.")
+    else:
+        logging.info("Skipping redundant to_numeric for fingerprints as parsing already handled it.")
+
     original_rows_main_before_dropna = len(df_main_combined)
     logging.info(f"Original Main DataFrame rows before NaN drop: {original_rows_main_before_dropna}")
+    
     df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy()
     logging.info(f"Main DataFrame after NaN drop on descriptors: {df_results_main.shape}")
+    
+    del df_main_combined
+    gc.collect()
+    logging.info("Released memory from intermediate combined DataFrame.")
+
     if len(df_results_main) < original_rows_main_before_dropna: 
-        logging.info(f"Dropped {original_rows_main_before_dropna - len(df_results_main)} rows from Main data due to NaNs in descriptors.")
+        logging.info(f"Dropped {original_rows_main_before_dropna - len(df_results_main)} rows due to NaNs in descriptors.")
     if df_results_main.empty: 
         logging.error(f"Main DataFrame (df_results_main) empty after NaN drop for {base_name_prefix}. Cannot proceed."); return
     
     dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
+    logging.info(f"Converting descriptor columns to NumPy array with dtype: {dtype_to_use}...")
     X_original_main_valid = df_results_main[descriptor_columns].values.astype(dtype_to_use)
     logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
+    # --- END REVISED FLOW ---
     
     scaler = StandardScaler()
     logging.info(f"Fitting StandardScaler on main data of shape {X_original_main_valid.shape}") 
