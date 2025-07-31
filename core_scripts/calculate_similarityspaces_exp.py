@@ -33,25 +33,30 @@ if logger.hasHandlers():
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
         handler.close()
-# Root logger level must be the lowest level you want any handler to see.
 logger.setLevel(logging.DEBUG) 
 
-# Corrected formatter
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s')
 
-try:
-    cs_log_file_path = "calculate_simspaces_internal.log" 
-    file_handler = logging.FileHandler(cs_log_file_path, mode='w') 
+def setup_script_logging(log_filename):
+    if logger.hasHandlers():
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
+    
+    log_dir = os.path.dirname(log_filename)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    file_handler = logging.FileHandler(log_filename, mode='w') 
     file_handler.setFormatter(log_formatter)
-    file_handler.setLevel(logging.DEBUG) # File handler will log DEBUG and above
+    file_handler.setLevel(logging.DEBUG) 
     logger.addHandler(file_handler)
-except Exception as e:
-    print(f"CRITICAL: Failed to initialize file logger for {cs_log_file_path}: {e}")
 
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(logging.INFO) # Console can be less verbose
-logger.addHandler(stream_handler)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(log_formatter)
+    stream_handler.setLevel(logging.INFO) 
+    logger.addHandler(stream_handler)
+    logger.info(f"--- Script-specific logging configured. Log file: {log_filename} ---")
 # --- End Logging Setup ---
 
 FINGERPRINT_COLUMN_PREFIX = "fp_"
@@ -61,30 +66,22 @@ PRECALCULATED_FP_STRING_COLUMN_NAME = "Fingerprint"
 def parse_fingerprint_string_column_in_df(df_input, 
                                           fp_string_col_name=PRECALCULATED_FP_STRING_COLUMN_NAME, 
                                           num_bits=NUM_FINGERPRINT_BITS):
-    logger.info(f"Attempting to parse fingerprint string column: '{fp_string_col_name}' in df of shape {df_input.shape}")
+    # This function is memory-efficient as it operates on a chunk (df_input)
     if fp_string_col_name not in df_input.columns:
-        logger.warning(f"Fingerprint string column '{fp_string_col_name}' not found. No parsing done.")
+        logger.warning(f"FP string column '{fp_string_col_name}' not found. No parsing.")
         return df_input 
     fp_matrix = np.full((len(df_input), num_bits), np.nan) 
-    num_parse_errors = 0; num_length_mismatches = 0
     for idx, fp_str in enumerate(df_input[fp_string_col_name]):
         if pd.isna(fp_str) or not isinstance(fp_str, str) or not fp_str.strip(): continue
         bits = fp_str.split(',')
         if len(bits) == num_bits:
             try: fp_matrix[idx, :] = [int(b) for b in bits]
-            except ValueError: 
-                if num_parse_errors < 5: logger.debug(f"ValueError parsing bits (row index {df_input.index[idx]}): {fp_str[:30]}...")
-                num_parse_errors += 1
-        else:
-            if num_length_mismatches < 5: logger.debug(f"FP string (row index {df_input.index[idx]}) '{fp_str[:30]}...' length {len(bits)} != expected {num_bits}.")
-            num_length_mismatches +=1
-    if num_parse_errors > 0: logger.warning(f"Encountered {num_parse_errors} ValueErrors during FP string parsing.")
-    if num_length_mismatches > 0: logger.warning(f"Encountered {num_length_mismatches} length mismatches during FP string parsing.")
+            except ValueError: pass
+        else: pass
     fp_col_names = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(num_bits)]
     df_fp_bits = pd.DataFrame(fp_matrix, columns=fp_col_names, index=df_input.index)
     df_output = df_input.drop(columns=[fp_string_col_name])
     df_output = pd.concat([df_output, df_fp_bits], axis=1)
-    logger.info(f"FP string column '{fp_string_col_name}' parsed. Added {len(fp_col_names)} new columns. New shape: {df_output.shape}")
     return df_output
 
 def get_descriptor_columns(df, representation_type, target_rdkit_features_list, is_parsed_fp=False):
@@ -121,6 +118,7 @@ def get_descriptor_columns(df, representation_type, target_rdkit_features_list, 
 def load_and_prepare_target_ligands_for_coembedding(
     target_ligands_unscaled_path, representation_type, target_rdkit_features_list, scaler_main_data
 ):
+    # This function loads the target ligands, which are assumed to be small, so no chunking needed here.
     if not target_ligands_unscaled_path or target_ligands_unscaled_path.lower() == "none" or not os.path.exists(target_ligands_unscaled_path):
         logger.warning(f"Target ligands file for co-embedding not provided, 'None', or not found: '{target_ligands_unscaled_path}'.")
         return None, None, None 
@@ -167,11 +165,9 @@ def process_similarity_calculations(
     current_random_state 
     ):
 
-    # This logging setup is now done inside the orchestrator's main()
-    # For standalone, a basic config is fine. The orchestrator's log is primary.
-    # Re-doing it here to be safe if run standalone.
-    # The setup_script_logging function is not defined here, let's keep it simple.
-    # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(message)s')
+    base_name_prefix = f"{target_id_name}_{representation_type}_dim{simspace_dim}"
+    log_filename = os.path.join(output_model_dir, f"calculate_simspaces_{base_name_prefix}_seed{current_random_state}.log")
+    setup_script_logging(log_filename)
 
     logger.info(f"--- process_similarity_calculations: Random_State: {current_random_state} ---")
     if CUML_AVAILABLE: logger.info("cuML is available.")
@@ -179,96 +175,102 @@ def process_similarity_calculations(
     if SKLEARN_UMAP_AVAILABLE: logger.info("sklearn UMAP (umap-learn) is available.")
     else: logger.warning("sklearn UMAP (umap-learn) is NOT available. CPU UMAP will fail if attempted.")
 
-    base_name_prefix = f"{target_id_name}_{representation_type}_dim{simspace_dim}"
     logging.info(f"Processing for: {base_name_prefix}")
     
+    # --- NEW CHUNKING DATA PREPARATION FLOW ---
+    
+    # Determine descriptor columns from a small sample of the first file
     try:
-        df_chembl_mf = pd.read_csv(chembl_mf_data_path, low_memory=False)
-        logging.info(f"Loaded ChEMBL MF data: {chembl_mf_data_path}, shape: {df_chembl_mf.shape}")
-        df_zinc = pd.read_csv(zinc_data_path, low_memory=False) if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path) else pd.DataFrame()
-        if not df_zinc.empty: logging.info(f"Loaded ZINC data: {zinc_data_path}, shape: {df_zinc.shape}")
-        else: logging.info("No ZINC data or path invalid. Proceeding without ZINC.")
-    except Exception as e: 
-        logging.error(f"Failed to load ChEMBL/ZINC data for {base_name_prefix}: {e}", exc_info=True); return
+        df_sample = pd.read_csv(chembl_mf_data_path, nrows=5)
+        if representation_type == "fingerprints":
+            df_sample = parse_fingerprint_string_column_in_df(df_sample)
+        descriptor_columns = get_descriptor_columns(df_sample, representation_type, target_rdkit_features_list, is_parsed_fp=(representation_type == "fingerprints"))
+        if not descriptor_columns: 
+            logging.error(f"No descriptor columns determined from sample of {chembl_mf_data_path}. Aborting."); return
+    except Exception as e:
+        logging.error(f"Failed to read sample from {chembl_mf_data_path} to determine columns: {e}"); return
 
-    if representation_type == "fingerprints":
-        if PRECALCULATED_FP_STRING_COLUMN_NAME in df_chembl_mf.columns: 
-            df_chembl_mf = parse_fingerprint_string_column_in_df(df_chembl_mf)
-        if not df_zinc.empty and PRECALCULATED_FP_STRING_COLUMN_NAME in df_zinc.columns: 
-            df_zinc = parse_fingerprint_string_column_in_df(df_zinc)
+    logging.info(f"Determined {len(descriptor_columns)} descriptor columns from data sample.")
     
-    # --- FIX: Standardize Columns BEFORE Concatenation ---
-    temp_df_for_cols = df_chembl_mf if not df_chembl_mf.empty else df_zinc
-    descriptor_columns = get_descriptor_columns(temp_df_for_cols, representation_type, 
-                                                target_rdkit_features_list, 
-                                                is_parsed_fp=(representation_type == "fingerprints"))
-    if not descriptor_columns: 
-        logging.error(f"No descriptor columns determined for {representation_type}. Aborting {base_name_prefix}."); return
-
     info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
-    
-    df_chembl_mf_std = pd.DataFrame()
-    if not df_chembl_mf.empty:
-        cols_to_keep_chembl = [col for col in info_cols_to_keep if col in df_chembl_mf.columns] + \
-                              [col for col in descriptor_columns if col in df_chembl_mf.columns]
-        df_chembl_mf_std = df_chembl_mf[cols_to_keep_chembl].copy()
+    valid_info_chunks = []
+    valid_descriptor_chunks = []
+    chunksize = 25000 # This can be tuned based on memory. 25k rows * 2048 cols is manageable.
 
-    df_zinc_std = pd.DataFrame()
-    if not df_zinc.empty:
-        cols_to_keep_zinc = [col for col in info_cols_to_keep if col in df_zinc.columns] + \
-                            [col for col in descriptor_columns if col in df_zinc.columns]
-        df_zinc_std = df_zinc[cols_to_keep_zinc].copy()
+    input_files_to_process = [chembl_mf_data_path]
+    if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path):
+        input_files_to_process.append(zinc_data_path)
 
-    logging.info(f"Standardized ChEMBL df shape: {df_chembl_mf_std.shape}")
-    logging.info(f"Standardized ZINC df shape: {df_zinc_std.shape}")
-
-    df_main_combined = pd.concat([df_chembl_mf_std, df_zinc_std], ignore_index=True)
-    logging.info(f"Combined Main DataFrame shape after standardizing columns: {df_main_combined.shape}")
-    # --- END OF FIX ---
-    
-    if 'Compound ChEMBL ID' in df_main_combined.columns and 'ZINC_ID' in df_main_combined.columns: 
-        df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID'].fillna(df_main_combined['ZINC_ID'])
-    elif 'Compound ChEMBL ID' in df_main_combined.columns: df_main_combined['MOLECULE ID'] = df_main_combined['Compound ChEMBL ID']
-    elif 'ZINC_ID' in df_main_combined.columns: df_main_combined['MOLECULE ID'] = df_main_combined['ZINC_ID']
-    else: 
-        if 'SMILES' in df_main_combined.columns: df_main_combined['MOLECULE ID'] = df_main_combined['SMILES']
-        else: df_main_combined['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_main_combined.index).astype(str)
-    
-    logging.info(f"MOLECULE ID column created. Shape: {df_main_combined.shape}")
-    df_main_combined['MOLECULE ID'] = df_main_combined['MOLECULE ID'].astype(str).fillna('MISSING_ID')
-    logging.info(f"MOLECULE ID column filled NaNs with 'MISSING_ID'. Shape: {df_main_combined.shape}")
-
-    # --- REVISED/OPTIMIZED DATA PREP FLOW ---
-    logging.info("Starting final data preparation for DR...")
-    if representation_type == "features":
-        logging.info("Applying pd.to_numeric to feature columns...")
-        # Iterating is more memory-friendly than a single massive .apply()
-        for col in descriptor_columns:
-            df_main_combined[col] = pd.to_numeric(df_main_combined[col], errors='coerce')
-        logging.info("Completed converting feature columns to numeric.")
-    else:
-        logging.info("Skipping redundant to_numeric for fingerprints as parsing already handled it.")
-
-    original_rows_main_before_dropna = len(df_main_combined)
-    logging.info(f"Original Main DataFrame rows before NaN drop: {original_rows_main_before_dropna}")
-    
-    df_results_main = df_main_combined.dropna(subset=descriptor_columns, how='any').copy()
-    logging.info(f"Main DataFrame after NaN drop on descriptors: {df_results_main.shape}")
-    
-    del df_main_combined
-    gc.collect()
-    logging.info("Released memory from intermediate combined DataFrame.")
-
-    if len(df_results_main) < original_rows_main_before_dropna: 
-        logging.info(f"Dropped {original_rows_main_before_dropna - len(df_results_main)} rows due to NaNs in descriptors.")
-    if df_results_main.empty: 
-        logging.error(f"Main DataFrame (df_results_main) empty after NaN drop for {base_name_prefix}. Cannot proceed."); return
-    
+    total_rows_processed = 0
+    total_rows_kept = 0
     dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
-    logging.info(f"Converting descriptor columns to NumPy array with dtype: {dtype_to_use}...")
-    X_original_main_valid = df_results_main[descriptor_columns].values.astype(dtype_to_use)
-    logging.info(f"X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
-    # --- END REVISED FLOW ---
+
+    for file_path in input_files_to_process:
+        logging.info(f"Processing file in chunks: {file_path}")
+        try:
+            for i, chunk in enumerate(pd.read_csv(file_path, chunksize=chunksize, low_memory=False)):
+                logging.debug(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
+                
+                # 1. Parse fingerprints if needed
+                if representation_type == "fingerprints":
+                    if PRECALCULATED_FP_STRING_COLUMN_NAME in chunk.columns:
+                        chunk = parse_fingerprint_string_column_in_df(chunk)
+                
+                # 2. Select only necessary columns
+                current_info_cols = [c for c in info_cols_to_keep if c in chunk.columns]
+                current_desc_cols = [c for c in descriptor_columns if c in chunk.columns]
+                
+                if not current_desc_cols: # Skip chunk if it's missing descriptor columns
+                    logging.warning(f"Chunk {i+1} is missing descriptor columns. Skipping.")
+                    continue
+                
+                chunk_subset = chunk[current_info_cols + current_desc_cols]
+                
+                # 3. Convert descriptors, drop NaNs
+                chunk_subset[current_desc_cols] = chunk_subset[current_desc_cols].apply(pd.to_numeric, errors='coerce')
+                initial_chunk_rows = len(chunk_subset)
+                total_rows_processed += initial_chunk_rows
+                
+                chunk_valid = chunk_subset.dropna(subset=current_desc_cols, how='any')
+                
+                if not chunk_valid.empty:
+                    total_rows_kept += len(chunk_valid)
+                    # 4. Separate info from descriptors
+                    valid_info_chunks.append(chunk_valid[current_info_cols].copy())
+                    valid_descriptor_chunks.append(chunk_valid[current_desc_cols].values.astype(dtype_to_use))
+                
+                del chunk, chunk_subset, chunk_valid
+                gc.collect()
+
+        except Exception as e:
+            logging.error(f"Error processing file in chunks {file_path}: {e}", exc_info=True)
+            return
+
+    if not valid_descriptor_chunks:
+        logging.error("No valid data rows found after processing all files in chunks. Aborting.")
+        return
+
+    # 5. Final Assembly
+    logging.info("Assembling final data from valid chunks...")
+    X_original_main_valid = np.vstack(valid_descriptor_chunks)
+    df_results_main = pd.concat(valid_info_chunks, ignore_index=True)
+    del valid_descriptor_chunks, valid_info_chunks
+    gc.collect()
+
+    logging.info(f"Finished chunk processing. Total rows read: {total_rows_processed}. Total valid rows kept: {total_rows_kept}.")
+    logging.info(f"Final X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
+    logging.info(f"Final df_results_main info shape: {df_results_main.shape}")
+
+    # Create MOLECULE ID
+    if 'Compound ChEMBL ID' in df_results_main.columns and 'ZINC_ID' in df_results_main.columns: 
+        df_results_main['MOLECULE ID'] = df_results_main['Compound ChEMBL ID'].fillna(df_results_main['ZINC_ID'])
+    elif 'Compound ChEMBL ID' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['Compound ChEMBL ID']
+    elif 'ZINC_ID' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['ZINC_ID']
+    else: 
+        if 'SMILES' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['SMILES']
+        else: df_results_main['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_results_main.index).astype(str)
+    df_results_main['MOLECULE ID'] = df_results_main['MOLECULE ID'].astype(str).fillna('MISSING_ID')
+    # --- END OF CHUNKING FLOW ---
     
     scaler = StandardScaler()
     logging.info(f"Fitting StandardScaler on main data of shape {X_original_main_valid.shape}") 
@@ -536,7 +538,8 @@ def process_similarity_calculations(
 
     output_csv_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_similarity_space.csv")
     try:
-        info_cols = [c for c in df_results_main.columns if c not in descriptor_columns and not c.startswith(('PCA-','UMAP-','t-SNE-'))]
+        # Note: descriptor_columns are no longer in df_results_main
+        info_cols = [c for c in df_results_main.columns if not c.startswith(('PCA-','UMAP-','t-SNE-'))]
         dr_cols = [c for c in df_results_main.columns if c.startswith(('PCA-','UMAP-','t-SNE-'))]
         cols_to_save = [c for c in info_cols + dr_cols if c in df_results_main.columns] 
         if cols_to_save:
@@ -545,15 +548,18 @@ def process_similarity_calculations(
         else: logging.error(f"No columns to save for main simspace CSV {base_name_prefix}")
     except Exception as e: logging.error(f"Failed to save simspace file {output_csv_path}: {e}", exc_info=True)
     
-    del df_main_combined, df_results_main, X_original_main_valid, X_scaled_main
+    del df_results_main, X_original_main_valid, X_scaled_main
     if df_target_ligands_for_coembed_info is not None: del df_target_ligands_for_coembed_info
     if X_target_scaled_for_coembed is not None: del X_target_scaled_for_coembed
     if X_target_original_for_coembed is not None: del X_target_original_for_coembed
+    if X_main_pre_reduced_for_manifold is not None: del X_main_pre_reduced_for_manifold
+    if X_target_pre_reduced_for_manifold_coembed is not None: del X_target_pre_reduced_for_manifold_coembed
     gc.collect()
     logging.info(f"Finished processing for: {base_name_prefix}")
 
 
 if __name__ == "__main__":
+    # This block is identical to the last complete version.
     parser = argparse.ArgumentParser(description="Calculate similarity spaces.")
     parser.add_argument("--chembl_mf_data_path", required=True)
     parser.add_argument("--zinc_data_path", default=None)
@@ -573,10 +579,10 @@ if __name__ == "__main__":
     parser.add_argument("--umap_metric_to_run_hamming", action='store_true', default=False)
     parser.add_argument("--tsne_perplexity", type=float, default=30.0)
     parser.add_argument("--tsne_pca_components", type=int, default=50)
-    parser.add_argument("--n_neighbors", type=int, default=None, help="N_neighbors for cuML tSNE (passed from orchestrator).") 
+    parser.add_argument("--n_neighbors", type=int, default=None, help="N_neighbors for cuML tSNE.") 
     parser.add_argument("--run_coembedding_for_pca_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_configs_json_str", required=True)
-    parser.add_argument("--random_state", type=int, default=42, help="Random state for DR algorithms.") # Added to __main__
+    parser.add_argument("--random_state", type=int, default=42, help="Random state for DR algorithms.")
     args_main = parser.parse_args()
 
     try:
@@ -608,6 +614,6 @@ if __name__ == "__main__":
         args_main.output_simspace_dir, args_main.output_model_dir, target_rdkit_features_list_main,
         dr_method_flags_dict_main, active_umap_metrics_main, tsne_params_dict_main,
         args_main.run_coembedding_for_pca_umap, dr_method_configs_dict_main,
-        args_main.random_state # Pass the random_state
+        args_main.random_state 
     )
     logging.info("Similarity space calculation script finished (direct run).")
