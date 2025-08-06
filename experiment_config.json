@@ -78,7 +78,6 @@
       "pca": {"short_name": "PCA", "allow_coembedding": true},
       "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean", "allow_coembedding": true},
       "umap_cosine": {"short_name": "UMAP-Cosine", "metric": "cosine", "allow_coembedding": true},
-      "umap_manhattan": {"short_name": "UMAP-Manhattan", "metric": "manhattan", "allow_coembedding": true},
       "umap_hamming": {"short_name": "UMAP-Hamming", "metric": "hamming", "allow_coembedding": true},
       "tsne": {"short_name": "t-SNE", "perplexity": 30, "allow_coembedding": true} 
   }
