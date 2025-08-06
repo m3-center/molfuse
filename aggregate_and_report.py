@@ -106,27 +106,15 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
         df_for_latex.columns = [escape_latex_text_content(str(c).replace('_', ' ').title()) for c in dataframe.columns]
         
         if col_format is None:
-            # A more booktabs-friendly column format (no vertical lines)
-            formats = ['l'] * len(df_for_latex.columns)
-            for i, col_name_orig in enumerate(dataframe.columns):
-                if pd.api.types.is_numeric_dtype(dataframe[col_name_orig]):
-                    formats[i] = 'r'
-            col_format = "".join(formats) # e.g., 'lrr' instead of '|l|r|r|'
+            col_format = 'l' * len(df_for_latex.columns)
 
-        # --- THIS IS THE FIX ---
-        # Removed the 'booktabs=True' keyword argument, as it's not supported in older Pandas versions.
-        # The default LaTeX output from modern Pandas is already booktabs-friendly.
         latex_table_string = df_for_latex.to_latex(index=False, escape=False, column_format=col_format,
-                                                   longtable=len(dataframe)>20, na_rep="N/A")
-        # --- END OF FIX ---
-                                                   
+                                                   longtable=len(dataframe)>20, na_rep="N/A", booktabs=True)
         latex_content_list.append(latex_table_string)
         latex_content_list.extend([r"\end{table}", "\n"])
-    else: 
-        latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
+    else: latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
 # --- End LaTeX Helpers ---
 
-# Setup basic logging for this script
 agg_log_file_name = f"aggregation_report_generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -139,106 +127,81 @@ def find_all_replicate_runs(base_experiment_dir):
     replicate_dirs = []
     pattern = os.path.join(base_experiment_dir, "run_seed*_repr*_*_*")
     logging.info(f"Scanning for all replicate run directories with pattern: {pattern}")
-    
     dir_pattern_re = re.compile(r"run_seed(\d+)_repr(features|fingerprints)_(\d{8}_\d{6})")
-
     for dir_path in glob.glob(pattern):
         if os.path.isdir(dir_path):
             basename = os.path.basename(dir_path)
             match = dir_pattern_re.match(basename)
-            
             if match:
                 try:
-                    seed_val = int(match.group(1))
-                    repr_val = match.group(2)
+                    seed_val = int(match.group(1)); repr_val = match.group(2)
                     replicate_dirs.append({"path": dir_path, "seed": seed_val, "repr_mode": repr_val})
                     logging.info(f"Found valid replicate run: {dir_path} (Seed: {seed_val}, Repr: {repr_val})")
                 except (ValueError, IndexError) as e:
-                    logging.warning(f"Could not parse details from a directory name that matched glob pattern: {basename}. Error: {e}")
+                    logging.warning(f"Could not parse details from directory name {basename}: {e}")
             else:
                 logging.debug(f"Directory matched glob but not regex, skipping: {basename}")
-                
-    if not replicate_dirs:
-        logging.warning(f"No valid replicate run directories found in '{base_experiment_dir}' matching the expected pattern.")
-        
+    if not replicate_dirs: logging.warning(f"No valid replicate run directories found in '{base_experiment_dir}'")
     return sorted(replicate_dirs, key=lambda x: (x["seed"], x["repr_mode"]))
 
 def collect_metrics_from_replicates(replicate_run_details, config_main):
     all_metrics_data = []
     gs = config_main['global_settings']
-
     for rep_info in replicate_run_details:
         rep_dir_path, replicate_seed, repr_type = rep_info["path"], rep_info["seed"], rep_info["repr_mode"]
         logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
-
         for target_info in config_main['targets']:
-            if target_info.get("processing_mode", "full_analysis") == "similarity_space_only":
-                logging.debug(f"  Skipping metrics for target {target_info['id_name']} (similarity_space_only).")
-                continue
-
+            if target_info.get("processing_mode", "full_analysis") == "similarity_space_only": continue
             target_results_base = os.path.join(rep_dir_path, target_info['id_name'], "results", repr_type)
             if not os.path.exists(target_results_base): continue
-
             for dr_key, dr_params in config_main["dimensionality_reduction_methods"].items():
                 dr_short_name_base = dr_params["short_name"]
-                
                 strategies_to_check = [{"dir_leaf": dr_short_name_base.replace('-', '_'), "label": "Projection" if not dr_key == "tsne" else "Co-embedding (Native)"}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
                     strategies_to_check.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "label": "Co-embedding"})
-
                 for strategy in strategies_to_check:
                     for dim_val in gs['simspace_dims_to_test']:
                         if dr_key == "tsne" and dim_val != 2: continue
                         
-                        metrics_filename = f"{target_info['id_name']}_{repr_type}_{strategy['dir_leaf']}_dim{dim_val}_ranking_metrics.csv"
-                        metrics_file_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'], metrics_filename)
+                        # --- THIS IS THE CORRECTED LOGIC FOR FILENAME ---
+                        # The directory is strategy-specific (e.g., PCA_Coembed)
+                        strat_dir_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'])
+                        # The filename inside uses the BASE dr name (e.g., PCA)
+                        base_dr_name_for_file = dr_short_name_base.replace('-', '_')
+                        metrics_filename = f"{target_info['id_name']}_{repr_type}_{base_dr_name_for_file}_dim{dim_val}_ranking_metrics.csv"
+                        metrics_file_path = os.path.join(strat_dir_path, metrics_filename)
+                        # --- END CORRECTION ---
 
                         if os.path.exists(metrics_file_path):
                             try:
                                 df_m = pd.read_csv(metrics_file_path)
                                 if not df_m.empty:
-                                    metric_row = {
-                                        'Replicate_Seed': replicate_seed, 'Target': target_info['display_name'],
-                                        'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
-                                        'Embedding_Strategy': strategy['label'], 'DIM': dim_val
-                                    }
-                                    
-                                    # --- Explicit mapping from CSV column names to final DataFrame column names ---
-                                    column_map = {
-                                        'roc_auc': 'ROC_AUC',
-                                        'pr_auc': 'PR_AUC',
-                                        'ef_1%': 'EF_1Perc',
-                                        'ef_5%': 'EF_5Perc',
-                                        'ef_10%': 'EF_10Perc',
-                                        'spearman_rho_affinity_vs_score': 'spearman_rho_affinity_vs_score'
-                                    }
-                                    
+                                    metric_row = {'Replicate_Seed': replicate_seed, 'Target': target_info['display_name'],
+                                                  'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
+                                                  'Embedding_Strategy': strategy['label'], 'DIM': dim_val}
+                                    column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc',
+                                                  'ef_5%': 'EF_5Perc', 'ef_10%': 'EF_10Perc', 
+                                                  'spearman_rho_affinity_vs_score': 'spearman_rho_affinity_vs_score'}
                                     for csv_col, df_col in column_map.items():
                                         if csv_col in df_m.columns:
                                             value = df_m[csv_col].iloc[0]
                                             metric_row[df_col] = value if pd.notna(value) else np.nan
-                                        else:
-                                            metric_row[df_col] = np.nan # Ensure column exists
-                                    
+                                        else: metric_row[df_col] = np.nan
                                     all_metrics_data.append(metric_row)
-                            except Exception as e: 
-                                logging.error(f"Error reading or processing metrics from {metrics_file_path}: {e}")
-    
-    if not all_metrics_data: 
-        logging.error("No metric data was successfully collected from any replicate runs.")
+                            except Exception as e: logging.error(f"Error reading {metrics_file_path}: {e}")
+    if not all_metrics_data: logging.error("No metric data collected from any replicates.")
     return pd.DataFrame(all_metrics_data) if all_metrics_data else pd.DataFrame()
 
 
 # --- Phase 2 & 3: Main Report Generation Logic ---
 def main_report_generation():
     parser = argparse.ArgumentParser(description="Aggregate results and generate a unified LaTeX report.")
-    parser.add_argument("--base_experiment_dir", required=True, help="Base directory containing all replicate run folders (e.g., 'experiment_workspace/').")
-    parser.add_argument("--config_path", required=True, help="Path to the original experiment_config.json file.")
-    parser.add_argument("--output_report_dir", required=True, help="Directory to save the final LaTeX report and figures subfolder.")
+    parser.add_argument("--base_experiment_dir", required=True)
+    parser.add_argument("--config_path", required=True)
+    parser.add_argument("--output_report_dir", required=True)
     args = parser.parse_args()
 
     logging.info(f"--- STARTING UNIFIED AGGREGATION AND REPORT GENERATION ---")
-
     with open(args.config_path, 'r') as f: config = json.load(f)
     gs = config['global_settings']
 
@@ -246,17 +209,13 @@ def main_report_generation():
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
     report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures")
     os.makedirs(report_figures_abs_dir, exist_ok=True)
-
     latex_content = [LATEX_DOCUMENT_PREAMBLE.replace("<<RUN_ID_PLACEHOLDER>>", escape_latex_text_content(report_run_id))]
-
     replicate_details_list = find_all_replicate_runs(args.base_experiment_dir)
     if not replicate_details_list:
         logging.error("No replicate directories found. Aborting report."); return
-
     df_agg = collect_metrics_from_replicates(replicate_details_list, config)
     if df_agg.empty:
         logging.error("Aggregated metrics DataFrame is empty. Aborting report."); return
-    
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_all_aggregated_metrics.csv"), index=False)
     
     # --- Overall Performance Summary ---
@@ -325,29 +284,20 @@ def main_report_generation():
         fig2.suptitle("Performance vs. Similarity Space Dimension", fontsize=14, y=1.0)
 
         for i, dr_method in enumerate(dr_methods_to_plot):
-            # Left column: Features
-            ax = axes2[i, 0]
-            df_subset_feat = df_agg[(df_agg['DR_Method'] == dr_method) & (df_agg['Representation'] == 'Features')]
-            if not df_subset_feat.empty:
-                for strat_label in sorted(df_subset_feat['Embedding_Strategy'].unique()):
-                    strat_metrics = df_subset_feat[df_subset_feat['Embedding_Strategy'] == strat_label]
-                    dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(['mean', 'std']).reset_index().fillna(0)
-                    ax.plot(dim_summary['DIM'], dim_summary['mean'], marker='o', linestyle='-', label=strat_label)
-                    ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'], dim_summary['mean'] + dim_summary['std'], alpha=0.2)
-            ax.set_title(f"{dr_method} (Features)"); ax.set_ylabel("Mean ROC-AUC"); ax.grid(True, linestyle=':'); ax.legend()
-
-            # Right column: Fingerprints
-            ax = axes2[i, 1]
-            df_subset_fp = df_agg[(df_agg['DR_Method'] == dr_method) & (df_agg['Representation'] == 'Fingerprints')]
-            if not df_subset_fp.empty:
-                for strat_label in sorted(df_subset_fp['Embedding_Strategy'].unique()):
-                    strat_metrics = df_subset_fp[df_subset_fp['Embedding_Strategy'] == strat_label]
-                    dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(['mean', 'std']).reset_index().fillna(0)
-                    ax.plot(dim_summary['DIM'], dim_summary['mean'], marker='o', linestyle='-', label=strat_label)
-                    ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'], dim_summary['mean'] + dim_summary['std'], alpha=0.2)
-            ax.set_title(f"{dr_method} (Fingerprints)"); ax.grid(True, linestyle=':'); ax.legend()
-
-        axes2[-1, 0].set_xlabel("SIMSPACE_DIM"); axes2[-1, 1].set_xlabel("SIMSPACE_DIM")
+            for j, repr_type in enumerate(['Features', 'Fingerprints']):
+                ax = axes2[i, j]
+                df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (df_agg['Representation'] == repr_type)]
+                if not df_subset.empty:
+                    for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
+                        strat_metrics = df_subset[df_subset['Embedding_Strategy'] == strat_label]
+                        dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(['mean', 'std']).reset_index().fillna(0)
+                        ax.plot(dim_summary['DIM'], dim_summary['mean'], marker='o', linestyle='-', label=strat_label)
+                        ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'], dim_summary['mean'] + dim_summary['std'], alpha=0.2)
+                ax.set_title(f"{dr_method} ({repr_type})"); ax.grid(True, linestyle=':'); ax.legend()
+                if i == 0: ax.set_ylim(0, 1.05)
+                if i == num_dr_methods - 1: ax.set_xlabel("SIMSPACE_DIM")
+                if j == 0: ax.set_ylabel("Mean ROC-AUC")
+        
         fig2.tight_layout(rect=[0, 0, 1, 0.98])
         fig2_path = os.path.join(report_figures_abs_dir, "fig2_perf_vs_dim.png")
         plt.savefig(fig2_path); plt.close()
@@ -398,6 +348,7 @@ def main_report_generation():
     except Exception as e:
         logging.error(f"Failed to generate Figure 3: {e}", exc_info=True); latex_content.append("Figure 3 could not be generated.\n")
 
+    
     # --- Illustrative Results for Representative Targets ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Illustrative Results for Representative Targets')}")
     representative_replicate_info = replicate_details_list[0]
@@ -425,13 +376,18 @@ def main_report_generation():
                 for strategy in strategies_to_plot:
                     strat_dir_path = os.path.join(rep_results_base, strategy['dir_leaf'])
                     if os.path.exists(strat_dir_path):
-                        plots_added_for_repr = True
-                        scatter_fname_orig = f"{target_id_name}_{repr_type}_{strategy['dir_leaf']}_dim2_scatter.png"
-                        hist_fname_orig = f"{target_id_name}_{repr_type}_{strategy['dir_leaf']}_dim2_min_distances_hist_ACTIVES.png"
+                        # --- CORRECTED FILENAME LOGIC FOR PLOTS ---
+                        # The filename inside uses the BASE dr name (e.g., PCA) even if directory is PCA_Coembed
+                        base_dr_name_for_plot_file = dr_params["short_name"].replace('-', '_')
+                        scatter_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_scatter.png"
+                        hist_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_min_distances_hist_ACTIVES.png"
+                        # --- END CORRECTION ---
+                        
                         scatter_src = os.path.join(strat_dir_path, scatter_fname_orig)
                         hist_src = os.path.join(strat_dir_path, hist_fname_orig)
 
                         if os.path.exists(scatter_src) or os.path.exists(hist_src):
+                            plots_added_for_repr = True
                             latex_content.append(get_section_header_latex_standalone(4, f"DR Method: {strategy['title']}"))
                             if os.path.exists(scatter_src):
                                 clean_fname_s = f"{clean_for_label(target_id_name)}-{repr_type}-{clean_for_label(strategy['title'])}-scatter.png"
