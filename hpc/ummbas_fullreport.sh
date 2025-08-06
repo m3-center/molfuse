@@ -17,7 +17,7 @@ JOB_NAME="UMMBAS_Aggregated_Report"
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 
 SCRIPT_DIR=$(pwd) # Or specify absolute path to your project root
-EXPERIMENT_DIR="${SCRIPT_DIR}/experiment_workspace"
+EXPERIMENT_DIR="${SCRIPT_DIR}/experiment_workspace/"
 REPORT_SCRIPT="${SCRIPT_DIR}/aggregate_and_report.py"
 CONFIG_FILE="${SCRIPT_DIR}/experiment_config.json"
 
@@ -26,7 +26,7 @@ echo "Starting aggregate_and_report.py..."
 python "${REPORT_SCRIPT}" \
     --base_experiment_dir "${EXPERIMENT_DIR}" \
     --config_path "${CONFIG_FILE}" \
-    --output_report_dir "${EXPERIMENT_DIR}/final_report"
+    --output_report_dir "${SCRIPT_DIR}/final_report"
 
 EXIT_CODE=$?
 echo "------------------------------------------------------------------------"
