@@ -88,8 +88,7 @@ def get_section_header_latex_standalone(level, title_text):
     return f"\n{sec_cmd}{{{escape_latex_text_content(title_text)}}}\n"
 
 
-# Adjusted default width
-def add_figure_to_latex_standalone(latex_content_list, relative_fig_path_in_tex, caption_text, label_text, placement="[H]", figure_width="0.8\\textwidth"):
+def add_figure_to_latex_standalone(latex_content_list, relative_fig_path_in_tex, caption_text, label_text, placement="[H]", figure_width="0.9\\textwidth"):
     clean_label = clean_for_label(label_text)
     figure_path_for_latex = relative_fig_path_in_tex.replace(os.sep, '/')
     latex_content_list.extend([f"\\begin{{figure}}{placement}", r"  \centering",
@@ -146,12 +145,12 @@ logging.basicConfig(
 # --- Phase 1: Data Aggregation ---
 
 
-def find_replicate_runs(base_experiment_dir, expected_repr_mode_filter):
+def find_all_replicate_runs(base_experiment_dir):
     replicate_dirs = []
     pattern = os.path.join(base_experiment_dir,
-                           f"run_seed*repr{expected_repr_mode_filter}_*")
+                           f"run_seed*_*")  # General pattern
     logging.info(
-        f"Scanning for replicate run directories with pattern: {pattern}")
+        f"Scanning for all replicate run directories with pattern: {pattern}")
 
     for dir_path in glob.glob(pattern):
         if os.path.isdir(dir_path):
@@ -165,10 +164,11 @@ def find_replicate_runs(base_experiment_dir, expected_repr_mode_filter):
                     elif part == "repr" and i + 1 < len(parts):
                         repr_val = parts[i+1]
 
-                if seed_val is not None and repr_val == expected_repr_mode_filter:
-                    replicate_dirs.append({"path": dir_path, "seed": seed_val})
+                if seed_val is not None and repr_val is not None and repr_val in ["features", "fingerprints"]:
+                    replicate_dirs.append(
+                        {"path": dir_path, "seed": seed_val, "repr_mode": repr_val})
                     logging.info(
-                        f"Found valid replicate run: {dir_path} (Seed: {seed_val})")
+                        f"Found valid replicate run: {dir_path} (Seed: {seed_val}, Repr: {repr_val})")
                 else:
                     logging.debug(
                         f"Skipping directory (mismatch/parse error): {dir_path}")
@@ -178,16 +178,17 @@ def find_replicate_runs(base_experiment_dir, expected_repr_mode_filter):
 
     if not replicate_dirs:
         logging.warning(
-            f"No replicate run directories found for '{expected_repr_mode_filter}' in '{base_experiment_dir}'")
-    return sorted(replicate_dirs, key=lambda x: x["seed"])
+            f"No valid replicate run directories found in '{base_experiment_dir}'")
+    return sorted(replicate_dirs, key=lambda x: (x["seed"], x["repr_mode"]))
 
 
-def collect_metrics_from_replicates(replicate_run_details, config_main, report_for_repr):
+def collect_metrics_from_replicates(replicate_run_details, config_main):
     all_metrics_data = []
     gs = config_main['global_settings']
 
     for rep_info in replicate_run_details:
-        rep_dir_path, replicate_seed = rep_info["path"], rep_info["seed"]
+        rep_dir_path, replicate_seed, repr_type = rep_info[
+            "path"], rep_info["seed"], rep_info["repr_mode"]
         logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
 
         for target_info in config_main['targets']:
@@ -197,7 +198,7 @@ def collect_metrics_from_replicates(replicate_run_details, config_main, report_f
                 continue
 
             target_results_base = os.path.join(
-                rep_dir_path, target_info['id_name'], "results")
+                rep_dir_path, target_info['id_name'], "results", repr_type)
             if not os.path.exists(target_results_base):
                 continue
 
@@ -215,9 +216,9 @@ def collect_metrics_from_replicates(replicate_run_details, config_main, report_f
                         if dr_key == "tsne" and dim_val != 2:
                             continue
 
-                        metrics_filename = f"{target_info['id_name']}_{report_for_repr}_{strategy['dir_leaf']}_dim{dim_val}_ranking_metrics.csv"
+                        metrics_filename = f"{target_info['id_name']}_{repr_type}_{strategy['dir_leaf']}_dim{dim_val}_ranking_metrics.csv"
                         metrics_file_path = os.path.join(
-                            target_results_base, report_for_repr, f"dim_{dim_val}", strategy['dir_leaf'], metrics_filename)
+                            target_results_base, f"dim_{dim_val}", strategy['dir_leaf'], metrics_filename)
 
                         if os.path.exists(metrics_file_path):
                             try:
@@ -225,7 +226,7 @@ def collect_metrics_from_replicates(replicate_run_details, config_main, report_f
                                 if not df_m.empty:
                                     metric_row = {
                                         'Replicate_Seed': replicate_seed, 'Target': target_info['display_name'],
-                                        'Representation': report_for_repr.capitalize(), 'DR_Method': dr_short_name_base,
+                                        'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
                                         'Embedding_Strategy': strategy['label'], 'DIM': dim_val
                                     }
                                     for col in df_m.columns:
@@ -244,22 +245,22 @@ def collect_metrics_from_replicates(replicate_run_details, config_main, report_f
 # --- Phase 2 & 3: Main Report Generation Logic ---
 def main_report_generation():
     parser = argparse.ArgumentParser(
-        description="Aggregate results and generate final LaTeX report.")
-    parser.add_argument("--base_experiment_dir", required=True)
-    parser.add_argument("--config_path", required=True)
-    parser.add_argument("--output_report_dir", required=True)
-    parser.add_argument("--report_for_representation",
-                        required=True, choices=["features", "fingerprints"])
+        description="Aggregate results from all replicate runs and generate a single, unified LaTeX report.")
+    parser.add_argument("--base_experiment_dir", required=True,
+                        help="Base directory containing all replicate run folders (e.g., 'experiment_workspace/').")
+    parser.add_argument("--config_path", required=True,
+                        help="Path to the original experiment_config.json file.")
+    parser.add_argument("--output_report_dir", required=True,
+                        help="Directory to save the final LaTeX report and figures subfolder.")
     args = parser.parse_args()
 
-    logging.info(
-        f"--- STARTING AGGREGATION AND REPORT GENERATION for Repr: {args.report_for_representation} ---")
+    logging.info(f"--- STARTING UNIFIED AGGREGATION AND REPORT GENERATION ---")
 
     with open(args.config_path, 'r') as f:
         config = json.load(f)
     gs = config['global_settings']
 
-    report_run_id = f"aggregated_report_repr_{args.report_for_representation}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    report_run_id = f"unified_aggregated_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
     report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures")
     os.makedirs(report_figures_abs_dir, exist_ok=True)
@@ -267,14 +268,13 @@ def main_report_generation():
     latex_content = [LATEX_DOCUMENT_PREAMBLE.replace(
         "<<RUN_ID_PLACEHOLDER>>", escape_latex_text_content(report_run_id))]
 
-    replicate_details_list = find_replicate_runs(
-        args.base_experiment_dir, args.report_for_representation)
+    replicate_details_list = find_all_replicate_runs(args.base_experiment_dir)
     if not replicate_details_list:
-        logging.error("No replicate directories found. Aborting report.")
+        logging.error(
+            "No replicate directories found. Cannot generate report.")
         return
 
-    df_agg = collect_metrics_from_replicates(
-        replicate_details_list, config, args.report_for_representation)
+    df_agg = collect_metrics_from_replicates(replicate_details_list, config)
     if df_agg.empty:
         logging.error(
             "Aggregated metrics DataFrame is empty. Aborting report.")
@@ -303,7 +303,7 @@ def main_report_generation():
                 df_fig1_pivot[col] = 0
         df_fig1_pivot.fillna(0, inplace=True)
         df_fig1_pivot['Plot_Label'] = df_fig1_pivot['DR_Method'] + \
-            " (" + df_fig1_pivot['Representation'] + ")"
+            "\n(" + df_fig1_pivot['Representation'] + ")"
         df_fig1_pivot.sort_values(
             by=['DR_Method', 'Representation'], inplace=True)
 
@@ -374,62 +374,58 @@ def main_report_generation():
         dr_methods_to_plot = sorted(df_agg['DR_Method'].unique())
         num_dr_methods = len(dr_methods_to_plot)
         fig2, axes2 = plt.subplots(num_dr_methods, 2, figsize=(
-            12, 4 * num_dr_methods), sharex=True, sharey=True)
-        if num_dr_methods == 1:
-            axes2 = np.array([axes2])  # Ensure axes2 is always 2D array
-        fig2.suptitle(
-            f"Performance vs. Dimension ({args.report_for_representation.capitalize()})", fontsize=14, y=1.0)
+            14, 4 * num_dr_methods), sharex=True, sharey=True, squeeze=False)
+        fig2.suptitle("Performance vs. Similarity Space Dimension",
+                      fontsize=14, y=1.0)
 
         for i, dr_method in enumerate(dr_methods_to_plot):
-            # Left column: Features (only if mode is features)
-            if args.report_for_representation == 'features':
-                ax = axes2[i, 0]
-                df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (
-                    df_agg['Representation'] == 'Features')]
-                if not df_subset.empty:
-                    for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
-                        strat_metrics = df_subset[df_subset['Embedding_Strategy']
-                                                  == strat_label]
-                        dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(
-                            ['mean', 'std']).reset_index().fillna(0)
-                        ax.plot(dim_summary['DIM'], dim_summary['mean'],
-                                marker='o', linestyle='-', label=strat_label)
-                        ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'],
-                                        dim_summary['mean'] + dim_summary['std'], alpha=0.2)
-                ax.set_title(f"{dr_method} (Features)")
-                ax.set_ylabel("Mean ROC-AUC")
-                ax.grid(True, linestyle=':')
-                ax.legend()
+            # Left column: Features
+            ax = axes2[i, 0]
+            df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (
+                df_agg['Representation'] == 'Features')]
+            if not df_subset.empty:
+                for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
+                    strat_metrics = df_subset[df_subset['Embedding_Strategy']
+                                              == strat_label]
+                    dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(
+                        ['mean', 'std']).reset_index().fillna(0)
+                    ax.plot(dim_summary['DIM'], dim_summary['mean'],
+                            marker='o', linestyle='-', label=strat_label)
+                    ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'],
+                                    dim_summary['mean'] + dim_summary['std'], alpha=0.2)
+            ax.set_title(f"{dr_method} (Features)")
+            ax.set_ylabel("Mean ROC-AUC")
+            ax.grid(True, linestyle=':')
+            ax.legend()
 
-            # Right column: Fingerprints (only if mode is fingerprints)
-            if args.report_for_representation == 'fingerprints':
-                ax = axes2[i, 1]
-                df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (
-                    df_agg['Representation'] == 'Fingerprints')]
-                if not df_subset.empty:
-                    for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
-                        strat_metrics = df_subset[df_subset['Embedding_Strategy']
-                                                  == strat_label]
-                        dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(
-                            ['mean', 'std']).reset_index().fillna(0)
-                        ax.plot(dim_summary['DIM'], dim_summary['mean'],
-                                marker='o', linestyle='-', label=strat_label)
-                        ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'],
-                                        dim_summary['mean'] + dim_summary['std'], alpha=0.2)
-                ax.set_title(f"{dr_method} (Fingerprints)")
-                ax.grid(True, linestyle=':')
-                ax.legend()
+            # Right column: Fingerprints
+            ax = axes2[i, 1]
+            df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (
+                df_agg['Representation'] == 'Fingerprints')]
+            if not df_subset.empty:
+                for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
+                    strat_metrics = df_subset[df_subset['Embedding_Strategy']
+                                              == strat_label]
+                    dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(
+                        ['mean', 'std']).reset_index().fillna(0)
+                    ax.plot(dim_summary['DIM'], dim_summary['mean'],
+                            marker='o', linestyle='-', label=strat_label)
+                    ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'],
+                                    dim_summary['mean'] + dim_summary['std'], alpha=0.2)
+            ax.set_title(f"{dr_method} (Fingerprints)")
+            ax.grid(True, linestyle=':')
+            ax.legend()
 
         axes2[-1, 0].set_xlabel("SIMSPACE_DIM")
         axes2[-1, 1].set_xlabel("SIMSPACE_DIM")
         fig2.tight_layout(rect=[0, 0, 1, 0.98])
         fig2_path = os.path.join(
-            report_figures_abs_dir, f"fig2_perf_vs_dim_{args.report_for_representation}.png")
+            report_figures_abs_dir, "fig2_perf_vs_dim.png")
         plt.savefig(fig2_path)
         plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", f"fig2_perf_vs_dim_{args.report_for_representation}.png"),
-                                       f"Mean ROC-AUC vs. Dimension for {args.report_for_representation.capitalize()}. Shaded areas represent $\\pm$1 SD across replicates and targets.",
-                                       f"fig-perf-vs-dim-{args.report_for_representation}")
+        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig2_perf_vs_dim.png"),
+                                       "Mean ROC-AUC vs. Dimension, stratified by Representation and DR Method. Shaded areas represent $\\pm$1 SD across replicates and targets.",
+                                       "fig-perf-vs-dim", figure_width="\\textwidth")
     except Exception as e:
         logging.error(f"Failed to generate Figure 2: {e}", exc_info=True)
         latex_content.append("Figure 2 could not be generated.\n")
@@ -455,7 +451,7 @@ def main_report_generation():
             columns={'DIM': 'Optimal_Dimension'}, inplace=True)
         add_dataframe_as_latex_table_standalone(latex_content, df_best_per_target_display,
                                                 "Best performing configuration for each target, based on highest mean ROC-AUC across replicates.",
-                                                "tab-best-per-target", font_size=r"\tiny")
+                                                "tab-best-per-target", font_size=r"\\tiny")
     except Exception as e:
         logging.error(f"Failed to generate Table 2: {e}", exc_info=True)
         latex_content.append("Table 2 could not be generated.\n")
@@ -470,20 +466,20 @@ def main_report_generation():
             columns=['DR_Method', 'Embedding_Strategy'],
             values='ROC_AUC'
         )
-        plt.figure(figsize=(14, 8))
+        plt.figure(figsize=(16, 10))
         sns.heatmap(heatmap_pivot, annot=True, fmt=".3f",
                     cmap="viridis", linewidths=.5, annot_kws={"size": 8})
         plt.title(
-            f"Heatmap of Best Mean ROC-AUC by Target and Method ({args.report_for_representation.capitalize()})")
+            "Heatmap of Best Mean ROC-AUC by Target, Representation, and Method")
         plt.xticks(rotation=45, ha="right")
+        plt.yticks(rotation=0)
         plt.tight_layout()
-        fig3_path = os.path.join(
-            report_figures_abs_dir, f"fig3_heatmap_{args.report_for_representation}.png")
+        fig3_path = os.path.join(report_figures_abs_dir, "fig3_heatmap.png")
         plt.savefig(fig3_path)
         plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", f"fig3_heatmap_{args.report_for_representation}.png"),
+        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig3_heatmap.png"),
                                        "Heatmap of mean ROC-AUC performance. Each cell shows the highest mean ROC-AUC achieved for that configuration, maximized over all tested dimensions.",
-                                       f"fig-heatmap-{args.report_for_representation}", figure_width="\\textwidth")
+                                       "fig-heatmap", figure_width="\\textwidth")
     except Exception as e:
         logging.error(f"Failed to generate Figure 3: {e}", exc_info=True)
         latex_content.append("Figure 3 could not be generated.\n")
@@ -498,57 +494,63 @@ def main_report_generation():
     for target_info in config['targets']:
         if target_info.get("processing_mode", "full_analysis") == "similarity_space_only":
             continue
-        target_id_name = target_info['id_name']
-        target_display_name = target_info['display_name']
+        target_id_name, target_display_name = target_info['id_name'], target_info['display_name']
         latex_content.append(
             f"\\clearpage\n{get_section_header_latex_standalone(2, f'Target: {target_display_name}')}")
 
-        rep_results_base = os.path.join(
-            representative_replicate_info['path'], target_id_name, "results", args.report_for_representation, "dim_2")
-        if not os.path.exists(rep_results_base):
-            latex_content.append(
-                "No 2D results found in representative replicate for this target.\n")
-            continue
+        for repr_type in ["features", "fingerprints"]:
+            latex_content.append(get_section_header_latex_standalone(
+                3, f"Representation: {repr_type.capitalize()}"))
+            rep_results_base = os.path.join(
+                representative_replicate_info['path'], target_id_name, "results", repr_type, "dim_2")
+            if not os.path.exists(rep_results_base):
+                latex_content.append(
+                    f"No 2D results found in representative replicate for this target/representation.\n")
+                continue
 
-        for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-            if dr_key == 'tsne':  # tSNE only runs for dim 2
-                strategies = [{"dir_leaf": dr_params["short_name"].replace(
+            plots_added_for_repr = False
+            for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
+                if dr_key != 'tsne' and '2' not in gs.get('simspace_dims_to_test', []):
+                    continue
+
+                strategies_to_plot = [{"dir_leaf": dr_params["short_name"].replace(
                     '-', '_'), "title": dr_params["short_name"]}]
-            else:
-                strategies = [{"dir_leaf": dr_params["short_name"].replace(
-                    '-', '_'), "title": dr_params["short_name"]}]
-                if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding"):
-                    strategies.append({"dir_leaf": f"{dr_params['short_name']}-Coembed".replace(
+                if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
+                    strategies_to_plot.append({"dir_leaf": f"{dr_params['short_name']}-Coembed".replace(
                         '-', '_'), "title": f"{dr_params['short_name']}-Coembed"})
 
-            for strategy in strategies:
-                strat_dir_path = os.path.join(
-                    rep_results_base, strategy['dir_leaf'])
-                if os.path.exists(strat_dir_path):
-                    latex_content.append(get_section_header_latex_standalone(
-                        3, f"DR Method: {strategy['title']}"))
+                for strategy in strategies_to_plot:
+                    strat_dir_path = os.path.join(
+                        rep_results_base, strategy['dir_leaf'])
+                    if os.path.exists(strat_dir_path):
+                        plots_added_for_repr = True
+                        scatter_fname_orig = f"{target_id_name}_{repr_type}_{strategy['dir_leaf']}_dim2_scatter.png"
+                        hist_fname_orig = f"{target_id_name}_{repr_type}_{strategy['dir_leaf']}_dim2_min_distances_hist_ACTIVES.png"
+                        scatter_src = os.path.join(
+                            strat_dir_path, scatter_fname_orig)
+                        hist_src = os.path.join(
+                            strat_dir_path, hist_fname_orig)
 
-                    scatter_fname_orig = f"{target_id_name}_{args.report_for_representation}_{strategy['dir_leaf']}_dim2_scatter.png"
-                    hist_fname_orig = f"{target_id_name}_{args.report_for_representation}_{strategy['dir_leaf']}_dim2_min_distances_hist_ACTIVES.png"
-
-                    scatter_src = os.path.join(
-                        strat_dir_path, scatter_fname_orig)
-                    hist_src = os.path.join(strat_dir_path, hist_fname_orig)
-
-                    if os.path.exists(scatter_src):
-                        clean_fname_s = f"{clean_for_label(target_id_name)}-{clean_for_label(strategy['title'])}-scatter.png"
-                        shutil.copy(scatter_src, os.path.join(
-                            report_figures_abs_dir, clean_fname_s))
-                        add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_s),
-                                                       f"2D Similarity Space for {target_display_name} ({strategy['title']}).",
-                                                       f"fig-scatter-{target_id_name}-{strategy['title']}")
-                    if os.path.exists(hist_src):
-                        clean_fname_h = f"{clean_for_label(target_id_name)}-{clean_for_label(strategy['title'])}-hist.png"
-                        shutil.copy(hist_src, os.path.join(
-                            report_figures_abs_dir, clean_fname_h))
-                        add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_h),
-                                                       f"Histogram of min. distances for Actives of {target_display_name} ({strategy['title']}).",
-                                                       f"fig-hist-{target_id_name}-{strategy['title']}", figure_width="0.6\\textwidth")
+                        if os.path.exists(scatter_src) or os.path.exists(hist_src):
+                            latex_content.append(get_section_header_latex_standalone(
+                                4, f"DR Method: {strategy['title']}"))
+                            if os.path.exists(scatter_src):
+                                clean_fname_s = f"{clean_for_label(target_id_name)}-{repr_type}-{clean_for_label(strategy['title'])}-scatter.png"
+                                shutil.copy(scatter_src, os.path.join(
+                                    report_figures_abs_dir, clean_fname_s))
+                                add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_s),
+                                                               f"2D Similarity Space for {target_display_name} ({strategy['title']}).",
+                                                               f"fig-scatter-{target_id_name}-{repr_type}-{strategy['title']}")
+                            if os.path.exists(hist_src):
+                                clean_fname_h = f"{clean_for_label(target_id_name)}-{repr_type}-{clean_for_label(strategy['title'])}-hist.png"
+                                shutil.copy(hist_src, os.path.join(
+                                    report_figures_abs_dir, clean_fname_h))
+                                add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_h),
+                                                               f"Histogram of min. distances for Actives of {target_display_name} ({strategy['title']}).",
+                                                               f"fig-hist-{target_id_name}-{repr_type}-{strategy['title']}", figure_width="0.6\\textwidth")
+            if not plots_added_for_repr:
+                latex_content.append(
+                    "No 2D plots found for this representation in the representative replicate.\n")
 
     # --- Similarity Space Only Targets ---
     latex_content.append(
@@ -568,7 +570,8 @@ def main_report_generation():
 
     latex_content.append(LATEX_DOCUMENT_END)
 
-    report_tex_filename = f"aggregated_report_repr_{args.report_for_representation}.tex"
+    # Save and compile LaTeX
+    report_tex_filename = f"aggregated_unified_report.tex"
     report_tex_path = os.path.join(report_output_abs_dir, report_tex_filename)
     with open(report_tex_path, "w", encoding='utf-8') as f:
         f.write("\n".join(latex_content))
