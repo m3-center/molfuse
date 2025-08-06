@@ -14,7 +14,7 @@ import subprocess
 import re
 from datetime import datetime
 
-# --- LaTeX Preamble and Helper Functions ---
+# --- LaTeX Preamble and Helper Functions (Assumed to be complete and correct from previous versions) ---
 LATEX_DOCUMENT_PREAMBLE = r"""
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
@@ -48,7 +48,7 @@ LATEX_DOCUMENT_PREAMBLE = r"""
 \title{UMMBAS Molecular Similarity Experimental Evaluation Report (Aggregated Results)\\ \large \textit{Report Generated: \texttt{<<RUN_ID_PLACEHOLDER>>}}}
 \author{UMMBAS Project Team} \date{\today}
 \begin{document} \maketitle \begin{abstract}
-This report presents aggregated results from multiple replicate experiments designed to evaluate the predictive capacity of molecular similarity spaces using a leave-one-target-out methodology. This study compares two molecular representations (physicochemical features and ECFP4 fingerprints), multiple dimensionality reduction (DR) techniques (PCA, UMAP, t-SNE), and two main embedding strategies (Projection vs. Co-embedding for PCA/UMAP). Performance is assessed based on the ability to rank known "held-out" active ligands for a specific target against a large set of decoy compounds. Key evaluation metrics include the Area Under the Receiver Operating Characteristic Curve (ROC-AUC), Precision-Recall Curve (PR-AUC), and Spearman's Rank Correlation ($\rho$) with experimental affinity. Results are presented as means and standard deviations over replicates to provide a statistically robust comparison of the different approaches and to investigate the interplay between molecular representation, DR method, embedding strategy, and target protein.
+This report presents aggregated results from multiple replicate experiments designed to evaluate the predictive capacity of molecular similarity spaces using a leave-one-target-out methodology. This study compares two molecular representations (physicochemical features and ECFP4 fingerprints), multiple dimensionality reduction (DR) techniques (PCA, UMAP, t-SNE), and two main embedding strategies (Projection vs. Co-embedding for PCA/UMAP). Performance is assessed based on the ability to rank known "held-out" active ligands for a specific target against a large set of decoy compounds. Key evaluation metrics include the Area Under the Receiver Operating Characteristic Curve (ROC-AUC), Precision-Recall Curve (PR-AUC), Enrichment Factors (EF), and Spearman's Rank Correlation ($\rho$) with experimental affinity. Results are presented as means and standard deviations over replicates to provide a statistically robust comparison of the different approaches and to investigate the interplay between molecular representation, DR method, embedding strategy, and target protein.
 \end{abstract} \clearpage \tableofcontents \clearpage \listoffigures \clearpage \listoftables \clearpage
 \section{Introduction}
 \textit{Placeholder for Introduction text...}
@@ -95,7 +95,9 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
                                    f"  \\label{{tab:{clean_label}}}"])
         df_for_latex = dataframe.copy()
         for col in df_for_latex.columns:
-            if pd.api.types.is_numeric_dtype(df_for_latex[col]):
+            if isinstance(df_for_latex[col].iloc[0], str) and '$\\pm$' in df_for_latex[col].iloc[0]: # Check if it's already a mean ± std string
+                df_for_latex[col] = df_for_latex[col].apply(escape_latex_text_content) # Still escape parts of it
+            elif pd.api.types.is_numeric_dtype(df_for_latex[col]):
                 df_for_latex[col] = df_for_latex[col].apply(
                     lambda x: f"{x:.3f}" if pd.notna(x) and isinstance(x, (float, np.floating)) and ( (abs(x) >= 0.001 and abs(x) < 1000) or x==0) else 
                               (f"{x:.2e}" if pd.notna(x) and isinstance(x, (float, np.floating)) else 
@@ -106,34 +108,19 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
         df_for_latex.columns = [escape_latex_text_content(str(c).replace('_', ' ').title()) for c in dataframe.columns]
         
         if col_format is None:
-            # A more booktabs-friendly column format (no vertical lines)
-            formats = ['l'] * len(df_for_latex.columns)
-            for i, col_name_orig in enumerate(dataframe.columns):
-                if pd.api.types.is_numeric_dtype(dataframe[col_name_orig]):
-                    formats[i] = 'r'
-            col_format = "".join(formats) # e.g., 'lrr'
+            col_format = 'l' * len(df_for_latex.columns)
 
-        # --- THIS IS THE FIX ---
-        # The 'booktabs=True' keyword argument has been removed to support older Pandas versions.
-        # The default LaTeX output is already booktabs-friendly.
         latex_table_string = df_for_latex.to_latex(index=False, escape=False, column_format=col_format,
-                                                   longtable=len(dataframe)>20, na_rep="N/A")
-        # --- END OF FIX ---
-                                                   
+                                                   longtable=len(dataframe)>20, na_rep="N/A", booktabs=True)
         latex_content_list.append(latex_table_string)
         latex_content_list.extend([r"\end{table}", "\n"])
-    else: 
-        latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
+    else: latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
 # --- End LaTeX Helpers ---
 
 agg_log_file_name = f"aggregation_report_generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s',
-    handlers=[ logging.FileHandler(agg_log_file_name, mode='w'), logging.StreamHandler() ]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s',
+                    handlers=[ logging.FileHandler(agg_log_file_name, mode='w'), logging.StreamHandler() ])
 
-# --- Phase 1: Data Aggregation ---
 def find_all_replicate_runs(base_experiment_dir):
     replicate_dirs = []
     pattern = os.path.join(base_experiment_dir, "run_seed*_repr*_*_*")
@@ -145,13 +132,11 @@ def find_all_replicate_runs(base_experiment_dir):
             match = dir_pattern_re.match(basename)
             if match:
                 try:
-                    seed_val = int(match.group(1)); repr_val = match.group(2)
+                    seed_val, repr_val = int(match.group(1)), match.group(2)
                     replicate_dirs.append({"path": dir_path, "seed": seed_val, "repr_mode": repr_val})
                     logging.info(f"Found valid replicate run: {dir_path} (Seed: {seed_val}, Repr: {repr_val})")
-                except (ValueError, IndexError) as e:
-                    logging.warning(f"Could not parse details from directory name {basename}: {e}")
-            else:
-                logging.debug(f"Directory matched glob but not regex, skipping: {basename}")
+                except (ValueError, IndexError) as e: logging.warning(f"Could not parse details from {basename}: {e}")
+            else: logging.debug(f"Directory matched glob but not regex, skipping: {basename}")
     if not replicate_dirs: logging.warning(f"No valid replicate run directories found in '{base_experiment_dir}'")
     return sorted(replicate_dirs, key=lambda x: (x["seed"], x["repr_mode"]))
 
@@ -173,16 +158,9 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                 for strategy in strategies_to_check:
                     for dim_val in gs['simspace_dims_to_test']:
                         if dr_key == "tsne" and dim_val != 2: continue
-                        
-                        # --- THIS IS THE CORRECTED LOGIC FOR FILENAME ---
-                        # The directory is strategy-specific (e.g., PCA_Coembed)
-                        strat_dir_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'])
-                        # The filename inside uses the BASE dr name (e.g., PCA)
                         base_dr_name_for_file = dr_short_name_base.replace('-', '_')
                         metrics_filename = f"{target_info['id_name']}_{repr_type}_{base_dr_name_for_file}_dim{dim_val}_ranking_metrics.csv"
-                        metrics_file_path = os.path.join(strat_dir_path, metrics_filename)
-                        # --- END CORRECTION ---
-
+                        metrics_file_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'], metrics_filename)
                         if os.path.exists(metrics_file_path):
                             try:
                                 df_m = pd.read_csv(metrics_file_path)
@@ -195,20 +173,16 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                                   'spearman_rho_affinity_vs_score': 'spearman_rho_affinity_vs_score'}
                                     for csv_col, df_col in column_map.items():
                                         if csv_col in df_m.columns:
-                                            value = df_m[csv_col].iloc[0]
-                                            metric_row[df_col] = value if pd.notna(value) else np.nan
+                                            metric_row[df_col] = df_m[csv_col].iloc[0] if pd.notna(df_m[csv_col].iloc[0]) else np.nan
                                         else: metric_row[df_col] = np.nan
                                     all_metrics_data.append(metric_row)
                             except Exception as e: logging.error(f"Error reading {metrics_file_path}: {e}")
-    if not all_metrics_data: logging.error("No metric data collected from any replicates.")
+    if not all_metrics_data: logging.error("No metric data collected.")
     return pd.DataFrame(all_metrics_data) if all_metrics_data else pd.DataFrame()
 
-
-# --- Phase 2 & 3: Main Report Generation Logic ---
 def main_report_generation():
     parser = argparse.ArgumentParser(description="Aggregate results and generate a unified LaTeX report.")
-    parser.add_argument("--base_experiment_dir", required=True)
-    parser.add_argument("--config_path", required=True)
+    parser.add_argument("--base_experiment_dir", required=True); parser.add_argument("--config_path", required=True)
     parser.add_argument("--output_report_dir", required=True)
     args = parser.parse_args()
 
@@ -218,85 +192,105 @@ def main_report_generation():
 
     report_run_id = f"unified_aggregated_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
-    report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures")
-    os.makedirs(report_figures_abs_dir, exist_ok=True)
+    report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures"); os.makedirs(report_figures_abs_dir, exist_ok=True)
+
     latex_content = [LATEX_DOCUMENT_PREAMBLE.replace("<<RUN_ID_PLACEHOLDER>>", escape_latex_text_content(report_run_id))]
     replicate_details_list = find_all_replicate_runs(args.base_experiment_dir)
-    if not replicate_details_list:
-        logging.error("No replicate directories found. Aborting report."); return
+    if not replicate_details_list: logging.error("No replicate directories found. Aborting."); return
     df_agg = collect_metrics_from_replicates(replicate_details_list, config)
-    if df_agg.empty:
-        logging.error("Aggregated metrics DataFrame is empty. Aborting report."); return
+    if df_agg.empty: logging.error("Aggregated metrics DataFrame is empty. Aborting."); return
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_all_aggregated_metrics.csv"), index=False)
     
     # --- Overall Performance Summary ---
     latex_content.append(get_section_header_latex_standalone(1, 'Overall Comparative Summary of Ranking Performance'))
     
-    # Figure 1: Main Comparison Bar Chart
-    logging.info("Generating Figure 1: Main Comparison of Methods by Mean ROC-AUC...")
-    try:
-        df_fig1_data = df_agg.groupby(['Representation', 'DR_Method', 'Embedding_Strategy'])['ROC_AUC'].agg(['mean', 'std']).reset_index()
-        df_fig1_pivot = df_fig1_data.pivot_table(index=['Representation', 'DR_Method'], columns='Embedding_Strategy', values=['mean', 'std'])
-        df_fig1_pivot.columns = ['_'.join(col).strip() for col in df_fig1_pivot.columns.values]
-        df_fig1_pivot.reset_index(inplace=True)
-        for col in ['mean_Projection', 'std_Projection', 'mean_Co-embedding', 'std_Co-embedding', 'mean_Co-embedding (Native)', 'std_Co-embedding (Native)']:
-            if col not in df_fig1_pivot.columns: df_fig1_pivot[col] = 0
-        df_fig1_pivot.fillna(0, inplace=True)
-        df_fig1_pivot['Plot_Label'] = df_fig1_pivot['DR_Method'] + "\n(" + df_fig1_pivot['Representation'] + ")"
-        df_fig1_pivot.sort_values(by=['DR_Method', 'Representation'], inplace=True)
-        
-        plt.figure(figsize=(16, 8)); index = np.arange(len(df_fig1_pivot)); bar_width = 0.25
-        plt.bar(index - bar_width, df_fig1_pivot['mean_Projection'], bar_width, yerr=df_fig1_pivot['std_Projection'], label='Projection', color='deepskyblue', capsize=4)
-        plt.bar(index, df_fig1_pivot['mean_Co-embedding'], bar_width, yerr=df_fig1_pivot['std_Co-embedding'], label='Co-embedding', color='salmon', capsize=4)
-        plt.bar(index + bar_width, df_fig1_pivot['mean_Co-embedding (Native)'], bar_width, yerr=df_fig1_pivot['std_Co-embedding (Native)'], label='Co-embedding (tSNE Native)', color='mediumseagreen', capsize=4)
-        plt.xlabel("DR Method (Representation)"); plt.ylabel("Mean ROC-AUC (across Replicates, Targets, DIMs)")
-        plt.title("Overall Comparison of Methods and Strategies by Mean ROC-AUC")
-        plt.xticks(index, df_fig1_pivot['Plot_Label'], rotation=45, ha="right"); plt.ylim(bottom=0)
-        plt.legend(title="Embedding Strategy"); plt.grid(True, linestyle='--', axis='y'); plt.tight_layout()
-        
-        fig1_path = os.path.join(report_figures_abs_dir, "fig1_overall_comparison.png")
-        plt.savefig(fig1_path); plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig1_overall_comparison.png"),
-                                     "Overall comparison of methods. Bars show mean ROC-AUC averaged over all targets, dimensions, and replicates. Error bars represent standard deviation.",
-                                     "fig-overall-comparison")
-    except Exception as e:
-        logging.error(f"Failed to generate Figure 1: {e}", exc_info=True); latex_content.append("Figure 1 could not be generated.\n")
+    # Generic function for creating comparison bar charts
+    def create_comparison_barchart(df, metric, y_label, title, filename, latex_content_list, report_figures_dir):
+        logging.info(f"Generating Comparison Chart: {title}...")
+        try:
+            df_chart_data = df.groupby(['Representation', 'DR_Method', 'Embedding_Strategy'])[metric].agg(['mean', 'std']).reset_index()
+            df_pivot = df_chart_data.pivot_table(index=['Representation', 'DR_Method'], columns='Embedding_Strategy', values=['mean', 'std'])
+            df_pivot.columns = ['_'.join(col).strip() for col in df_pivot.columns.values]
+            df_pivot.reset_index(inplace=True)
+            for col in [f'mean_{s}' for s in df_chart_data['Embedding_Strategy'].unique()] + [f'std_{s}' for s in df_chart_data['Embedding_Strategy'].unique()]:
+                if col not in df_pivot.columns: df_pivot[col] = 0
+            df_pivot.fillna(0, inplace=True)
+            df_pivot['Plot_Label'] = df_pivot['DR_Method'] + "\n(" + df_pivot['Representation'] + ")"
+            df_pivot.sort_values(by=['DR_Method', 'Representation'], inplace=True)
+            
+            plt.figure(figsize=(16, 8)); index = np.arange(len(df_pivot)); bar_width = 0.25
+            colors = {'Projection': 'deepskyblue', 'Co-embedding': 'salmon', 'Co-embedding (Native)': 'mediumseagreen'}
+            offsets = {'Projection': -bar_width, 'Co-embedding': 0, 'Co-embedding (Native)': bar_width}
+            
+            for strategy in sorted(df_chart_data['Embedding_Strategy'].unique()):
+                plt.bar(index + offsets[strategy], df_pivot[f'mean_{strategy}'], bar_width, yerr=df_pivot[f'std_{strategy}'], label=strategy, color=colors[strategy], capsize=4)
+            
+            plt.xlabel("DR Method (Representation)"); plt.ylabel(y_label)
+            plt.title(title); plt.xticks(index, df_pivot['Plot_Label'], rotation=45, ha="right")
+            if 'AUC' in metric: plt.ylim(0, 1.05)
+            else: plt.ylim(bottom=0)
+            plt.legend(title="Embedding Strategy"); plt.grid(True, linestyle='--', axis='y'); plt.tight_layout()
+            
+            fig_path = os.path.join(report_figures_dir, filename)
+            plt.savefig(fig_path); plt.close()
+            add_figure_to_latex_standalone(latex_content_list, os.path.join("figures", filename),
+                                         f"{title}. Bars show mean value averaged over all targets, dimensions, and replicates. Error bars represent standard deviation.",
+                                         f"fig-{clean_for_label(filename)}")
+        except Exception as e:
+            logging.error(f"Failed to generate chart '{title}': {e}", exc_info=True)
+            latex_content_list.append(f"Figure ({title}) could not be generated.\n")
 
+    # Figure 1: ROC-AUC
+    create_comparison_barchart(df_agg, 'ROC_AUC', "Mean ROC-AUC (across Replicates, Targets, DIMs)",
+                               "Overall Comparison by Mean ROC-AUC", "fig1_overall_roc_auc.png",
+                               latex_content, report_figures_abs_dir)
+    # Figure 2: PR-AUC
+    create_comparison_barchart(df_agg, 'PR_AUC', "Mean PR-AUC (across Replicates, Targets, DIMs)",
+                               "Overall Comparison by Mean PR-AUC", "fig2_overall_pr_auc.png",
+                               latex_content, report_figures_abs_dir)
+    # Figure 3: EF_1Perc
+    create_comparison_barchart(df_agg, 'EF_1Perc', "Mean EF@1% (across Replicates, Targets, DIMs)",
+                               "Overall Comparison by Mean Enrichment Factor @ 1%", "fig3_overall_ef1.png",
+                               latex_content, report_figures_abs_dir)
+    
     # Table 1: Main Summary Table
     logging.info("Generating Table 1: Main Summary of Aggregated Metrics...")
     try:
         df_table1_agg = df_agg.groupby(['Representation', 'DR_Method', 'Embedding_Strategy']).agg(
             Mean_ROC_AUC=('ROC_AUC', 'mean'), SD_ROC_AUC=('ROC_AUC', 'std'),
             Mean_PR_AUC=('PR_AUC', 'mean'), SD_PR_AUC=('PR_AUC', 'std'),
+            Mean_EF_1Perc=('EF_1Perc', 'mean'), SD_EF_1Perc=('EF_1Perc', 'std'),
             Mean_Spearman_Rho=('spearman_rho_affinity_vs_score', 'mean'), SD_Spearman_Rho=('spearman_rho_affinity_vs_score', 'std')
-        ).reset_index()
-        df_table1_agg.fillna({'SD_ROC_AUC':0, 'SD_PR_AUC':0, 'SD_Spearman_Rho':0}, inplace=True)
-        df_table1_agg['ROC_AUC'] = df_table1_agg.apply(lambda r: f"{r['Mean_ROC_AUC']:.3f} $\\pm$ {r['SD_ROC_AUC']:.3f}" if pd.notna(r['Mean_ROC_AUC']) else "N/A", axis=1)
-        df_table1_agg['PR_AUC'] = df_table1_agg.apply(lambda r: f"{r['Mean_PR_AUC']:.3f} $\\pm$ {r['SD_PR_AUC']:.3f}" if pd.notna(r['Mean_PR_AUC']) else "N/A", axis=1)
-        df_table1_agg['Spearman_Rho'] = df_table1_agg.apply(lambda r: f"{r['Mean_Spearman_Rho']:.3f} $\\pm$ {r['SD_Spearman_Rho']:.3f}" if pd.notna(r['Mean_Spearman_Rho']) else "N/A", axis=1)
+        ).reset_index().fillna(0)
         
-        df_table1_display = df_table1_agg[['Representation', 'DR_Method', 'Embedding_Strategy', 'ROC_AUC', 'PR_AUC', 'Spearman_Rho']].copy()
+        for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc', 'Spearman_Rho']:
+            mean_col, std_col = f'Mean_{metric}', f'SD_{metric}'
+            df_table1_agg[metric] = df_table1_agg.apply(lambda r: f"{r[mean_col]:.3f} $\\pm$ {r[std_col]:.3f}" if pd.notna(r[mean_col]) else "N/A", axis=1)
+        
+        df_table1_display = df_table1_agg[['Representation', 'DR_Method', 'Embedding_Strategy', 'ROC_AUC', 'PR_AUC', 'EF_1Perc', 'Spearman_Rho']].copy()
         df_table1_display.sort_values(by=['Representation','DR_Method','Embedding_Strategy'], inplace=True)
         add_dataframe_as_latex_table_standalone(latex_content, df_table1_display,
             "Aggregated Performance Metrics (Mean $\\pm$ SD). Values are averaged over all replicates, targets, and dimensions.",
-            "tab-main-summary", font_size=r"\\scriptsize")
+            "tab-main-summary", font_size=r"\\tiny")
     except Exception as e:
         logging.error(f"Failed to generate Table 1: {e}", exc_info=True); latex_content.append("Table 1 could not be generated.\n")
     
-    # --- Detailed Analysis ---
+    # --- Detailed Analysis and Per-Target Sections ---
+    # (The code for Figure 2 (Perf vs Dim), Table 2 (Best per Target), Figure 3 (Heatmap),
+    #  Illustrative Results section, and Similarity Space Only section is identical to the
+    #  last complete version provided and is assumed to be here.)
+    # For absolute completeness, this logic will be pasted.
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Detailed Analysis')}")
-
-    # Figure 2: Performance vs Dimension
-    logging.info("Generating Figure 2: Performance vs. Dimension...")
+    # Figure: Performance vs Dimension (was Fig 2, now Fig 4)
+    logging.info("Generating Figure 4: Performance vs. Dimension...")
     try:
         dr_methods_to_plot = sorted(df_agg['DR_Method'].unique())
         num_dr_methods = len(dr_methods_to_plot)
-        fig2, axes2 = plt.subplots(num_dr_methods, 2, figsize=(14, 4 * num_dr_methods), sharex=True, sharey=True, squeeze=False)
-        fig2.suptitle("Performance vs. Similarity Space Dimension", fontsize=14, y=1.0)
-
+        fig4, axes4 = plt.subplots(num_dr_methods, 2, figsize=(14, 4 * num_dr_methods), sharex=True, sharey=True, squeeze=False)
+        fig4.suptitle("Performance vs. Similarity Space Dimension", fontsize=14, y=1.0)
         for i, dr_method in enumerate(dr_methods_to_plot):
             for j, repr_type in enumerate(['Features', 'Fingerprints']):
-                ax = axes2[i, j]
+                ax = axes4[i, j]
                 df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (df_agg['Representation'] == repr_type)]
                 if not df_subset.empty:
                     for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
@@ -308,112 +302,81 @@ def main_report_generation():
                 if i == 0: ax.set_ylim(0, 1.05)
                 if i == num_dr_methods - 1: ax.set_xlabel("SIMSPACE_DIM")
                 if j == 0: ax.set_ylabel("Mean ROC-AUC")
-        
-        fig2.tight_layout(rect=[0, 0, 1, 0.98])
-        fig2_path = os.path.join(report_figures_abs_dir, "fig2_perf_vs_dim.png")
-        plt.savefig(fig2_path); plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig2_perf_vs_dim.png"),
+        fig4.tight_layout(rect=[0, 0, 1, 0.98])
+        fig4_path = os.path.join(report_figures_abs_dir, "fig4_perf_vs_dim.png")
+        plt.savefig(fig4_path); plt.close()
+        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig4_perf_vs_dim.png"),
             "Mean ROC-AUC vs. Dimension, stratified by Representation and DR Method. Shaded areas represent $\\pm$1 SD across replicates and targets.",
             "fig-perf-vs-dim", figure_width="\\textwidth")
-    except Exception as e:
-        logging.error(f"Failed to generate Figure 2: {e}", exc_info=True); latex_content.append("Figure 2 could not be generated.\n")
-
-    # Table 2: Best Config per Target
+    except Exception as e: logging.error(f"Failed to generate Figure 4: {e}", exc_info=True); latex_content.append("Figure 4 could not be generated.\n")
+    # Table: Best Config per Target (was Table 2, now Table 2)
     logging.info("Generating Table 2: Best Config per Target...")
     try:
         mean_roc_per_config = df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])['ROC_AUC'].mean().reset_index()
         idx = mean_roc_per_config.groupby(['Target'])['ROC_AUC'].idxmax()
         df_best_per_target = mean_roc_per_config.loc[idx]
-        df_best_per_target_std = pd.merge(
-            df_best_per_target,
-            df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])['ROC_AUC'].std().reset_index().rename(columns={'ROC_AUC': 'SD_ROC_AUC'}),
-            on=['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'], how='left'
-        ).fillna(0)
+        df_best_per_target_std = pd.merge(df_best_per_target, df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])['ROC_AUC'].std().reset_index().rename(columns={'ROC_AUC': 'SD_ROC_AUC'}),
+            on=['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'], how='left').fillna(0)
         df_best_per_target_std['Mean_ROC_AUC'] = df_best_per_target_std.apply(lambda r: f"{r['ROC_AUC']:.3f} $\\pm$ {r['SD_ROC_AUC']:.3f}", axis=1)
         df_best_per_target_display = df_best_per_target_std[['Target','Representation','DR_Method','Embedding_Strategy','DIM','Mean_ROC_AUC']].copy()
         df_best_per_target_display.rename(columns={'DIM': 'Optimal_Dimension'}, inplace=True)
-        add_dataframe_as_latex_table_standalone(latex_content, df_best_per_target_display,
-            "Best performing configuration for each target, based on highest mean ROC-AUC across replicates.",
-            "tab-best-per-target", font_size=r"\\tiny")
-    except Exception as e:
-        logging.error(f"Failed to generate Table 2: {e}", exc_info=True); latex_content.append("Table 2 could not be generated.\n")
-
-    # Figure 3: Heatmap of Performance
-    logging.info("Generating Figure 3: Heatmap of Performance...")
+        add_dataframe_as_latex_table_standalone(latex_content, df_best_per_target_display, "Best performing configuration for each target, based on highest mean ROC-AUC across replicates.", "tab-best-per-target", font_size=r"\\tiny")
+    except Exception as e: logging.error(f"Failed to generate Table 2: {e}", exc_info=True); latex_content.append("Table 2 could not be generated.\n")
+    # Figure: Heatmap of Performance (was Fig 3, now Fig 5)
+    logging.info("Generating Figure 5: Heatmap of Performance...")
     try:
         heatmap_data = df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy'])['ROC_AUC'].mean().reset_index()
-        heatmap_pivot = heatmap_data.pivot_table(
-            index=['Target', 'Representation'],
-            columns=['DR_Method', 'Embedding_Strategy'],
-            values='ROC_AUC'
-        )
+        heatmap_pivot = heatmap_data.pivot_table(index=['Target', 'Representation'], columns=['DR_Method', 'Embedding_Strategy'], values='ROC_AUC')
         plt.figure(figsize=(16, 10))
         sns.heatmap(heatmap_pivot, annot=True, fmt=".3f", cmap="viridis", linewidths=.5, annot_kws={"size": 8})
         plt.title("Heatmap of Best Mean ROC-AUC by Target, Representation, and Method")
         plt.xticks(rotation=45, ha="right"); plt.yticks(rotation=0); plt.tight_layout()
-        fig3_path = os.path.join(report_figures_abs_dir, "fig3_heatmap.png")
-        plt.savefig(fig3_path); plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig3_heatmap.png"),
+        fig5_path = os.path.join(report_figures_abs_dir, "fig5_heatmap.png")
+        plt.savefig(fig5_path); plt.close()
+        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig5_heatmap.png"),
             "Heatmap of mean ROC-AUC performance. Each cell shows the highest mean ROC-AUC achieved for that configuration, maximized over all tested dimensions.",
             "fig-heatmap", figure_width="\\textwidth")
-    except Exception as e:
-        logging.error(f"Failed to generate Figure 3: {e}", exc_info=True); latex_content.append("Figure 3 could not be generated.\n")
+    except Exception as e: logging.error(f"Failed to generate Figure 5: {e}", exc_info=True); latex_content.append("Figure 5 could not be generated.\n")
 
-    
-    # --- Illustrative Results for Representative Targets ---
+    # Illustrative Results Section
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Illustrative Results for Representative Targets')}")
     representative_replicate_info = replicate_details_list[0]
     logging.info(f"Using replicate run '{os.path.basename(representative_replicate_info['path'])}' for illustrative 2D plots.")
-    
     for target_info in config['targets']:
         if target_info.get("processing_mode", "full_analysis") == "similarity_space_only": continue
         target_id_name, target_display_name = target_info['id_name'], target_info['display_name']
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Target: {target_display_name}')}")
-        
         for repr_type in ["features", "fingerprints"]:
             latex_content.append(get_section_header_latex_standalone(3, f"Representation: {repr_type.capitalize()}"))
             rep_results_base = os.path.join(representative_replicate_info['path'], target_id_name, "results", repr_type, "dim_2")
             if not os.path.exists(rep_results_base):
                 latex_content.append(f"No 2D results found in representative replicate for this target/representation.\n"); continue
-            
             plots_added_for_repr = False
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
                 if dr_key == 'tsne' and '2' not in gs.get('simspace_dims_to_test', []): continue
-                
                 strategies_to_plot = [{"dir_leaf": dr_params["short_name"].replace('-', '_'), "title": dr_params["short_name"]}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
                     strategies_to_plot.append({"dir_leaf": f"{dr_params['short_name']}-Coembed".replace('-', '_'), "title": f"{dr_params['short_name']}-Coembed"})
-                
                 for strategy in strategies_to_plot:
                     strat_dir_path = os.path.join(rep_results_base, strategy['dir_leaf'])
                     if os.path.exists(strat_dir_path):
-                        # --- CORRECTED FILENAME LOGIC FOR PLOTS ---
-                        # The filename inside uses the BASE dr name (e.g., PCA) even if directory is PCA_Coembed
                         base_dr_name_for_plot_file = dr_params["short_name"].replace('-', '_')
                         scatter_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_scatter.png"
                         hist_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_min_distances_hist_ACTIVES.png"
-                        # --- END CORRECTION ---
-                        
                         scatter_src = os.path.join(strat_dir_path, scatter_fname_orig)
                         hist_src = os.path.join(strat_dir_path, hist_fname_orig)
-
                         if os.path.exists(scatter_src) or os.path.exists(hist_src):
                             plots_added_for_repr = True
                             latex_content.append(get_section_header_latex_standalone(4, f"DR Method: {strategy['title']}"))
                             if os.path.exists(scatter_src):
                                 clean_fname_s = f"{clean_for_label(target_id_name)}-{repr_type}-{clean_for_label(strategy['title'])}-scatter.png"
                                 shutil.copy(scatter_src, os.path.join(report_figures_abs_dir, clean_fname_s))
-                                add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_s),
-                                    f"2D Similarity Space for {target_display_name} ({strategy['title']}).",
-                                    f"fig-scatter-{target_id_name}-{repr_type}-{strategy['title']}")
+                                add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_s), f"2D Similarity Space for {target_display_name} ({strategy['title']}).", f"fig-scatter-{target_id_name}-{repr_type}-{strategy['title']}")
                             if os.path.exists(hist_src):
                                 clean_fname_h = f"{clean_for_label(target_id_name)}-{repr_type}-{clean_for_label(strategy['title'])}-hist.png"
                                 shutil.copy(hist_src, os.path.join(report_figures_abs_dir, clean_fname_h))
-                                add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_h),
-                                    f"Histogram of min. distances for Actives of {target_display_name} ({strategy['title']}).",
-                                    f"fig-hist-{target_id_name}-{repr_type}-{strategy['title']}", figure_width="0.6\\textwidth")
-            if not plots_added_for_repr:
-                latex_content.append("No 2D plots found for this representation in the representative replicate.\n")
+                                add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_h), f"Histogram of min. distances for Actives of {target_display_name} ({strategy['title']}).", f"fig-hist-{target_id_name}-{repr_type}-{strategy['title']}", figure_width="0.6\\textwidth")
+            if not plots_added_for_repr: latex_content.append("No 2D plots found for this representation in the representative replicate.\n")
 
     # --- Similarity Space Only Targets ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Targets Processed for Docking Only')}")
@@ -423,8 +386,7 @@ def main_report_generation():
         for target_info in sim_space_only_targets:
             latex_content.append(f"  \\item {escape_latex_text_content(target_info['display_name'])}\n")
         latex_content.append("\\end{itemize}\n")
-    else:
-        latex_content.append("All targets were processed in 'full_analysis' mode.\n")
+    else: latex_content.append("All targets were processed in 'full_analysis' mode.\n")
 
     latex_content.append(LATEX_DOCUMENT_END)
 
@@ -433,7 +395,6 @@ def main_report_generation():
     report_tex_path = os.path.join(report_output_abs_dir, report_tex_filename)
     with open(report_tex_path, "w", encoding='utf-8') as f: f.write("\n".join(latex_content))
     logging.info(f"Aggregated LaTeX report structure generated: {report_tex_path}")
-    
     try:
         logging.info(f"Attempting to compile LaTeX report in: {report_output_abs_dir}")
         for i in range(2): 
