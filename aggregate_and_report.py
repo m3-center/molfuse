@@ -106,13 +106,24 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
         df_for_latex.columns = [escape_latex_text_content(str(c).replace('_', ' ').title()) for c in dataframe.columns]
         
         if col_format is None:
-            col_format = 'l' * len(df_for_latex.columns)
+            # A more booktabs-friendly column format (no vertical lines)
+            formats = ['l'] * len(df_for_latex.columns)
+            for i, col_name_orig in enumerate(dataframe.columns):
+                if pd.api.types.is_numeric_dtype(dataframe[col_name_orig]):
+                    formats[i] = 'r'
+            col_format = "".join(formats) # e.g., 'lrr'
 
+        # --- THIS IS THE FIX ---
+        # The 'booktabs=True' keyword argument has been removed to support older Pandas versions.
+        # The default LaTeX output is already booktabs-friendly.
         latex_table_string = df_for_latex.to_latex(index=False, escape=False, column_format=col_format,
-                                                   longtable=len(dataframe)>20, na_rep="N/A", booktabs=True)
+                                                   longtable=len(dataframe)>20, na_rep="N/A")
+        # --- END OF FIX ---
+                                                   
         latex_content_list.append(latex_table_string)
         latex_content_list.extend([r"\end{table}", "\n"])
-    else: latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
+    else: 
+        latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
 # --- End LaTeX Helpers ---
 
 agg_log_file_name = f"aggregation_report_generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
