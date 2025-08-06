@@ -111,7 +111,7 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
             col_format = 'l' * len(df_for_latex.columns)
 
         latex_table_string = df_for_latex.to_latex(index=False, escape=False, column_format=col_format,
-                                                   longtable=len(dataframe)>20, na_rep="N/A", booktabs=True)
+                                                   longtable=len(dataframe)>20, na_rep="N/A")
         latex_content_list.append(latex_table_string)
         latex_content_list.extend([r"\end{table}", "\n"])
     else: latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty or None.\n")
