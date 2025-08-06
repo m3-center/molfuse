@@ -148,7 +148,7 @@ logging.basicConfig(
 def find_all_replicate_runs(base_experiment_dir):
     replicate_dirs = []
     pattern = os.path.join(base_experiment_dir,
-                           f"run_seed*_*")  # General pattern
+                           f"run_seed*")  # General pattern
     logging.info(
         f"Scanning for all replicate run directories with pattern: {pattern}")
 
