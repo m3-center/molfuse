@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=aby          # partition / wait queue
+#SBATCH --partition=any          # partition / wait queue
 #SBATCH --nodes=1                # number of nodes
 #SBATCH --ntasks-per-node=32     # number of tasks per node
 #SBATCH --mem=180G               # memory per node in MB (different units with suffix K|M|G|T)
