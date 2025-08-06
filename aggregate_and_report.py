@@ -143,6 +143,11 @@ def find_all_replicate_runs(base_experiment_dir):
 def get_baseline_from_ranked_file(ranked_file_path):
     """Reads a ranked list and calculates the random baseline for PR-AUC."""
     try:
+        # Check if file exists before trying to read
+        if not os.path.exists(ranked_file_path):
+            logging.warning(f"Ranked list file not found for baseline calculation: {ranked_file_path}")
+            return np.nan
+            
         df_ranked = pd.read_csv(ranked_file_path)
         if df_ranked.empty or 'TYPE' not in df_ranked.columns:
             return np.nan
@@ -168,20 +173,24 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
         logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
         for target_info in config_main['targets']:
             if target_info.get("processing_mode", "full_analysis") == "similarity_space_only": continue
-            target_results_base = os.path.join(rep_dir_path, target_info['id_name'], "results", repr_type)
+            
+            target_id_name = target_info['id_name'] # Use id_name for filenames
+            target_results_base = os.path.join(rep_dir_path, target_id_name, "results", repr_type)
             if not os.path.exists(target_results_base): continue
+
             for dr_key, dr_params in config_main["dimensionality_reduction_methods"].items():
-                dr_short_name_base = dr_params["short_name"]
+                dr_short_name_base = dr_params["short_name"] # e.g., "UMAP-Euclidean"
                 strategies_to_check = [{"dir_leaf": dr_short_name_base.replace('-', '_'), "label": "Projection" if not dr_key == "tsne" else "Co-embedding (Native)"}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
                     strategies_to_check.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "label": "Co-embedding"})
+                
                 for strategy in strategies_to_check:
                     for dim_val in gs['simspace_dims_to_test']:
                         if dr_key == "tsne" and dim_val != 2: continue
                         
                         strat_dir_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'])
-                        base_dr_name_for_file = dr_short_name_base.replace('-', '_')
-                        metrics_filename = f"{target_info['id_name']}_{repr_type}_{base_dr_name_for_file}_dim{dim_val}_ranking_metrics.csv"
+                        base_dr_name_for_metrics_file = dr_short_name_base.replace('-', '_')
+                        metrics_filename = f"{target_id_name}_{repr_type}_{base_dr_name_for_metrics_file}_dim{dim_val}_ranking_metrics.csv"
                         metrics_file_path = os.path.join(strat_dir_path, metrics_filename)
 
                         if os.path.exists(metrics_file_path):
@@ -192,8 +201,12 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                                   'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
                                                   'Embedding_Strategy': strategy['label'], 'DIM': dim_val}
                                     
-                                    # Calculate baseline
-                                    ranked_list_filename = f"{target_info['id_name'].upper()}-{base_dr_name_for_file.upper()}-{dim_val}D-{repr_type.upper()}.csv"
+                                    # --- THIS IS THE CORRECTED LOGIC FOR RANKED LIST FILENAME ---
+                                    # The filename ALWAYS uses the BASE DR name, squashed.
+                                    dr_part_for_ranked_filename = dr_short_name_base.upper().replace('-', '')
+                                    ranked_list_filename = f"{target_id_name.upper()}-{dr_part_for_ranked_filename}-{dim_val}D-{repr_type.upper()}.csv"
+                                    # --- END CORRECTION ---
+                                    
                                     ranked_list_path = os.path.join(strat_dir_path, ranked_list_filename)
                                     baseline = get_baseline_from_ranked_file(ranked_list_path)
                                     metric_row['PR_AUC_Baseline'] = baseline
@@ -206,8 +219,11 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                             metric_row[df_col] = df_m[csv_col].iloc[0] if pd.notna(df_m[csv_col].iloc[0]) else np.nan
                                         else: metric_row[df_col] = np.nan
                                     all_metrics_data.append(metric_row)
-                            except Exception as e: logging.error(f"Error reading {metrics_file_path}: {e}")
-    if not all_metrics_data: logging.error("No metric data collected.")
+                            except Exception as e: 
+                                logging.error(f"Error reading or processing metrics from {metrics_file_path}: {e}")
+    
+    if not all_metrics_data: 
+        logging.error("No metric data was successfully collected from any replicate runs.")
     return pd.DataFrame(all_metrics_data) if all_metrics_data else pd.DataFrame()
 
 def main_report_generation():
