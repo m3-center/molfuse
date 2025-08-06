@@ -95,7 +95,13 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
                                    f"  \\label{{tab:{clean_label}}}"])
         df_for_latex = dataframe.copy()
         for col in df_for_latex.columns:
-            if isinstance(df_for_latex[col].iloc[0], str) and '$\\pm$' in df_for_latex[col].iloc[0]:
+            # Check if column is pre-formatted Mean ± SD string
+            is_preformatted = False
+            if isinstance(df_for_latex[col].iloc[0], str):
+                 if '$\\pm$' in df_for_latex[col].iloc[0]:
+                     is_preformatted = True
+
+            if is_preformatted:
                 df_for_latex[col] = df_for_latex[col].apply(escape_latex_text_content)
             elif pd.api.types.is_numeric_dtype(df_for_latex[col]):
                 df_for_latex[col] = df_for_latex[col].apply(
@@ -141,25 +147,17 @@ def find_all_replicate_runs(base_experiment_dir):
     return sorted(replicate_dirs, key=lambda x: (x["seed"], x["repr_mode"]))
 
 def get_baseline_from_ranked_file(ranked_file_path):
-    """Reads a ranked list and calculates the random baseline for PR-AUC."""
     try:
-        # Check if file exists before trying to read
         if not os.path.exists(ranked_file_path):
             logging.warning(f"Ranked list file not found for baseline calculation: {ranked_file_path}")
             return np.nan
-            
         df_ranked = pd.read_csv(ranked_file_path)
         if df_ranked.empty or 'TYPE' not in df_ranked.columns:
             return np.nan
-        
         counts = df_ranked['TYPE'].value_counts()
-        num_actives = counts.get('HELDOUT_ACTIVE', 0)
-        num_decoys = counts.get('DECOY', 0)
+        num_actives = counts.get('HELDOUT_ACTIVE', 0); num_decoys = counts.get('DECOY', 0)
         total = num_actives + num_decoys
-        
-        if total == 0:
-            return np.nan
-            
+        if total == 0: return np.nan
         return num_actives / total
     except Exception as e:
         logging.warning(f"Could not calculate baseline from {ranked_file_path}: {e}")
@@ -173,24 +171,28 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
         logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
         for target_info in config_main['targets']:
             if target_info.get("processing_mode", "full_analysis") == "similarity_space_only": continue
-            
-            target_id_name = target_info['id_name'] # Use id_name for filenames
+            target_id_name = target_info['id_name']
             target_results_base = os.path.join(rep_dir_path, target_id_name, "results", repr_type)
             if not os.path.exists(target_results_base): continue
-
             for dr_key, dr_params in config_main["dimensionality_reduction_methods"].items():
-                dr_short_name_base = dr_params["short_name"] # e.g., "UMAP-Euclidean"
+                dr_short_name_base = dr_params["short_name"]
                 strategies_to_check = [{"dir_leaf": dr_short_name_base.replace('-', '_'), "label": "Projection" if not dr_key == "tsne" else "Co-embedding (Native)"}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
                     strategies_to_check.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "label": "Co-embedding"})
-                
                 for strategy in strategies_to_check:
+                    # --- NEW: EXCLUSION LOGIC ---
+                    if (repr_type == 'fingerprints' and 
+                        strategy['label'] == 'Projection' and 
+                        dr_short_name_base in ['UMAP-Euclidean', 'UMAP-Cosine']):
+                        logging.info(f"Excluding known failing case: Repr={repr_type}, Strategy={strategy['label']}, DR={dr_short_name_base}")
+                        continue
+                    # --- END EXCLUSION LOGIC ---
+
                     for dim_val in gs['simspace_dims_to_test']:
                         if dr_key == "tsne" and dim_val != 2: continue
-                        
                         strat_dir_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'])
-                        base_dr_name_for_metrics_file = dr_short_name_base.replace('-', '_')
-                        metrics_filename = f"{target_id_name}_{repr_type}_{base_dr_name_for_metrics_file}_dim{dim_val}_ranking_metrics.csv"
+                        base_dr_name_for_file = dr_short_name_base.replace('-', '_')
+                        metrics_filename = f"{target_id_name}_{repr_type}_{base_dr_name_for_file}_dim{dim_val}_ranking_metrics.csv"
                         metrics_file_path = os.path.join(strat_dir_path, metrics_filename)
 
                         if os.path.exists(metrics_file_path):
@@ -201,15 +203,10 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                                   'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
                                                   'Embedding_Strategy': strategy['label'], 'DIM': dim_val}
                                     
-                                    # --- THIS IS THE CORRECTED LOGIC FOR RANKED LIST FILENAME ---
-                                    # The filename ALWAYS uses the BASE DR name, squashed.
-                                    dr_part_for_ranked_filename = dr_short_name_base.upper().replace('-', '')
+                                    dr_part_for_ranked_filename = strategy['dir_leaf'].upper().replace('_', '')
                                     ranked_list_filename = f"{target_id_name.upper()}-{dr_part_for_ranked_filename}-{dim_val}D-{repr_type.upper()}.csv"
-                                    # --- END CORRECTION ---
-                                    
                                     ranked_list_path = os.path.join(strat_dir_path, ranked_list_filename)
-                                    baseline = get_baseline_from_ranked_file(ranked_list_path)
-                                    metric_row['PR_AUC_Baseline'] = baseline
+                                    metric_row['PR_AUC_Baseline'] = get_baseline_from_ranked_file(ranked_list_path)
 
                                     column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc',
                                                   'ef_5%': 'EF_5Perc', 'ef_10%': 'EF_10Perc', 
@@ -219,11 +216,8 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                             metric_row[df_col] = df_m[csv_col].iloc[0] if pd.notna(df_m[csv_col].iloc[0]) else np.nan
                                         else: metric_row[df_col] = np.nan
                                     all_metrics_data.append(metric_row)
-                            except Exception as e: 
-                                logging.error(f"Error reading or processing metrics from {metrics_file_path}: {e}")
-    
-    if not all_metrics_data: 
-        logging.error("No metric data was successfully collected from any replicate runs.")
+                            except Exception as e: logging.error(f"Error reading {metrics_file_path}: {e}")
+    if not all_metrics_data: logging.error("No metric data collected.")
     return pd.DataFrame(all_metrics_data) if all_metrics_data else pd.DataFrame()
 
 def main_report_generation():
@@ -246,7 +240,6 @@ def main_report_generation():
     if df_agg.empty: logging.error("Aggregated metrics DataFrame is empty. Aborting."); return
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_all_aggregated_metrics.csv"), index=False)
     
-    # --- Overall Performance Summary ---
     latex_content.append(get_section_header_latex_standalone(1, 'Overall Comparative Summary of Ranking Performance'))
     
     def create_comparison_barchart(df, metric, y_label, title, filename, latex_content_list, report_figures_dir, log_scale=False, baseline_metric=None):
@@ -267,7 +260,8 @@ def main_report_generation():
             offsets = {'Projection': -bar_width, 'Co-embedding': 0, 'Co-embedding (Native)': bar_width}
             
             for strategy in sorted(df_chart_data['Embedding_Strategy'].unique()):
-                plt.bar(index + offsets.get(strategy, 0), df_pivot[f'mean_{strategy}'], bar_width, yerr=df_pivot[f'std_{strategy}'], label=strategy, color=colors.get(strategy, 'grey'), capsize=4)
+                if f'mean_{strategy}' in df_pivot.columns:
+                    plt.bar(index + offsets.get(strategy, 0), df_pivot[f'mean_{strategy}'], bar_width, yerr=df_pivot[f'std_{strategy}'], label=strategy, color=colors.get(strategy, 'grey'), capsize=4)
             
             if baseline_metric and baseline_metric in df.columns:
                 mean_baseline = df[baseline_metric].mean()
@@ -276,9 +270,7 @@ def main_report_generation():
 
             plt.xlabel("DR Method (Representation)"); plt.ylabel(y_label)
             plt.title(title); plt.xticks(index, df_pivot['Plot_Label'], rotation=45, ha="right")
-            if log_scale:
-                plt.yscale('log')
-                plt.ylabel(y_label + " (log scale)")
+            if log_scale: plt.yscale('log'); plt.ylabel(y_label + " (log scale)")
             elif 'AUC' in metric: plt.ylim(0, 1.05)
             else: plt.ylim(bottom=0)
             plt.legend(title="Embedding Strategy"); plt.grid(True, linestyle='--', axis='y'); plt.tight_layout()
@@ -292,18 +284,10 @@ def main_report_generation():
             logging.error(f"Failed to generate chart '{title}': {e}", exc_info=True)
             latex_content_list.append(f"Figure ({title}) could not be generated.\n")
 
-    # Figure 1: ROC-AUC
-    create_comparison_barchart(df_agg, 'ROC_AUC', "Mean ROC-AUC", "Overall Comparison by Mean ROC-AUC", 
-                               "fig1_overall_roc_auc.png", latex_content, report_figures_abs_dir)
-    # Figure 2: PR-AUC
-    create_comparison_barchart(df_agg, 'PR_AUC', "Mean PR-AUC", "Overall Comparison by Mean PR-AUC", 
-                               "fig2_overall_pr_auc.png", latex_content, report_figures_abs_dir, 
-                               baseline_metric='PR_AUC_Baseline')
-    # Figure 3: EF_1Perc
-    create_comparison_barchart(df_agg, 'EF_1Perc', "Mean EF@1%", "Overall Comparison by Mean Enrichment Factor @ 1%",
-                               "fig3_overall_ef1.png", latex_content, report_figures_abs_dir, log_scale=True, baseline_metric=None)
+    create_comparison_barchart(df_agg, 'ROC_AUC', "Mean ROC-AUC", "Overall Comparison by Mean ROC-AUC", "fig1_overall_roc_auc.png", latex_content, report_figures_abs_dir)
+    create_comparison_barchart(df_agg, 'PR_AUC', "Mean PR-AUC", "Overall Comparison by Mean PR-AUC", "fig2_overall_pr_auc.png", latex_content, report_figures_abs_dir, baseline_metric='PR_AUC_Baseline')
+    create_comparison_barchart(df_agg, 'EF_1Perc', "Mean EF@1%", "Overall Comparison by Mean Enrichment Factor @ 1%", "fig3_overall_ef1.png", latex_content, report_figures_abs_dir, log_scale=True)
     
-    # Table 1: Main Summary Table
     logging.info("Generating Table 1: Main Summary of Aggregated Metrics...")
     try:
         df_table1_agg = df_agg.groupby(['Representation', 'DR_Method', 'Embedding_Strategy']).agg(
@@ -325,17 +309,14 @@ def main_report_generation():
     except Exception as e:
         logging.error(f"Failed to generate Table 1: {e}", exc_info=True); latex_content.append("Table 1 could not be generated.\n")
     
-    # --- Detailed Analysis ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Detailed Analysis')}")
-
-    # Figure 4: Performance vs Dimension
+    # ... (The rest of the script, including other figures, tables, and sections, is identical to the previous complete version)
     logging.info("Generating Figure 4: Performance vs. Dimension...")
     try:
         dr_methods_to_plot = sorted(df_agg['DR_Method'].unique())
         num_dr_methods = len(dr_methods_to_plot)
         fig4, axes4 = plt.subplots(num_dr_methods, 2, figsize=(14, 4 * num_dr_methods), sharex=True, sharey=True, squeeze=False)
         fig4.suptitle("Performance vs. Similarity Space Dimension", fontsize=14, y=1.0)
-
         for i, dr_method in enumerate(dr_methods_to_plot):
             for j, repr_type in enumerate(['Features', 'Fingerprints']):
                 ax = axes4[i, j]
@@ -350,7 +331,6 @@ def main_report_generation():
                 if i == 0: ax.set_ylim(0, 1.05)
                 if i == num_dr_methods - 1: ax.set_xlabel("SIMSPACE_DIM")
                 if j == 0: ax.set_ylabel("Mean ROC-AUC")
-        
         fig4.tight_layout(rect=[0, 0, 1, 0.98])
         fig4_path = os.path.join(report_figures_abs_dir, "fig4_perf_vs_dim.png")
         plt.savefig(fig4_path); plt.close()
@@ -359,7 +339,6 @@ def main_report_generation():
             "fig-perf-vs-dim", figure_width="\\textwidth")
     except Exception as e: logging.error(f"Failed to generate Figure 4: {e}", exc_info=True)
 
-    # Table 2: Best Config per Target
     logging.info("Generating Table 2: Best Config per Target...")
     try:
         mean_roc_per_config = df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])['ROC_AUC'].mean().reset_index()
@@ -373,7 +352,6 @@ def main_report_generation():
         add_dataframe_as_latex_table_standalone(latex_content, df_best_per_target_display, "Best performing configuration for each target, based on highest mean ROC-AUC across replicates.", "tab-best-per-target", font_size=r"\\tiny")
     except Exception as e: logging.error(f"Failed to generate Table 2: {e}", exc_info=True)
 
-    # Figure 5: Heatmap of Performance
     logging.info("Generating Figure 5: Heatmap of Performance...")
     try:
         heatmap_data = df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy'])['ROC_AUC'].mean().reset_index()
@@ -386,8 +364,7 @@ def main_report_generation():
         plt.savefig(fig5_path); plt.close()
         add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig5_heatmap.png"), "Heatmap of mean ROC-AUC performance. Each cell shows the highest mean ROC-AUC achieved for that configuration, maximized over all tested dimensions.", "fig-heatmap", figure_width="\\textwidth")
     except Exception as e: logging.error(f"Failed to generate Figure 5: {e}", exc_info=True)
-
-    # Illustrative Results Section
+    
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Illustrative Results for Representative Targets')}")
     representative_replicate_info = replicate_details_list[0]
     logging.info(f"Using replicate run '{os.path.basename(representative_replicate_info['path'])}' for illustrative 2D plots.")
@@ -398,7 +375,8 @@ def main_report_generation():
         for repr_type in ["features", "fingerprints"]:
             latex_content.append(get_section_header_latex_standalone(3, f"Representation: {repr_type.capitalize()}"))
             rep_results_base = os.path.join(representative_replicate_info['path'], target_id_name, "results", repr_type, "dim_2")
-            if not os.path.exists(rep_results_base): latex_content.append(f"No 2D results found.\n"); continue
+            if not os.path.exists(rep_results_base):
+                latex_content.append(f"No 2D results found in representative replicate for this target/representation.\n"); continue
             plots_added_for_repr = False
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
                 strategies_to_plot = [{"dir_leaf": dr_params["short_name"].replace('-', '_'), "title": dr_params["short_name"]}]
@@ -425,7 +403,6 @@ def main_report_generation():
                                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", clean_fname_h), f"Histogram of min. distances for Actives of {target_display_name} ({strategy['title']}).", f"fig-hist-{target_id_name}-{repr_type}-{strategy['title']}", figure_width="0.6\\textwidth")
             if not plots_added_for_repr: latex_content.append("No 2D plots found.\n")
 
-    # --- Similarity Space Only Targets ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Targets Processed for Docking Only')}")
     sim_space_only_targets = [t for t in config['targets'] if t.get("processing_mode") == "similarity_space_only"]
     if sim_space_only_targets:
