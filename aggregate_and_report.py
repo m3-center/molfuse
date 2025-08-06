@@ -143,42 +143,39 @@ logging.basicConfig(
 )
 
 # --- Phase 1: Data Aggregation ---
-
-
 def find_all_replicate_runs(base_experiment_dir):
+    """
+    Finds all valid replicate run directories (e.g., run_seed42_reprfeatures_20250731_132505)
+    and parses the seed and representation mode.
+    """
     replicate_dirs = []
-    pattern = os.path.join(base_experiment_dir,
-                           f"run_seed*")  # General pattern
-    logging.info(
-        f"Scanning for all replicate run directories with pattern: {pattern}")
+    # More specific glob pattern to avoid matching incorrect directories
+    pattern = os.path.join(base_experiment_dir, "run_seed*_repr*_*_*")
+    logging.info(f"Scanning for all replicate run directories with pattern: {pattern}")
+    
+    # Regular expression to robustly parse the directory name
+    dir_pattern_re = re.compile(r"run_seed(\d+)_repr(features|fingerprints)_(\d{8}_\d{6})")
 
     for dir_path in glob.glob(pattern):
         if os.path.isdir(dir_path):
             basename = os.path.basename(dir_path)
-            try:
-                parts = basename.split('_')
-                seed_val, repr_val = None, None
-                for i, part in enumerate(parts):
-                    if part == "seed" and i + 1 < len(parts):
-                        seed_val = int(parts[i+1])
-                    elif part == "repr" and i + 1 < len(parts):
-                        repr_val = parts[i+1]
-
-                if seed_val is not None and repr_val is not None and repr_val in ["features", "fingerprints"]:
-                    replicate_dirs.append(
-                        {"path": dir_path, "seed": seed_val, "repr_mode": repr_val})
-                    logging.info(
-                        f"Found valid replicate run: {dir_path} (Seed: {seed_val}, Repr: {repr_val})")
-                else:
-                    logging.debug(
-                        f"Skipping directory (mismatch/parse error): {dir_path}")
-            except Exception as e:
-                logging.warning(
-                    f"Error processing directory name {basename}: {e}")
-
+            match = dir_pattern_re.match(basename)
+            
+            if match:
+                try:
+                    seed_val = int(match.group(1))
+                    repr_val = match.group(2)
+                    
+                    replicate_dirs.append({"path": dir_path, "seed": seed_val, "repr_mode": repr_val})
+                    logging.info(f"Found valid replicate run: {dir_path} (Seed: {seed_val}, Repr: {repr_val})")
+                except (ValueError, IndexError) as e:
+                    logging.warning(f"Could not parse details from a directory name that matched glob pattern: {basename}. Error: {e}")
+            else:
+                logging.debug(f"Directory matched glob but not regex, skipping: {basename}")
+                
     if not replicate_dirs:
-        logging.warning(
-            f"No valid replicate run directories found in '{base_experiment_dir}'")
+        logging.warning(f"No valid replicate run directories found in '{base_experiment_dir}' matching the expected pattern.")
+        
     return sorted(replicate_dirs, key=lambda x: (x["seed"], x["repr_mode"]))
 
 
