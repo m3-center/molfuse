@@ -97,9 +97,12 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
         for col in df_for_latex.columns:
             # Check if column is pre-formatted Mean ± SD string
             is_preformatted = False
-            if isinstance(df_for_latex[col].iloc[0], str):
-                 if '$\\pm$' in df_for_latex[col].iloc[0]:
-                     is_preformatted = True
+            try: # Add try-except for safety on diverse data
+                if isinstance(df_for_latex[col].iloc[0], str) and '$\\pm$' in df_for_latex[col].iloc[0]:
+                    is_preformatted = True
+            except IndexError:
+                is_preformatted = False
+
 
             if is_preformatted:
                 df_for_latex[col] = df_for_latex[col].apply(escape_latex_text_content)
@@ -171,25 +174,27 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
         logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
         for target_info in config_main['targets']:
             if target_info.get("processing_mode", "full_analysis") == "similarity_space_only": continue
-            
-            target_id_name = target_info['id_name'] # Use id_name for filenames
+            target_id_name = target_info['id_name']
             target_results_base = os.path.join(rep_dir_path, target_id_name, "results", repr_type)
             if not os.path.exists(target_results_base): continue
-
             for dr_key, dr_params in config_main["dimensionality_reduction_methods"].items():
-                dr_short_name_base = dr_params["short_name"] # e.g., "UMAP-Euclidean"
+                dr_short_name_base = dr_params["short_name"]
                 strategies_to_check = [{"dir_leaf": dr_short_name_base.replace('-', '_'), "label": "Projection" if not dr_key == "tsne" else "Co-embedding (Native)"}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
                     strategies_to_check.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "label": "Co-embedding"})
-                
                 for strategy in strategies_to_check:
+                    # --- NEW: EXCLUSION LOGIC ---
+                    if (repr_type == 'fingerprints' and 
+                        strategy['label'] == 'Projection' and 
+                        dr_short_name_base in ['UMAP-Euclidean', 'UMAP-Cosine']):
+                        logging.info(f"Excluding known failing case: Repr={repr_type}, Strategy={strategy['label']}, DR={dr_short_name_base}")
+                        continue
+                    # --- END EXCLUSION LOGIC ---
+
                     for dim_val in gs['simspace_dims_to_test']:
                         if dr_key == "tsne" and dim_val != 2: continue
-                        
                         strat_dir_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'])
                         base_dr_name_for_metrics_file = dr_short_name_base.replace('-', '_')
-                        
-                        # The metrics filename uses the BASE DR name, as per our previous fix.
                         metrics_filename = f"{target_id_name}_{repr_type}_{base_dr_name_for_metrics_file}_dim{dim_val}_ranking_metrics.csv"
                         metrics_file_path = os.path.join(strat_dir_path, metrics_filename)
 
@@ -201,15 +206,10 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                                   'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
                                                   'Embedding_Strategy': strategy['label'], 'DIM': dim_val}
                                     
-                                    # --- THIS IS THE CORRECTED LOGIC FOR RANKED LIST FILENAME ---
-                                    # The filename ALWAYS uses the BASE DR name, squashed.
                                     dr_part_for_ranked_filename = dr_short_name_base.upper().replace('-', '')
                                     ranked_list_filename = f"{target_id_name.upper()}-{dr_part_for_ranked_filename}-{dim_val}D-{repr_type.upper()}.csv"
-                                    # --- END CORRECTION ---
-                                    
                                     ranked_list_path = os.path.join(strat_dir_path, ranked_list_filename)
-                                    baseline = get_baseline_from_ranked_file(ranked_list_path)
-                                    metric_row['PR_AUC_Baseline'] = baseline
+                                    metric_row['PR_AUC_Baseline'] = get_baseline_from_ranked_file(ranked_list_path)
 
                                     column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc',
                                                   'ef_5%': 'EF_5Perc', 'ef_10%': 'EF_10Perc', 
@@ -219,11 +219,8 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                             metric_row[df_col] = df_m[csv_col].iloc[0] if pd.notna(df_m[csv_col].iloc[0]) else np.nan
                                         else: metric_row[df_col] = np.nan
                                     all_metrics_data.append(metric_row)
-                            except Exception as e: 
-                                logging.error(f"Error reading or processing metrics from {metrics_file_path}: {e}")
-    
-    if not all_metrics_data: 
-        logging.error("No metric data was successfully collected from any replicate runs.")
+                            except Exception as e: logging.error(f"Error reading {metrics_file_path}: {e}")
+    if not all_metrics_data: logging.error("No metric data collected.")
     return pd.DataFrame(all_metrics_data) if all_metrics_data else pd.DataFrame()
 
 def main_report_generation():
@@ -283,12 +280,12 @@ def main_report_generation():
             
             fig_path = os.path.join(report_figures_dir, filename)
             plt.savefig(fig_path); plt.close()
-            add_figure_to_latex_standalone(latex_content_list, os.path.join("figures", filename),
+            add_figure_to_latex_standalone(latex_content, os.path.join("figures", filename),
                                          f"{title}. Bars show mean value averaged over all targets, dimensions, and replicates. Error bars represent standard deviation.",
                                          f"fig-{clean_for_label(filename)}")
         except Exception as e:
             logging.error(f"Failed to generate chart '{title}': {e}", exc_info=True)
-            latex_content_list.append(f"Figure ({title}) could not be generated.\n")
+            latex_content.append(f"Figure ({title}) could not be generated.\n")
 
     create_comparison_barchart(df_agg, 'ROC_AUC', "Mean ROC-AUC", "Overall Comparison by Mean ROC-AUC", "fig1_overall_roc_auc.png", latex_content, report_figures_abs_dir)
     create_comparison_barchart(df_agg, 'PR_AUC', "Mean PR-AUC", "Overall Comparison by Mean PR-AUC", "fig2_overall_pr_auc.png", latex_content, report_figures_abs_dir, baseline_metric='PR_AUC_Baseline')
@@ -316,7 +313,6 @@ def main_report_generation():
         logging.error(f"Failed to generate Table 1: {e}", exc_info=True); latex_content.append("Table 1 could not be generated.\n")
     
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Detailed Analysis')}")
-    # ... (The rest of the script, including other figures, tables, and sections, is identical to the previous complete version)
     logging.info("Generating Figure 4: Performance vs. Dimension...")
     try:
         dr_methods_to_plot = sorted(df_agg['DR_Method'].unique())
@@ -385,13 +381,14 @@ def main_report_generation():
                 latex_content.append(f"No 2D results found in representative replicate for this target/representation.\n"); continue
             plots_added_for_repr = False
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
-                strategies_to_plot = [{"dir_leaf": dr_params["short_name"].replace('-', '_'), "title": dr_params["short_name"]}]
+                dr_short_name_base = dr_params["short_name"]
+                strategies_to_plot = [{"dir_leaf": dr_short_name_base.replace('-', '_'), "title": dr_short_name_base}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
-                    strategies_to_plot.append({"dir_leaf": f"{dr_params['short_name']}-Coembed".replace('-', '_'), "title": f"{dr_params['short_name']}-Coembed"})
+                    strategies_to_plot.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "title": f"{dr_short_name_base}-Coembed"})
                 for strategy in strategies_to_plot:
                     strat_dir_path = os.path.join(rep_results_base, strategy['dir_leaf'])
                     if os.path.exists(strat_dir_path):
-                        base_dr_name_for_plot_file = dr_params["short_name"].replace('-', '_')
+                        base_dr_name_for_plot_file = dr_short_name_base.replace('-', '_')
                         scatter_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_scatter.png"
                         hist_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_min_distances_hist_ACTIVES.png"
                         scatter_src = os.path.join(strat_dir_path, scatter_fname_orig)
