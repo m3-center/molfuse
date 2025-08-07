@@ -95,17 +95,15 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
                                    f"  \\label{{tab:{clean_label}}}"])
         df_for_latex = dataframe.copy()
         for col in df_for_latex.columns:
-            # Check if column is pre-formatted Mean ± SD string
             is_preformatted = False
-            try: # Add try-except for safety on diverse data
+            try:
                 if isinstance(df_for_latex[col].iloc[0], str) and '$\\pm$' in df_for_latex[col].iloc[0]:
                     is_preformatted = True
-            except IndexError:
-                is_preformatted = False
-
+            except IndexError: is_preformatted = False
 
             if is_preformatted:
-                df_for_latex[col] = df_for_latex[col].apply(escape_latex_text_content)
+                # The string is already formatted, just escape potential special chars
+                df_for_latex[col] = df_for_latex[col].apply(lambda x: x.replace('_', r'\_'))
             elif pd.api.types.is_numeric_dtype(df_for_latex[col]):
                 df_for_latex[col] = df_for_latex[col].apply(
                     lambda x: f"{x:.3f}" if pd.notna(x) and isinstance(x, (float, np.floating)) and ( (abs(x) >= 0.001 and abs(x) < 1000) or x==0) else 
@@ -155,8 +153,7 @@ def get_baseline_from_ranked_file(ranked_file_path):
             logging.warning(f"Ranked list file not found for baseline calculation: {ranked_file_path}")
             return np.nan
         df_ranked = pd.read_csv(ranked_file_path)
-        if df_ranked.empty or 'TYPE' not in df_ranked.columns:
-            return np.nan
+        if df_ranked.empty or 'TYPE' not in df_ranked.columns: return np.nan
         counts = df_ranked['TYPE'].value_counts()
         num_actives = counts.get('HELDOUT_ACTIVE', 0); num_decoys = counts.get('DECOY', 0)
         total = num_actives + num_decoys
@@ -183,21 +180,16 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
                     strategies_to_check.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "label": "Co-embedding"})
                 for strategy in strategies_to_check:
-                    # --- NEW: EXCLUSION LOGIC ---
-                    if (repr_type == 'fingerprints' and 
-                        strategy['label'] == 'Projection' and 
+                    if (repr_type == 'fingerprints' and strategy['label'] == 'Projection' and 
                         dr_short_name_base in ['UMAP-Euclidean', 'UMAP-Cosine']):
                         logging.info(f"Excluding known failing case: Repr={repr_type}, Strategy={strategy['label']}, DR={dr_short_name_base}")
                         continue
-                    # --- END EXCLUSION LOGIC ---
-
                     for dim_val in gs['simspace_dims_to_test']:
                         if dr_key == "tsne" and dim_val != 2: continue
                         strat_dir_path = os.path.join(target_results_base, f"dim_{dim_val}", strategy['dir_leaf'])
                         base_dr_name_for_metrics_file = dr_short_name_base.replace('-', '_')
                         metrics_filename = f"{target_id_name}_{repr_type}_{base_dr_name_for_metrics_file}_dim{dim_val}_ranking_metrics.csv"
                         metrics_file_path = os.path.join(strat_dir_path, metrics_filename)
-
                         if os.path.exists(metrics_file_path):
                             try:
                                 df_m = pd.read_csv(metrics_file_path)
@@ -205,12 +197,10 @@ def collect_metrics_from_replicates(replicate_run_details, config_main):
                                     metric_row = {'Replicate_Seed': replicate_seed, 'Target': target_info['display_name'],
                                                   'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name_base,
                                                   'Embedding_Strategy': strategy['label'], 'DIM': dim_val}
-                                    
                                     dr_part_for_ranked_filename = dr_short_name_base.upper().replace('-', '')
                                     ranked_list_filename = f"{target_id_name.upper()}-{dr_part_for_ranked_filename}-{dim_val}D-{repr_type.upper()}.csv"
                                     ranked_list_path = os.path.join(strat_dir_path, ranked_list_filename)
                                     metric_row['PR_AUC_Baseline'] = get_baseline_from_ranked_file(ranked_list_path)
-
                                     column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc',
                                                   'ef_5%': 'EF_5Perc', 'ef_10%': 'EF_10Perc', 
                                                   'spearman_rho_affinity_vs_score': 'spearman_rho_affinity_vs_score'}
@@ -313,59 +303,87 @@ def main_report_generation():
         logging.error(f"Failed to generate Table 1: {e}", exc_info=True); latex_content.append("Table 1 could not be generated.\n")
     
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Detailed Analysis')}")
-    logging.info("Generating Figure 4: Performance vs. Dimension...")
-    try:
-        dr_methods_to_plot = sorted(df_agg['DR_Method'].unique())
-        num_dr_methods = len(dr_methods_to_plot)
-        fig4, axes4 = plt.subplots(num_dr_methods, 2, figsize=(14, 4 * num_dr_methods), sharex=True, sharey=True, squeeze=False)
-        fig4.suptitle("Performance vs. Similarity Space Dimension", fontsize=14, y=1.0)
-        for i, dr_method in enumerate(dr_methods_to_plot):
-            for j, repr_type in enumerate(['Features', 'Fingerprints']):
-                ax = axes4[i, j]
-                df_subset = df_agg[(df_agg['DR_Method'] == dr_method) & (df_agg['Representation'] == repr_type)]
-                if not df_subset.empty:
-                    for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
-                        strat_metrics = df_subset[df_subset['Embedding_Strategy'] == strat_label]
-                        dim_summary = strat_metrics.groupby('DIM')['ROC_AUC'].agg(['mean', 'std']).reset_index().fillna(0)
-                        ax.plot(dim_summary['DIM'], dim_summary['mean'], marker='o', linestyle='-', label=strat_label)
-                        ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'], dim_summary['mean'] + dim_summary['std'], alpha=0.2)
-                ax.set_title(f"{dr_method} ({repr_type})"); ax.grid(True, linestyle=':'); ax.legend()
-                if i == 0: ax.set_ylim(0, 1.05)
-                if i == num_dr_methods - 1: ax.set_xlabel("SIMSPACE_DIM")
-                if j == 0: ax.set_ylabel("Mean ROC-AUC")
-        fig4.tight_layout(rect=[0, 0, 1, 0.98])
-        fig4_path = os.path.join(report_figures_abs_dir, "fig4_perf_vs_dim.png")
-        plt.savefig(fig4_path); plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig4_perf_vs_dim.png"),
-            "Mean ROC-AUC vs. Dimension, stratified by Representation and DR Method. Shaded areas represent $\\pm$1 SD across replicates and targets.",
-            "fig-perf-vs-dim", figure_width="\\textwidth")
-    except Exception as e: logging.error(f"Failed to generate Figure 4: {e}", exc_info=True)
+    
+    def create_perf_vs_dim_plot(df, metric, y_label, title, filename, latex_content_list, report_figures_dir):
+        logging.info(f"Generating Performance vs. Dimension Chart: {title}...")
+        try:
+            dr_methods_to_plot = sorted(df['DR_Method'].unique())
+            num_dr_methods = len(dr_methods_to_plot)
+            fig, axes = plt.subplots(num_dr_methods, 2, figsize=(14, 4 * num_dr_methods), sharex=True, sharey=True, squeeze=False)
+            fig.suptitle(title, fontsize=14, y=1.0)
 
-    logging.info("Generating Table 2: Best Config per Target...")
-    try:
-        mean_roc_per_config = df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])['ROC_AUC'].mean().reset_index()
-        idx = mean_roc_per_config.groupby(['Target'])['ROC_AUC'].idxmax()
-        df_best_per_target = mean_roc_per_config.loc[idx]
-        df_best_per_target_std = pd.merge(df_best_per_target, df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])['ROC_AUC'].std().reset_index().rename(columns={'ROC_AUC': 'SD_ROC_AUC'}),
-            on=['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'], how='left').fillna(0)
-        df_best_per_target_std['Mean_ROC_AUC'] = df_best_per_target_std.apply(lambda r: f"{r['ROC_AUC']:.3f} $\\pm$ {r['SD_ROC_AUC']:.3f}", axis=1)
-        df_best_per_target_display = df_best_per_target_std[['Target','Representation','DR_Method','Embedding_Strategy','DIM','Mean_ROC_AUC']].copy()
-        df_best_per_target_display.rename(columns={'DIM': 'Optimal_Dimension'}, inplace=True)
-        add_dataframe_as_latex_table_standalone(latex_content, df_best_per_target_display, "Best performing configuration for each target, based on highest mean ROC-AUC across replicates.", "tab-best-per-target", font_size=r"\\tiny")
-    except Exception as e: logging.error(f"Failed to generate Table 2: {e}", exc_info=True)
+            for i, dr_method in enumerate(dr_methods_to_plot):
+                for j, repr_type in enumerate(['Features', 'Fingerprints']):
+                    ax = axes[i, j]
+                    df_subset = df[(df['DR_Method'] == dr_method) & (df['Representation'] == repr_type)]
+                    if not df_subset.empty:
+                        for strat_label in sorted(df_subset['Embedding_Strategy'].unique()):
+                            strat_metrics = df_subset[df_subset['Embedding_Strategy'] == strat_label]
+                            dim_summary = strat_metrics.groupby('DIM')[metric].agg(['mean', 'std']).reset_index().fillna(0)
+                            ax.plot(dim_summary['DIM'], dim_summary['mean'], marker='o', linestyle='-', label=strat_label)
+                            ax.fill_between(dim_summary['DIM'], dim_summary['mean'] - dim_summary['std'], dim_summary['mean'] + dim_summary['std'], alpha=0.2)
+                    ax.set_title(f"{dr_method} ({repr_type})"); ax.grid(True, linestyle=':'); ax.legend()
+                    if i == 0 and 'AUC' in metric: ax.set_ylim(0, 1.05)
+                    if i == num_dr_methods - 1: ax.set_xlabel("SIMSPACE_DIM")
+                    if j == 0: ax.set_ylabel(y_label)
+            
+            fig.tight_layout(rect=[0, 0, 1, 0.98])
+            fig_path = os.path.join(report_figures_dir, filename)
+            plt.savefig(fig_path); plt.close()
+            add_figure_to_latex_standalone(latex_content, os.path.join("figures", filename),
+                f"{y_label} vs. Dimension, stratified by Representation and DR Method. Shaded areas represent $\\pm$1 SD across replicates and targets.",
+                f"fig-{clean_for_label(filename)}", figure_width="\\textwidth")
+        except Exception as e:
+            logging.error(f"Failed to generate chart '{title}': {e}", exc_info=True)
 
-    logging.info("Generating Figure 5: Heatmap of Performance...")
-    try:
-        heatmap_data = df_agg.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy'])['ROC_AUC'].mean().reset_index()
-        heatmap_pivot = heatmap_data.pivot_table(index=['Target', 'Representation'], columns=['DR_Method', 'Embedding_Strategy'], values='ROC_AUC')
-        plt.figure(figsize=(16, 10))
-        sns.heatmap(heatmap_pivot, annot=True, fmt=".3f", cmap="viridis", linewidths=.5, annot_kws={"size": 8})
-        plt.title("Heatmap of Best Mean ROC-AUC by Target, Representation, and Method")
-        plt.xticks(rotation=45, ha="right"); plt.yticks(rotation=0); plt.tight_layout()
-        fig5_path = os.path.join(report_figures_abs_dir, "fig5_heatmap.png")
-        plt.savefig(fig5_path); plt.close()
-        add_figure_to_latex_standalone(latex_content, os.path.join("figures", "fig5_heatmap.png"), "Heatmap of mean ROC-AUC performance. Each cell shows the highest mean ROC-AUC achieved for that configuration, maximized over all tested dimensions.", "fig-heatmap", figure_width="\\textwidth")
-    except Exception as e: logging.error(f"Failed to generate Figure 5: {e}", exc_info=True)
+    create_perf_vs_dim_plot(df_agg, 'ROC_AUC', "Mean ROC-AUC", "Performance vs. Dimension (ROC-AUC)", "fig4_perf_vs_dim_roc_auc.png", latex_content, report_figures_abs_dir)
+    create_perf_vs_dim_plot(df_agg, 'PR_AUC', "Mean PR-AUC", "Performance vs. Dimension (PR-AUC)", "fig5_perf_vs_dim_pr_auc.png", latex_content, report_figures_abs_dir)
+    create_perf_vs_dim_plot(df_agg, 'EF_1Perc', "Mean EF@1%", "Performance vs. Dimension (EF@1%)", "fig6_perf_vs_dim_ef1.png", latex_content, report_figures_abs_dir)
+
+    def create_best_config_table(df, metric, table_caption, table_label, latex_content_list):
+        logging.info(f"Generating Best Config Table by {metric}...")
+        try:
+            df_metric_valid = df.dropna(subset=[metric])
+            if df_metric_valid.empty:
+                logging.warning(f"No valid data for metric '{metric}' to generate best config table.")
+                return
+            mean_metric_per_config = df_metric_valid.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])[metric].mean().reset_index()
+            idx = mean_metric_per_config.groupby(['Target'])[metric].idxmax()
+            df_best_per_target = mean_metric_per_config.loc[idx]
+            df_best_per_target_std = pd.merge(df_best_per_target, df_metric_valid.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'])[metric].std().reset_index().rename(columns={metric: f'SD_{metric}'}),
+                on=['Target', 'Representation', 'DR_Method', 'Embedding_Strategy', 'DIM'], how='left').fillna(0)
+            df_best_per_target_std[f'Mean_{metric}'] = df_best_per_target_std.apply(lambda r: f"{r[metric]:.3f} $\\pm$ {r[f'SD_{metric}']:.3f}", axis=1)
+            df_best_display = df_best_per_target_std[['Target','Representation','DR_Method','Embedding_Strategy','DIM',f'Mean_{metric}']].copy()
+            df_best_display.rename(columns={'DIM': 'Optimal_Dimension'}, inplace=True)
+            add_dataframe_as_latex_table_standalone(latex_content, df_best_display, table_caption, table_label, font_size=r"\\tiny")
+        except Exception as e:
+            logging.error(f"Failed to generate table '{table_label}': {e}", exc_info=True)
+            
+    create_best_config_table(df_agg, 'ROC_AUC', "Best performing configuration for each target by Mean ROC-AUC.", "tab-best-per-target-roc-auc", latex_content)
+    create_best_config_table(df_agg, 'PR_AUC', "Best performing configuration for each target by Mean PR-AUC.", "tab-best-per-target-pr-auc", latex_content)
+    create_best_config_table(df_agg, 'EF_1Perc', "Best performing configuration for each target by Mean EF@1%.", "tab-best-per-target-ef1", latex_content)
+
+    def create_heatmap(df, metric, title, filename, latex_content_list, report_figures_dir):
+        logging.info(f"Generating Heatmap: {title}...")
+        try:
+            heatmap_data = df.groupby(['Target', 'Representation', 'DR_Method', 'Embedding_Strategy'])[metric].mean().reset_index()
+            heatmap_pivot = heatmap_data.pivot_table(index=['Target', 'Representation'], columns=['DR_Method', 'Embedding_Strategy'], values=metric)
+            plt.figure(figsize=(16, 10))
+            sns.heatmap(heatmap_pivot, annot=True, fmt=".3f", cmap="viridis", linewidths=.5, annot_kws={"size": 8})
+            plt.title(title)
+            plt.xticks(rotation=45, ha="right"); plt.yticks(rotation=0); plt.tight_layout()
+            fig_path = os.path.join(report_figures_dir, filename)
+            plt.savefig(fig_path); plt.close()
+            add_figure_to_latex_standalone(latex_content, os.path.join("figures", filename),
+                f"Heatmap of mean {metric} performance. Each cell shows the mean value achieved for that configuration, averaged over all tested dimensions and replicates.",
+                f"fig-{clean_for_label(filename)}", figure_width="\\textwidth")
+        except Exception as e:
+            logging.error(f"Failed to generate heatmap '{title}': {e}", exc_info=True)
+            latex_content.append(f"Figure ({title}) could not be generated.\n")
+
+    create_heatmap(df_agg, 'ROC_AUC', "Heatmap of Mean ROC-AUC", "fig7_heatmap_roc_auc.png", latex_content, report_figures_abs_dir)
+    create_heatmap(df_agg, 'PR_AUC', "Heatmap of Mean PR-AUC", "fig8_heatmap_pr_auc.png", latex_content, report_figures_abs_dir)
+    create_heatmap(df_agg, 'EF_1Perc', "Heatmap of Mean EF@1%", "fig9_heatmap_ef1.png", latex_content, report_figures_abs_dir)
     
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Illustrative Results for Representative Targets')}")
     representative_replicate_info = replicate_details_list[0]
@@ -382,13 +400,14 @@ def main_report_generation():
             plots_added_for_repr = False
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
                 dr_short_name_base = dr_params["short_name"]
-                strategies_to_plot = [{"dir_leaf": dr_short_name_base.replace('-', '_'), "title": dr_short_name_base}]
+                strategies_to_plot = [{"dir_leaf": dr_params["short_name"].replace('-', '_'), "title": dr_params["short_name"]}]
                 if gs.get("run_coembedding_for_pca_umap") and dr_params.get("allow_coembedding") and not dr_key == "tsne":
-                    strategies_to_plot.append({"dir_leaf": f"{dr_short_name_base}-Coembed".replace('-', '_'), "title": f"{dr_short_name_base}-Coembed"})
+                    strategies_to_plot.append({"dir_leaf": f"{dr_params['short_name']}-Coembed".replace('-', '_'), "title": f"{dr_params['short_name']}-Coembed"})
                 for strategy in strategies_to_plot:
+                    if (repr_type == 'fingerprints' and strategy['title'] in ['UMAP-Euclidean', 'UMAP-Cosine'] and 'Coembed' not in strategy['title']): continue
                     strat_dir_path = os.path.join(rep_results_base, strategy['dir_leaf'])
                     if os.path.exists(strat_dir_path):
-                        base_dr_name_for_plot_file = dr_short_name_base.replace('-', '_')
+                        base_dr_name_for_plot_file = dr_params["short_name"].replace('-', '_')
                         scatter_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_scatter.png"
                         hist_fname_orig = f"{target_id_name}_{repr_type}_{base_dr_name_for_plot_file}_dim2_min_distances_hist_ACTIVES.png"
                         scatter_src = os.path.join(strat_dir_path, scatter_fname_orig)
