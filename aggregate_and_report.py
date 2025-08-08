@@ -280,7 +280,6 @@ def main_report_generation():
     create_comparison_barchart(df_agg, 'ROC_AUC', "Mean ROC-AUC", "Overall Comparison by Mean ROC-AUC", "fig1_overall_roc_auc.png", latex_content, report_figures_abs_dir)
     create_comparison_barchart(df_agg, 'PR_AUC', "Mean PR-AUC", "Overall Comparison by Mean PR-AUC", "fig2_overall_pr_auc.png", latex_content, report_figures_abs_dir, baseline_metric='PR_AUC_Baseline')
     create_comparison_barchart(df_agg, 'EF_1Perc', "Mean EF@1%", "Overall Comparison by Mean Enrichment Factor @ 1%", "fig3_overall_ef1.png", latex_content, report_figures_abs_dir, log_scale=True)
-    create_comparison_barchart(df_agg, 'EF_5Perc', "Mean EF@5%", "Overall Comparison by Mean Enrichment Factor @ 5%", "fig4_overall_ef5.png", latex_content, report_figures_abs_dir, log_scale=True)
     
     logging.info("Generating Table 1: Main Summary of Aggregated Metrics...")
     try:
@@ -288,15 +287,14 @@ def main_report_generation():
             Mean_ROC_AUC=('ROC_AUC', 'mean'), SD_ROC_AUC=('ROC_AUC', 'std'),
             Mean_PR_AUC=('PR_AUC', 'mean'), SD_PR_AUC=('PR_AUC', 'std'),
             Mean_EF_1Perc=('EF_1Perc', 'mean'), SD_EF_1Perc=('EF_1Perc', 'std'),
-            Mean_EF_5Perc=('EF_5Perc', 'mean'), SD_EF_5Perc=('EF_5Perc', 'std'),
             Mean_Spearman_Rho=('spearman_rho_affinity_vs_score', 'mean'), SD_Spearman_Rho=('spearman_rho_affinity_vs_score', 'std')
         ).reset_index().fillna(0)
         
-        for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc', 'EF_5Perc', 'Spearman_Rho']:
+        for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc', 'Spearman_Rho']:
             mean_col, std_col = f'Mean_{metric}', f'SD_{metric}'
             df_table1_agg[metric] = df_table1_agg.apply(lambda r: f"{r[mean_col]:.3f} $\\pm$ {r[std_col]:.3f}" if pd.notna(r[mean_col]) else "N/A", axis=1)
         
-        df_table1_display = df_table1_agg[['Representation', 'DR_Method', 'Embedding_Strategy', 'ROC_AUC', 'PR_AUC', 'EF_1Perc', 'EF_5Perc', 'Spearman_Rho']].copy()
+        df_table1_display = df_table1_agg[['Representation', 'DR_Method', 'Embedding_Strategy', 'ROC_AUC', 'PR_AUC', 'EF_1Perc', 'Spearman_Rho']].copy()
         df_table1_display.sort_values(by=['Representation','DR_Method','Embedding_Strategy'], inplace=True)
         add_dataframe_as_latex_table_standalone(latex_content, df_table1_display,
             "Aggregated Performance Metrics (Mean $\\pm$ SD). Values are averaged over all replicates, targets, and dimensions.",
@@ -341,7 +339,6 @@ def main_report_generation():
     create_perf_vs_dim_plot(df_agg, 'ROC_AUC', "Mean ROC-AUC", "Performance vs. Dimension (ROC-AUC)", "fig4_perf_vs_dim_roc_auc.png", latex_content, report_figures_abs_dir)
     create_perf_vs_dim_plot(df_agg, 'PR_AUC', "Mean PR-AUC", "Performance vs. Dimension (PR-AUC)", "fig5_perf_vs_dim_pr_auc.png", latex_content, report_figures_abs_dir)
     create_perf_vs_dim_plot(df_agg, 'EF_1Perc', "Mean EF@1%", "Performance vs. Dimension (EF@1%)", "fig6_perf_vs_dim_ef1.png", latex_content, report_figures_abs_dir)
-    create_perf_vs_dim_plot(df_agg, 'EF_5Perc', "Mean EF@5%", "Performance vs. Dimension (EF@5%)", "fig7_perf_vs_dim_ef5.png", latex_content, report_figures_abs_dir)
 
     def create_best_config_table(df, metric, table_caption, table_label, latex_content_list):
         logging.info(f"Generating Best Config Table by {metric}...")
@@ -365,7 +362,6 @@ def main_report_generation():
     create_best_config_table(df_agg, 'ROC_AUC', "Best performing configuration for each target by Mean ROC-AUC.", "tab-best-per-target-roc-auc", latex_content)
     create_best_config_table(df_agg, 'PR_AUC', "Best performing configuration for each target by Mean PR-AUC.", "tab-best-per-target-pr-auc", latex_content)
     create_best_config_table(df_agg, 'EF_1Perc', "Best performing configuration for each target by Mean EF@1%.", "tab-best-per-target-ef1", latex_content)
-    create_best_config_table(df_agg, 'EF_5Perc', "Best performing configuration for each target by Mean EF@5%.", "tab-best-per-target-ef5", latex_content)
 
     def create_heatmap(df, metric, title, filename, latex_content_list, report_figures_dir):
         logging.info(f"Generating Heatmap: {title}...")
@@ -388,8 +384,7 @@ def main_report_generation():
     create_heatmap(df_agg, 'ROC_AUC', "Heatmap of Mean ROC-AUC", "fig7_heatmap_roc_auc.png", latex_content, report_figures_abs_dir)
     create_heatmap(df_agg, 'PR_AUC', "Heatmap of Mean PR-AUC", "fig8_heatmap_pr_auc.png", latex_content, report_figures_abs_dir)
     create_heatmap(df_agg, 'EF_1Perc', "Heatmap of Mean EF@1%", "fig9_heatmap_ef1.png", latex_content, report_figures_abs_dir)
-    create_heatmap(df_agg, 'EF_5Perc', "Heatmap of Mean EF@5%", "fig10_heatmap_ef5.png", latex_content, report_figures_abs_dir)
-
+    
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Illustrative Results for Representative Targets')}")
     representative_replicate_info = replicate_details_list[0]
     logging.info(f"Using replicate run '{os.path.basename(representative_replicate_info['path'])}' for illustrative 2D plots.")
