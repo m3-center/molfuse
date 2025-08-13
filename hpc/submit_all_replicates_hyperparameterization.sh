@@ -6,7 +6,7 @@
 CONFIG_DIR="hyperparam_configs"
 
 # Define your 5 random seeds for the replicates.
-RANDOM_SEEDS=(42 43 44 45 46) 
+RANDOM_SEEDS=(42) # 43 44 45 46) 
 
 # The name of your SLURM script template.
 SLURM_SCRIPT_TEMPLATE="hpc/template_slurm_job.sh"
@@ -81,7 +81,7 @@ for config_file in "${CONFIG_DIR}"/*.json; do
         fi
         
         # Optional: Add a small delay between submissions if your scheduler is sensitive
-        # sleep 1 
+        sleep 5 
     done
 done
 
