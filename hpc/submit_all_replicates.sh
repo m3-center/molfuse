@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # --- Configuration ---
-REPRESENTATION_MODES=("fingerprints" "features")
+REPRESENTATION_MODES=("fingerprints") # "features"
+echo "Using representation modes: ${REPRESENTATION_MODES[*]}"
+
 # Define your 5 random seeds
 RANDOM_SEEDS=(42 43 44 45 46) 
 

@@ -303,7 +303,7 @@ def main():
                 for strategy_details in strategies_to_find_results_for:
                     results_dir_leaf_fs = strategy_details["output_dir_leaf_name_fs"] # e.g., PCA, PCA_Coembed (filesystem safe)
                     embedding_strat_label = strategy_details["embedding_label_for_metrics"]
-                    # plot_legend_label = strategy_details["plot_legend_label"] # Not directly used for filename
+                    plot_legend_label = strategy_details["plot_legend_label"] # Not directly used for filename
                     logging.info(f"      Checking Strategy: '{embedding_strat_label}' (dir leaf: {results_dir_leaf_fs})")
                     dim_vs_roc_auc_data_strat = []
 

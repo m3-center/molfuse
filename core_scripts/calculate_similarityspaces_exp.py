@@ -178,7 +178,6 @@ def process_similarity_calculations(
     logging.info(f"Processing for: {base_name_prefix}")
     
     # --- NEW CHUNKING DATA PREPARATION FLOW ---
-    
     # Determine descriptor columns from a small sample of the first file
     try:
         df_sample = pd.read_csv(chembl_mf_data_path, nrows=5)
@@ -369,12 +368,15 @@ def process_similarity_calculations(
             attempt_cuml_umap = CUML_AVAILABLE 
 
             if representation_type == "fingerprints":
-                logging.info(f"For fingerprints, UMAP ({metric_name}) will run on the PCA pre-reduced data.")
-                current_X_main_umap = X_main_pre_reduced_for_manifold
-                current_X_target_coembed_umap = X_target_pre_reduced_for_manifold_coembed
-                if metric_name.lower() in ["hamming", "manhattan"]:
+                if metric_name.lower() in ["hamming", "manhattan", "jaccard"]:
+                    current_X_main_umap = X_original_main_valid
+                    current_X_target_coembed_umap = X_target_original_for_coembed
                     attempt_cuml_umap = False 
-                    logging.info(f"Forcing scikit-learn UMAP for '{metric_name}' on fingerprints (after PCA).")
+                    logging.info(f"UMAP '{metric_name}' on fingerprints: using UNSCALED data and forcing scikit-learn.")
+                else: # e.g., Euclidean UMAP on fingerprints, now on pre-reduced data
+                    logging.info(f"For fingerprints, UMAP ({metric_name}) will run on the PCA pre-reduced data.")
+                    current_X_main_umap = X_main_pre_reduced_for_manifold
+                    current_X_target_coembed_umap = X_target_pre_reduced_for_manifold_coembed
             
             umap_model_main_for_projection = None 
             try: 
@@ -559,7 +561,6 @@ def process_similarity_calculations(
 
 
 if __name__ == "__main__":
-    # This block is identical to the last complete version.
     parser = argparse.ArgumentParser(description="Calculate similarity spaces.")
     parser.add_argument("--chembl_mf_data_path", required=True)
     parser.add_argument("--zinc_data_path", default=None)
@@ -577,6 +578,7 @@ if __name__ == "__main__":
     parser.add_argument("--umap_metric_to_run_cosine", action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_manhattan", action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_hamming", action='store_true', default=False)
+    parser.add_argument("--umap_metric_to_run_jaccard", action='store_true', default=False)
     parser.add_argument("--tsne_perplexity", type=float, default=30.0)
     parser.add_argument("--tsne_pca_components", type=int, default=50)
     parser.add_argument("--n_neighbors", type=int, default=None, help="N_neighbors for cuML tSNE.") 
@@ -600,6 +602,7 @@ if __name__ == "__main__":
         if args_main.umap_metric_to_run_cosine: active_umap_metrics_main['cosine'] = True
         if args_main.umap_metric_to_run_manhattan: active_umap_metrics_main['manhattan'] = True
         if args_main.umap_metric_to_run_hamming: active_umap_metrics_main['hamming'] = True
+        if args_main.umap_metric_to_run_jaccard: active_umap_metrics_main['jaccard'] = True
         if not active_umap_metrics_main: logging.warning("UMAP requested but no UMAP metrics enabled.")
     else: logging.info("UMAP method not requested.")
     
