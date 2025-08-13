@@ -17,8 +17,8 @@
       5
     ],
     "tsne_pca_components": 100,
-    "workspace_base_dir": "experiment_workspace/",
-    "final_report_dir": "final_report/",
+    "workspace_base_dir": "experiment_workspace_hyperparam_sweep/",
+    "final_report_dir": "final_report_hyperparam_sweep/",
     "n_jobs_molcalcs": -1,
     "rdkit_features_list_target": [
       "DipoleMoment",

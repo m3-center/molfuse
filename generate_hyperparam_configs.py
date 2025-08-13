@@ -10,6 +10,11 @@ BASE_CONFIG_FILE = "experiment_config.json"
 # Directory to save the generated config files
 OUTPUT_DIR = "hyperparam_configs"
 
+# --- NEW: Define dedicated output directories for the sweep ---
+SWEEP_WORKSPACE_DIR = "experiment_workspace_hyperparam_sweep/"
+SWEEP_REPORT_DIR = "final_report_hyperparam_sweep/"
+# --- END NEW ---
+
 # Target protein to use for the sweep (must match an 'id_name' in the base config)
 TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 
@@ -21,7 +26,6 @@ UMAP_N_NEIGHBORS_OPTIONS = [5, 15, 30, 60]
 TSNE_PCA_COMPONENTS_OPTIONS = [25, 50, 100]
 
 # DR methods to test for each representation
-# This allows us to only test UMAP-Euclidean for Features and UMAP-Jaccard for Fingerprints
 SWEEP_CONFIG = {
     "features": {
         "dr_methods": ["umap_euclidean"]
@@ -47,9 +51,9 @@ def generate_configs():
         print(f"ERROR: Could not load base config file '{BASE_CONFIG_FILE}'. Aborting. Error: {e}")
         return
 
-    # 2. Create the output directory
+    # 2. Create the output directory for the config files
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    print(f"Output directory for configs: {OUTPUT_DIR}")
+    print(f"Output directory for generated configs: {OUTPUT_DIR}")
 
     # 3. Filter for the single target for the sweep
     target_config_list = [t for t in base_config.get("targets", []) if t.get("id_name") == TARGET_FOR_SWEEP]
@@ -67,21 +71,22 @@ def generate_configs():
             for n_neighbors in UMAP_N_NEIGHBORS_OPTIONS:
                 print(f"  Creating config for: {repr_type}, {dr_method_key}, n_neighbors={n_neighbors}")
                 
-                # Create a deep copy to avoid modifying the original
                 new_config = copy.deepcopy(base_config)
                 
                 # --- Modify config for this specific run ---
                 # Set global settings
                 new_config["global_settings"]["simspace_dims_to_test"] = SIMSPACE_DIM_FOR_SWEEP
+                # --- NEW: Set dedicated output directories ---
+                new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
+                new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+                # --- END NEW ---
                 
-                # Isolate the single target
                 new_config["targets"] = target_config_list
-                
-                # Isolate the single representation
                 new_config["representations"] = [repr_type]
                 
                 # Isolate the single DR method and set the hyperparameter
-                original_dr_method = new_config["dimensionality_reduction_methods"][dr_method_key]
+                # Get a fresh copy from the original base_config to avoid accumulated changes
+                original_dr_method = copy.deepcopy(base_config["dimensionality_reduction_methods"][dr_method_key])
                 original_dr_method["n_neighbors"] = n_neighbors # Add/overwrite the n_neighbors value
                 new_config["dimensionality_reduction_methods"] = {
                     dr_method_key: original_dr_method
@@ -107,15 +112,16 @@ def generate_configs():
             # Set global settings
             new_config["global_settings"]["simspace_dims_to_test"] = SIMSPACE_DIM_FOR_SWEEP
             new_config["global_settings"]["tsne_pca_components"] = pca_comps # Set the PCA components
+            # --- NEW: Set dedicated output directories ---
+            new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
+            new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+            # --- END NEW ---
             
-            # Isolate the single target
             new_config["targets"] = target_config_list
-
-            # Isolate the single representation
             new_config["representations"] = [repr_type]
             
             # Isolate the single DR method
-            original_tsne_method = new_config["dimensionality_reduction_methods"]["tsne"]
+            original_tsne_method = copy.deepcopy(base_config["dimensionality_reduction_methods"]["tsne"])
             new_config["dimensionality_reduction_methods"] = {
                 "tsne": original_tsne_method
             }
@@ -128,6 +134,7 @@ def generate_configs():
             print(f"    -> Saved to {filepath}")
 
     print("\n--- Hyperparameter configuration generation complete! ---")
+    print(f"All generated configs will output to base directory: '{SWEEP_WORKSPACE_DIR}'")
 
 
 if __name__ == "__main__":
