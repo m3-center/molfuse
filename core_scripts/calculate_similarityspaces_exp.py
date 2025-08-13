@@ -361,6 +361,8 @@ def process_similarity_calculations(
             if not run_metric_flag: continue
             
             umap_config = dr_method_configs.get(f"umap_{metric_name}", {})
+            n_neighbors_val = umap_config.get('n_neighbors', 15)
+            min_dist_val = umap_config.get('min_dist', 0.1)
             umap_cols = [f"UMAP-{metric_name.capitalize()}-{i+1}" for i in range(simspace_dim)]
             
             current_X_main_umap = X_scaled_main
@@ -382,10 +384,10 @@ def process_similarity_calculations(
             try: 
                 if attempt_cuml_umap: 
                     logging.info(f"Attempting cuML UMAP for {metric_name} (projection).")
-                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
+                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
                 elif SKLEARN_UMAP_AVAILABLE: 
                     logging.info(f"Using scikit-learn UMAP for {metric_name} (projection).")
-                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
+                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
                 else: 
                     logging.warning(f"No suitable UMAP library for NON-CO-EMBEDDED UMAP ({metric_name}). Skipping."); 
                     for col in umap_cols: df_results_main[col] = np.nan 
