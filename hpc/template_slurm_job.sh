@@ -2,8 +2,8 @@
 #SBATCH --partition=gpu4          # partition / wait queue
 #SBATCH --nodes=1                # number of nodes
 #SBATCH --ntasks-per-node=32      # number of tasks per node (8 is often a good number for data loading/Python overhead for a single GPU job)
-#SBATCH --mem=180G               # memory per node
-#SBATCH --time=3-00:00:00        # total runtime of job allocation (3 days)
+#SBATCH --mem=360G               # memory per node
+#SBATCH --time=0-12:00:00        # total runtime of job allocation 
 #SBATCH --gres=gpu:1             # Request 1 GPU
 
 # --- Arguments passed from submit_all_replicates.sh ---
