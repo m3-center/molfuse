@@ -81,17 +81,16 @@ def parse_hyperparams_from_log(log_path):
     try:
         with open(log_path, 'r') as f: content = f.read()
         
-        # Look for UMAP init line to get n_neighbors
-        umap_match = re.search(r"n_neighbors=(\d+)", content)
+        # Look for UMAP init line to get n_neighbors from kwargs
+        umap_match = re.search(r"Initialized (?:cuml|scikit-learn) UMAP.*?n_neighbors.?: (\d+)", content)
         if umap_match:
             hyperparams['n_neighbors'] = int(umap_match.group(1))
-            
-        # Look for the PCA step specific to tSNE
+
+        # Look for the PCA step specific to tSNE or the pre-reduction step for fingerprints
         tsne_pca_match = re.search(r"t-SNE initial PCA to (\d+) components", content)
         if tsne_pca_match:
             hyperparams['tsne_pca_components'] = int(tsne_pca_match.group(1))
-        # Fallback for fingerprints where PCA is done before tSNE
-        elif "fingerprints" in log_path:
+        else: # Fallback for fingerprints where PCA is done before tSNE
              fp_pca_match = re.search(r"Applying initial PCA to (\d+) components before UMAP/t-SNE", content)
              if fp_pca_match:
                  hyperparams['tsne_pca_components'] = int(fp_pca_match.group(1))
@@ -129,6 +128,7 @@ def collect_sweep_metrics(base_dir, seeds_to_include, config):
             if df_m.empty: continue
             
             dr_method_base_name = "Unknown"
+            # Use main config only to map directory name (e.g., UMAP_Euclidean) back to display name (e.g., UMAP-Euclidean)
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
                 if strategy_dir.startswith(dr_params["short_name"].replace('-', '_')):
                     dr_method_base_name = dr_params["short_name"]
@@ -192,24 +192,17 @@ def create_hyperparam_plot(df_subset, x_metric, title, filename, report_figures_
 def main():
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a focused LaTeX report.")
     parser.add_argument("--base_experiment_dir", default="experiment_workspace_hyperparam_sweep/", help="Base directory containing all hyperparameter sweep run folders.")
-    parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment_config.json file for context.")
+    parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment_config.json file for context (used for DR method name mapping).")
     parser.add_argument("--output_report_dir", default="final_report_hyperparam_sweep/", help="Directory to save the final LaTeX report.")
     args = parser.parse_args()
 
     logging.info(f"--- STARTING HYPERPARAMETER SWEEP ANALYSIS ---")
     
-    # Corrected logic: Use main_config_path for a FILE, not a directory
     try:
         with open(args.main_config_path, 'r') as f:
             config_main = json.load(f)
-    except IsADirectoryError:
-        logging.error(f"Path provided for --main_config_path is a directory, but a file is required. Path: '{args.main_config_path}'")
-        return
-    except FileNotFoundError:
-        logging.error(f"Main config file not found at: '{args.main_config_path}'")
-        return
     except Exception as e:
-        logging.error(f"Error loading main config file: {e}")
+        logging.error(f"Could not load main config file '{args.main_config_path}'. This is needed for DR method name mapping. Aborting. Error: {e}")
         return
     
     report_run_id = f"hyperparam_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
