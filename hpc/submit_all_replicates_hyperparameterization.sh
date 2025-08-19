@@ -9,7 +9,8 @@ CONFIG_DIR="hyperparam_configs"
 RANDOM_SEEDS=(42 43 44 45 46) # 43 44 45 46) 
 
 # The name of your SLURM script template.
-SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization.sh"
+# SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization.sh"
+SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization_cpu.sh"
 
 # --- Pre-submission Checks ---
 
@@ -81,7 +82,7 @@ for config_file in "${CONFIG_DIR}"/*.json; do
         fi
         
         # Optional: Add a small delay between submissions if your scheduler is sensitive
-        sleep 5 
+        sleep 2
     done
 done
 
