@@ -9,7 +9,7 @@ CONFIG_DIR="hyperparam_configs"
 RANDOM_SEEDS=(42) # 43 44 45 46) 
 
 # The name of your SLURM script template.
-SLURM_SCRIPT_TEMPLATE="hpc/template_slurm_job.sh"
+SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization.sh"
 
 # --- Pre-submission Checks ---
 
