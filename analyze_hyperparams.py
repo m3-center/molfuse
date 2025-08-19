@@ -80,10 +80,22 @@ def parse_hyperparams_from_log(log_path):
         return hyperparams
     try:
         with open(log_path, 'r') as f: content = f.read()
+        
+        # Look for UMAP init line to get n_neighbors
         umap_match = re.search(r"n_neighbors=(\d+)", content)
-        if umap_match: hyperparams['n_neighbors'] = int(umap_match.group(1))
+        if umap_match:
+            hyperparams['n_neighbors'] = int(umap_match.group(1))
+            
+        # Look for the PCA step specific to tSNE
         tsne_pca_match = re.search(r"t-SNE initial PCA to (\d+) components", content)
-        if tsne_pca_match: hyperparams['tsne_pca_components'] = int(tsne_pca_match.group(1))
+        if tsne_pca_match:
+            hyperparams['tsne_pca_components'] = int(tsne_pca_match.group(1))
+        # Fallback for fingerprints where PCA is done before tSNE
+        elif "fingerprints" in log_path:
+             fp_pca_match = re.search(r"Applying initial PCA to (\d+) components before UMAP/t-SNE", content)
+             if fp_pca_match:
+                 hyperparams['tsne_pca_components'] = int(fp_pca_match.group(1))
+
     except Exception as e:
         logging.error(f"Error parsing log file {log_path}: {e}")
     return hyperparams
@@ -91,7 +103,6 @@ def parse_hyperparams_from_log(log_path):
 def collect_sweep_metrics(base_dir, seeds_to_include, config):
     all_metrics = []
     logging.info(f"Scanning for metrics files in base directory: {base_dir}")
-    # This pattern finds all possible metrics files from the sweep
     pattern = os.path.join(base_dir, "run_seed*", "*", "results", "*", "dim_*", "*", "*_ranking_metrics.csv")
     metrics_files = glob.glob(pattern)
 
@@ -101,7 +112,6 @@ def collect_sweep_metrics(base_dir, seeds_to_include, config):
 
     for metrics_file_path in metrics_files:
         try:
-            # --- Parse context from the file path ---
             path_parts = metrics_file_path.split(os.sep)
             run_dir_name = next(p for p in path_parts if p.startswith("run_seed"))
             target_id_name = path_parts[path_parts.index(run_dir_name) + 1]
@@ -118,14 +128,12 @@ def collect_sweep_metrics(base_dir, seeds_to_include, config):
             df_m = pd.read_csv(metrics_file_path)
             if df_m.empty: continue
             
-            # Find the base DR method name from the config that matches the strategy directory
             dr_method_base_name = "Unknown"
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
                 if strategy_dir.startswith(dr_params["short_name"].replace('-', '_')):
                     dr_method_base_name = dr_params["short_name"]
                     break
             
-            # Find and parse the corresponding log file
             model_dir_path = os.path.join(os.path.dirname(metrics_file_path).split("results")[0], "models", repr_type, dim_str)
             base_name_prefix = f"{target_id_name}_{repr_type}_dim{dim_val}"
             log_filename = f"calculate_simspaces_{base_name_prefix}_seed{seed}.log"
@@ -189,7 +197,20 @@ def main():
     args = parser.parse_args()
 
     logging.info(f"--- STARTING HYPERPARAMETER SWEEP ANALYSIS ---")
-    with open(args.main_config_path, 'r') as f: config_main = json.load(f)
+    
+    # Corrected logic: Use main_config_path for a FILE, not a directory
+    try:
+        with open(args.main_config_path, 'r') as f:
+            config_main = json.load(f)
+    except IsADirectoryError:
+        logging.error(f"Path provided for --main_config_path is a directory, but a file is required. Path: '{args.main_config_path}'")
+        return
+    except FileNotFoundError:
+        logging.error(f"Main config file not found at: '{args.main_config_path}'")
+        return
+    except Exception as e:
+        logging.error(f"Error loading main config file: {e}")
+        return
     
     report_run_id = f"hyperparam_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
