@@ -506,9 +506,11 @@ def process_similarity_calculations(
                             if perp_final != float(tsne_params['perplexity']): logging.info(f"Adjusted t-SNE perplexity to {perp_final}")
                             tsne_model = None
                             tsne_init_kwargs = {'n_components': simspace_dim, 'perplexity': perp_final, 'random_state': current_random_state}
-                            cuml_verbose = 1 if logger.isEnabledFor(logging.INFO) else 0 
-                            if logger.isEnabledFor(logging.DEBUG): cuml_verbose = 4
-                            sklearn_verbose = 1 if logger.isEnabledFor(logging.DEBUG) else 0
+                            # cuml_verbose = 1 if logger.isEnabledFor(logging.INFO) else 0 
+                            # if logger.isEnabledFor(logging.DEBUG): cuml_verbose = 4
+                            # sklearn_verbose = 1 if logger.isEnabledFor(logging.DEBUG) else 0
+                            cuml_verbose = 0
+                            sklearn_verbose = 0
                             if attempt_cuml_tsne_final:
                                 tsne_init_kwargs.update({'method': 'barnes_hut', 'verbose': cuml_verbose})
                                 if tsne_params.get('n_neighbors') is not None: tsne_init_kwargs['n_neighbors'] = tsne_params['n_neighbors']

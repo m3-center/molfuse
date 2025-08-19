@@ -52,9 +52,9 @@ def run_command(command_list, step_name="Command", cwd=None):
         if process.stdout:
             for line in iter(process.stdout.readline, ''):
                 stripped_line = line.strip()
-                if stripped_line: # Avoid logging empty lines if not desired
+                if stripped_line:
                     logging.debug(f"[{step_name} STDOUT] {stripped_line}")
-                stdout_output_lines.append(line) # Keep original for potential error reporting
+                stdout_output_lines.append(line)
             process.stdout.close()
         
         stderr_accumulated = ""
@@ -71,11 +71,11 @@ def run_command(command_list, step_name="Command", cwd=None):
         if return_code == 0:
             logging.info(f"{step_name} completed successfully.")
             if stderr_accumulated.strip():
-                logging.info(f"[{step_name} STDERR on success (accumulated)]\n{stderr_accumulated.strip()}") # INFO for warnings
+                logging.info(f"[{step_name} STDERR on success (accumulated)]\n{stderr_accumulated.strip()}")
             return True
         else:
             logging.error(f"{step_name} FAILED with return code {return_code}.")
-            if stdout_output_lines: # Log some stdout for context on failure
+            if stdout_output_lines:
                 logging.error(f"[{step_name} STDOUT (last 20 lines on failure)]:\n{''.join(stdout_output_lines[-20:])}")
             if stderr_accumulated.strip():
                 logging.error(f"[{step_name} STDERR on failure (accumulated)]\n{stderr_accumulated.strip()}")
@@ -91,11 +91,10 @@ def get_mf_keyword_id_from_keywords_csv(mf_keywords_csv_path, canonical_mf_name)
     """Looks up the KW-ID for a given canonical molecular function name."""
     try:
         mf_keywords_df = pd.read_csv(mf_keywords_csv_path)
-        # Case-insensitive matching
         row = mf_keywords_df[mf_keywords_df['Name'].str.lower() == str(canonical_mf_name).lower()]
         if not row.empty:
             return row.iloc[0]['ID']
-        logging.warning(f"KW-ID not found for canonical MF name: '{canonical_mf_name}' in {mf_keywords_csv_path}")
+        logging.warning(f"KW-ID not found for MF name: '{canonical_mf_name}' in {mf_keywords_csv_path}")
     except Exception as e:
         logging.error(f"Error reading or searching {mf_keywords_csv_path} for {canonical_mf_name}: {e}")
     return None
@@ -118,6 +117,7 @@ def main(config_path, representation_mode, random_seed_value):
         return
 
     gs = config['global_settings']
+    # The workspace_base_dir is now the parent directory for all runs from this config
     workspace_base_dir = gs['workspace_base_dir']
     
     run_specific_name = f"run_seed{random_seed_value}_repr{representation_mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -129,6 +129,16 @@ def main(config_path, representation_mode, random_seed_value):
         logging.error(f"Could not create replicate run directory {current_replicate_run_dir}: {e}. Aborting.")
         return
         
+    # --- NEW: Copy the configuration file to the run directory for traceability ---
+    try:
+        dest_config_path = os.path.join(current_replicate_run_dir, "run_config.json")
+        shutil.copy2(config_path, dest_config_path)
+        logging.info(f"Copied experiment configuration to: {dest_config_path}")
+    except Exception as e:
+        logging.error(f"FATAL: Failed to copy configuration file '{config_path}' to workspace. Aborting run. Error: {e}")
+        return
+    # --- END NEW ---
+
     rdkit_features_list_target_json_str = json.dumps(gs.get('rdkit_features_list_target', []))
     run_coembedding_pca_umap_flag = gs.get('run_coembedding_for_pca_umap', False)
     dr_method_configs_json_str = json.dumps(config.get('dimensionality_reduction_methods', {}))
@@ -168,27 +178,24 @@ def main(config_path, representation_mode, random_seed_value):
             
             target_ligands_repr_calc_output_dir = os.path.join(target_workspace_dir, "target_ligands_calculated", repr_type)
             os.makedirs(target_ligands_repr_calc_output_dir, exist_ok=True)
-            # This file is the direct output of calculate_features_and_fingerprints_exp.py
-            # It contains features/FPs for the "held-out" target ligands.
             processed_target_ligands_repr_file = os.path.join(target_ligands_repr_calc_output_dir, f"{target_id_name}_target_ligands_for_calc_{repr_type}.csv")
 
             if os.path.exists(raw_target_ligands_for_feature_calc_csv):
                 logging.info(f"    --- Step 2a: Calculating {repr_type} for TARGET LIGANDS (if any) ---")
                 cmd_molcalcs_target = [ "python", "core_scripts/calculate_features_and_fingerprints_exp.py",
                     "--input_csv", os.path.abspath(raw_target_ligands_for_feature_calc_csv),
-                    "--output_dir", os.path.abspath(target_ligands_repr_calc_output_dir), # Save here
+                    "--output_dir", os.path.abspath(target_ligands_repr_calc_output_dir),
                     "--representation_type", repr_type,
                     "--file_label", f"{target_id_name}_target_ligands_for_calc", 
-                    "--n_jobs", str(gs.get('n_jobs_molcalcs', -1)) ]
+                    "--n_jobs", str(gs.get('n_jobs_molcalcs', -1))
+                ]
                 if not run_command(cmd_molcalcs_target, f"MolCalcs Target ({repr_type}) for {target_id_name}"):
                     logging.warning(f"Target ligand {repr_type} calculation failed. Co-embedding may be affected.")
             else:
-                logging.warning(f"Raw target ligands file not found ({raw_target_ligands_for_feature_calc_csv}). Skipping target ligand calculation. Co-embedding requires this file.")
-                # To prevent path errors later if file is truly needed and missing:
+                logging.warning(f"Raw target ligands file not found ({raw_target_ligands_for_feature_calc_csv}). Skipping target ligand calculation.")
                 if not os.path.exists(processed_target_ligands_repr_file):
-                    pd.DataFrame().to_csv(processed_target_ligands_repr_file, index=False) # Create empty placeholder
+                    pd.DataFrame().to_csv(processed_target_ligands_repr_file, index=False)
                     logging.info(f"Created empty placeholder for: {processed_target_ligands_repr_file}")
-
 
             current_chembl_mf_filtered_path = os.path.join(temp_data_dir, f"{target_id_name}_chembl_mf_excluded_{repr_type}.csv")
             current_zinc_filtered_path = os.path.join(temp_data_dir, f"{target_id_name}_zinc_excluded_{repr_type}.csv")
@@ -205,7 +212,7 @@ def main(config_path, representation_mode, random_seed_value):
                 logging.info(f"        --- Step 2b: Calculating Similarity Spaces ---")
                 cmd_calc_simspace = [ "python", "core_scripts/calculate_similarityspaces_exp.py",
                     "--chembl_mf_data_path", os.path.abspath(current_chembl_mf_filtered_path),
-                    "--target_ligands_unscaled_path_for_tsne_and_coembed", os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else "None"), # Pass "None" string if file doesn't exist
+                    "--target_ligands_unscaled_path_for_tsne_and_coembed", os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else "None"),
                     "--simspace_dim", str(simspace_dim_val), "--representation_type", repr_type,
                     "--target_id_name", target_id_name, "--output_simspace_dir", os.path.abspath(simspaces_output_dir_dim),
                     "--output_model_dir", os.path.abspath(models_output_dir_dim),
@@ -226,9 +233,7 @@ def main(config_path, representation_mode, random_seed_value):
                 if 'tsne' in active_dr_methods_cfg:
                     cmd_calc_simspace.extend([f"--tsne_perplexity={str(active_dr_methods_cfg['tsne']['perplexity'])}", 
                                               f"--tsne_pca_components={str(gs['tsne_pca_components'])}"])
-                    # Pass n_neighbors for tSNE if in gs (added for standalone test, might be useful here too)
                     if 'tsne_n_neighbors' in gs: cmd_calc_simspace.append(f"--n_neighbors={str(gs['tsne_n_neighbors'])}")
-
 
                 if not run_command(cmd_calc_simspace, f"Calc SimSpace ({repr_type}, dim{simspace_dim_val}) for {target_id_name}"):
                     logging.error(f"SimSpace calc failed. Skipping further analysis for this dim."); continue
@@ -240,29 +245,28 @@ def main(config_path, representation_mode, random_seed_value):
                 if target_processing_mode == "full_analysis":
                     logging.info(f"        --- Step 2c: Projecting & Analyzing (Full Analysis Mode) ---")
                     for dr_key, dr_params_cfg in active_dr_methods_cfg.items():
-                        dr_short_name_base = dr_params_cfg["short_name"]
+                        base_dr_short_name = dr_params_cfg["short_name"]
                         analysis_runs = [{"strategy_label": "Projection" if not dr_key == "tsne" else "CoEmbedding (Native)", 
-                                          "dr_name_for_output_files": dr_short_name_base, 
-                                          "dr_name_for_coord_lookup": dr_short_name_base, "is_coembed_run": False }]
+                                          "dr_name_for_output_files": base_dr_short_name, 
+                                          "dr_name_for_coord_lookup": base_dr_short_name, "is_coembed_run": False }]
                         if run_coembedding_pca_umap_flag and dr_params_cfg.get("allow_coembedding", False) and (dr_key.startswith("pca") or dr_key.startswith("umap")):
                             analysis_runs.append({"strategy_label": "CoEmbedding", 
-                                                  "dr_name_for_output_files": f"{dr_short_name_base}-Coembed", 
-                                                  "dr_name_for_coord_lookup": dr_short_name_base, "is_coembed_run": True})
+                                                  "dr_name_for_output_files": f"{base_dr_short_name}-Coembed", 
+                                                  "dr_name_for_coord_lookup": base_dr_short_name, "is_coembed_run": True})
                         
                         for run_info in analysis_runs:
                             output_leaf_name = run_info["dr_name_for_output_files"]
                             coord_lookup_name = run_info["dr_name_for_coord_lookup"]
-                            logging.info(f"          --- ({run_info['strategy_label']}) Analyzing DR: {output_leaf_name} (Coords: {coord_lookup_name}) ---")
+                            logging.info(f"          --- ({run_info['strategy_label']}) Analyzing DR: {output_leaf_name} ---")
                             if dr_key == "tsne" and simspace_dim_val != 2: logging.info("Skipping t-SNE analysis (dim != 2)."); continue
-                            if dr_key == "tsne" and run_info["is_coembed_run"]: continue # tSNE only has one "native coembed" path
-
+                            if dr_key == "tsne" and run_info["is_coembed_run"]: continue
                             results_out_dir = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", output_leaf_name.replace('-', '_'))
                             os.makedirs(results_out_dir, exist_ok=True)
                             cmd_pa = [ "python", "experimental_pipeline/project_and_analyze.py",
                                 "--simspace_csv_path", os.path.abspath(comprehensive_simspace_csv),
-                                "--dr_method_key", dr_key, "--dr_short_name", coord_lookup_name, # For coord lookup
+                                "--dr_method_key", dr_key, "--dr_short_name", coord_lookup_name,
                                 "--simspace_dim", str(simspace_dim_val), "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])),
-                                "--output_dir", os.path.abspath(results_out_dir), # This makes output files unique per strategy
+                                "--output_dir", os.path.abspath(results_out_dir),
                                 "--target_id_name", target_id_name, "--representation_type", repr_type,
                                 "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
                             
