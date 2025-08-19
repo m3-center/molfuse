@@ -355,6 +355,8 @@ def main():
     parser.add_argument("--target_id_name", required=True, help="Target ID name for file naming.")
     parser.add_argument("--representation_type", required=True, choices=["features", "fingerprints"])
     parser.add_argument("--rdkit_features_list_target_str", required=True, help="JSON string of target RDKit feature names.")
+    parser.add_argument("--affinity_cutoff", type=int, default=None,
+                        help="Affinity cutoff in nM for defining the MF cloud. If not set, no cutoff is applied.")
     args = parser.parse_args()
     
     # Use args.dr_short_name (which is passed by orchestrator and can be "PCA" or "PCA-Coembed" etc.)
@@ -382,6 +384,8 @@ def main():
     # The uniqueness comes from the args.output_dir.
 
     logging.info(f"--- project_and_analyze.py started for Target: {args.target_id_name}, Repr: {args.representation_type}, DR: {args.dr_short_name}, Dim: {args.simspace_dim}, Output: {args.output_dir} ---")
+    if args.affinity_cutoff is not None:
+        logging.info(f"--- SPECIAL RUN: Applying affinity cutoff of {args.affinity_cutoff} nM to the MF Cloud ---")
 
     try:
         target_rdkit_features_list = json.loads(args.rdkit_features_list_target_str)
@@ -481,6 +485,20 @@ def main():
             df_simspace_main_data['MOLECULE ID'] = df_simspace_main_data['MOLECULE ID'].astype(str)
             chembl_mask = ~df_simspace_main_data['MOLECULE ID'].str.startswith('ZINC', na=False)
             mf_cloud_df_full = df_simspace_main_data[chembl_mask].copy()
+
+            if args.affinity_cutoff is not None:
+                logging.info(f"Applying affinity cutoff of <= {args.affinity_cutoff} nM to the MF cloud.")
+                if 'Standard Value (nM)' in mf_cloud_df_full.columns:
+                    mf_cloud_df_full['Standard Value (nM)'] = pd.to_numeric(mf_cloud_df_full['Standard Value (nM)'], errors='coerce')
+                    original_mf_cloud_size = len(mf_cloud_df_full)
+                    
+                    mf_cloud_df_full.dropna(subset=['Standard Value (nM)'], inplace=True)
+                    mf_cloud_df_full = mf_cloud_df_full[mf_cloud_df_full['Standard Value (nM)'] <= args.affinity_cutoff].copy()
+                    
+                    logging.info(f"MF cloud size reduced from {original_mf_cloud_size} to {len(mf_cloud_df_full)} after applying cutoff.")
+                else:
+                    logging.warning("'Standard Value (nM)' column not found in simspace CSV. Cannot apply affinity cutoff.")
+
             mf_cloud_coords_temp = mf_cloud_df_full[coord_cols_for_analysis].dropna()
             if not mf_cloud_coords_temp.empty: mf_cloud_coords = mf_cloud_coords_temp
             else: logging.warning(f"MF cloud for {args.dr_short_name} is empty after coordinate selection/dropna from {args.simspace_csv_path}.")
