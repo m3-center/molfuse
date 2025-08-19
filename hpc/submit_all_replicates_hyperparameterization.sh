@@ -6,7 +6,7 @@
 CONFIG_DIR="hyperparam_configs"
 
 # Define your 5 random seeds for the replicates.
-RANDOM_SEEDS=(42) # 43 44 45 46) 
+RANDOM_SEEDS=(42 43 44 45 46) # 43 44 45 46) 
 
 # The name of your SLURM script template.
 SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization.sh"
