@@ -14,18 +14,40 @@ CUML_AVAILABLE = False
 SKLEARN_UMAP_AVAILABLE = False 
 
 try:
-    from cuml import PCA as cumlPCA, UMAP as cumlUMAP, TSNE as cumlTSNE
-    CUML_AVAILABLE = True
-except ImportError:
-    pass 
+    import cuml
+    import cupy
+    
+    # Second, and more importantly, try to use the GPU.
+    # This will fail if no CUDA-enabled GPU is visible to the process.
+    try:
+        cupy.array([1, 2, 3]) # Attempt a minimal GPU operation
+        CUML_AVAILABLE = True # If both import and operation succeed, set to True
+    except cupy.cuda.runtime.CUDARuntimeError as e:
+        # This error occurs if CUDA drivers are present but no GPU is found/usable
+        print(f"INFO: cuML/CuPy imported, but no CUDA-enabled GPU is available. Falling back to CPU. Error: {e}")
+        CUML_AVAILABLE = False
+    except Exception as e:
+        # Catch other potential errors during GPU initialization
+        print(f"INFO: cuML/CuPy imported, but an unexpected error occurred during GPU check. Falling back to CPU. Error: {e}")
+        CUML_AVAILABLE = False
 
+except ImportError:
+    # This will be caught if cuml or cupy are not installed in the environment
+    print("INFO: cuML or CuPy not installed. Falling back to CPU.")
+    CUML_AVAILABLE = False
+
+# Import the specific classes after the check
+if CUML_AVAILABLE:
+    from cuml import PCA as cumlPCA, UMAP as cumlUMAP, TSNE as cumlTSNE
+
+# Always import scikit-learn and umap-learn as fallbacks
 from sklearn.decomposition import PCA as sklearnPCA
 from sklearn.manifold import TSNE as sklearnTSNE
 try:
     from umap import UMAP as umapUMAP 
     SKLEARN_UMAP_AVAILABLE = True
 except ImportError:
-    pass 
+    pass # Will be logged later
 
 # --- Logging Setup ---
 logger = logging.getLogger() 
