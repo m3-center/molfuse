@@ -1,3 +1,4 @@
+--- START OF FILE analyze_hyperparams.py ---
 import pandas as pd
 import numpy as np
 import os
@@ -13,7 +14,7 @@ import subprocess
 import re
 from datetime import datetime
 
-# --- LaTeX Preamble and Helper Functions ---
+# --- LaTeX Preamble and Helper Functions (Unchanged) ---
 LATEX_DOCUMENT_PREAMBLE = r"""
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
@@ -81,19 +82,20 @@ def parse_hyperparams_from_log(log_path):
     try:
         with open(log_path, 'r') as f: content = f.read()
         
-        # Look for UMAP init line to get n_neighbors from kwargs
-        umap_match = re.search(r"Initialized (?:cuml|scikit-learn) UMAP.*?n_neighbors.?: (\d+)", content)
+        # --- MORE ROBUST REGEX ---
+        # Look for n_neighbors in a dictionary-like string: 'n_neighbors': 15 or "n_neighbors": 15
+        umap_match = re.search(r"['\"]n_neighbors['\"]\s*:\s*(\d+)", content)
         if umap_match:
             hyperparams['n_neighbors'] = int(umap_match.group(1))
 
-        # Look for the PCA step specific to tSNE or the pre-reduction step for fingerprints
         tsne_pca_match = re.search(r"t-SNE initial PCA to (\d+) components", content)
         if tsne_pca_match:
             hyperparams['tsne_pca_components'] = int(tsne_pca_match.group(1))
-        else: # Fallback for fingerprints where PCA is done before tSNE
+        else:
              fp_pca_match = re.search(r"Applying initial PCA to (\d+) components before UMAP/t-SNE", content)
              if fp_pca_match:
                  hyperparams['tsne_pca_components'] = int(fp_pca_match.group(1))
+        # --- END ROBUST REGEX ---
 
     except Exception as e:
         logging.error(f"Error parsing log file {log_path}: {e}")
@@ -128,7 +130,6 @@ def collect_sweep_metrics(base_dir, seeds_to_include, config):
             if df_m.empty: continue
             
             dr_method_base_name = "Unknown"
-            # Use main config only to map directory name (e.g., UMAP_Euclidean) back to display name (e.g., UMAP-Euclidean)
             for dr_key, dr_params in config["dimensionality_reduction_methods"].items():
                 if strategy_dir.startswith(dr_params["short_name"].replace('-', '_')):
                     dr_method_base_name = dr_params["short_name"]
@@ -150,7 +151,7 @@ def collect_sweep_metrics(base_dir, seeds_to_include, config):
             all_metrics.append(metric_row)
 
         except Exception as e:
-            logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}")
+            logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}", exc_info=True)
 
     if not all_metrics: logging.error("No metric data collected.")
     return pd.DataFrame(all_metrics)
@@ -192,7 +193,7 @@ def create_hyperparam_plot(df_subset, x_metric, title, filename, report_figures_
 def main():
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a focused LaTeX report.")
     parser.add_argument("--base_experiment_dir", default="experiment_workspace_hyperparam_sweep/", help="Base directory containing all hyperparameter sweep run folders.")
-    parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment_config.json file for context (used for DR method name mapping).")
+    parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment_config.json file for context.")
     parser.add_argument("--output_report_dir", default="final_report_hyperparam_sweep/", help="Directory to save the final LaTeX report.")
     args = parser.parse_args()
 
@@ -224,7 +225,7 @@ def main():
 
     # --- UMAP on Features ---
     latex_content.append(get_section_header_latex(2, 'UMAP n_neighbors Sweep (Features)'))
-    df_umap_feat = df_agg[(df_agg['Representation'] == 'features') & (df_agg['DR_Method'].str.contains('UMAP'))]
+    df_umap_feat = df_agg[(df_agg['Representation'] == 'features') & (df_agg['DR_Method'].str.contains('UMAP', na=False))]
     fig_path, caption = create_hyperparam_plot(df_umap_feat, 'n_neighbors', "UMAP on Features: Performance vs. n_neighbors", "umap_features_vs_n_neighbors.png", report_figures_abs_dir)
     if fig_path:
         add_figure_to_latex(latex_content, fig_path, caption, "umap-feat-sweep")
@@ -232,7 +233,7 @@ def main():
 
     # --- UMAP on Fingerprints ---
     latex_content.append(get_section_header_latex(2, 'UMAP n_neighbors Sweep (Fingerprints)'))
-    df_umap_fp = df_agg[(df_agg['Representation'] == 'fingerprints') & (df_agg['DR_Method'].str.contains('UMAP'))]
+    df_umap_fp = df_agg[(df_agg['Representation'] == 'fingerprints') & (df_agg['DR_Method'].str.contains('UMAP', na=False))]
     fig_path, caption = create_hyperparam_plot(df_umap_fp, 'n_neighbors', "UMAP on Fingerprints: Performance vs. n_neighbors", "umap_fingerprints_vs_n_neighbors.png", report_figures_abs_dir)
     if fig_path:
         add_figure_to_latex(latex_content, fig_path, caption, "umap-fp-sweep")
@@ -240,7 +241,7 @@ def main():
 
     # --- t-SNE on Fingerprints ---
     latex_content.append(get_section_header_latex(2, 't-SNE pca_components Sweep (Fingerprints)'))
-    df_tsne_fp = df_agg[(df_agg['Representation'] == 'fingerprints') & (df_agg['DR_Method'].str.contains('t-SNE'))]
+    df_tsne_fp = df_agg[(df_agg['Representation'] == 'fingerprints') & (df_agg['DR_Method'].str.contains('t-SNE', na=False))]
     fig_path, caption = create_hyperparam_plot(df_tsne_fp, 'tsne_pca_components', "t-SNE on Fingerprints: Performance vs. PCA Components", "tsne_fingerprints_vs_pca.png", report_figures_abs_dir)
     if fig_path:
         add_figure_to_latex(latex_content, fig_path, caption, "tsne-fp-sweep")
