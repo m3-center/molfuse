@@ -43,7 +43,6 @@ mkdir -p hyperparameterization_report
 echo "Starting main_orchestrator.py..."
 python -u "${ANALYSIS_SCRIPT}" \
     --base_experiment_dir "experiment_workspace_hyperparam_sweep" \
-    --main_config_path "experiment_config.json" \
     --output_report_dir "hyperparameterization_report"
 
 EXIT_CODE=$?
