@@ -19,7 +19,7 @@ TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 
 # --- MODIFIED: Hyperparameters and Dimensions to sweep ---
 # Fixed similarity space dimension for the UMAP sweep
-UMAP_SIMSPACE_DIM_FOR_SWEEP = [2]
+UMAP_SIMSPACE_DIM_FOR_SWEEP = [10]
 # Fixed similarity space dimension for the t-SNE sweep
 TSNE_SIMSPACE_DIM_FOR_SWEEP = [2]
 
