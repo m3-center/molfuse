@@ -199,13 +199,19 @@ def process_similarity_calculations(
 
     logging.info(f"Processing for: {base_name_prefix}")
     
-    # --- NEW CHUNKING DATA PREPARATION FLOW ---
-    # Determine descriptor columns from a small sample of the first file
+    # --- CHUNKING DATA PREPARATION FLOW ---
+    descriptor_columns = None
     try:
+        # Determine columns from a small sample of the first file
         df_sample = pd.read_csv(chembl_mf_data_path, nrows=5)
         if representation_type == "fingerprints":
+            if PRECALCULATED_FP_STRING_COLUMN_NAME not in df_sample.columns:
+                logging.error(f"Fingerprint string column '{PRECALCULATED_FP_STRING_COLUMN_NAME}' not in sample of {chembl_mf_data_path}. Aborting.")
+                return
             df_sample = parse_fingerprint_string_column_in_df(df_sample)
-        descriptor_columns = get_descriptor_columns(df_sample, representation_type, target_rdkit_features_list, is_parsed_fp=(representation_type == "fingerprints"))
+        descriptor_columns = get_descriptor_columns(df_sample, representation_type, 
+                                                    target_rdkit_features_list, 
+                                                    is_parsed_fp=(representation_type == "fingerprints"))
         if not descriptor_columns: 
             logging.error(f"No descriptor columns determined from sample of {chembl_mf_data_path}. Aborting."); return
     except Exception as e:
@@ -216,7 +222,7 @@ def process_similarity_calculations(
     info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
     valid_info_chunks = []
     valid_descriptor_chunks = []
-    chunksize = 100000 # This can be tuned based on memory. 25k rows * 2048 cols is manageable.
+    chunksize = 25000 
 
     input_files_to_process = [chembl_mf_data_path]
     if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path):
@@ -230,33 +236,35 @@ def process_similarity_calculations(
         logging.info(f"Processing file in chunks: {file_path}")
         try:
             for i, chunk in enumerate(pd.read_csv(file_path, chunksize=chunksize, low_memory=False)):
-                logging.info(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
+                logging.debug(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
                 
                 # 1. Parse fingerprints if needed
                 if representation_type == "fingerprints":
                     if PRECALCULATED_FP_STRING_COLUMN_NAME in chunk.columns:
                         chunk = parse_fingerprint_string_column_in_df(chunk)
                 
-                # 2. Select only necessary columns
                 current_info_cols = [c for c in info_cols_to_keep if c in chunk.columns]
                 current_desc_cols = [c for c in descriptor_columns if c in chunk.columns]
                 
-                if not current_desc_cols: # Skip chunk if it's missing descriptor columns
-                    logging.warning(f"Chunk {i+1} is missing descriptor columns. Skipping.")
-                    continue
+                if not current_desc_cols: continue
                 
-                chunk_subset = chunk[current_info_cols + current_desc_cols]
+                # --- MODIFIED/FIXED SECTION ---
+                # To avoid SettingWithCopyWarning, explicitly create a copy
+                chunk_subset = chunk[current_info_cols + current_desc_cols].copy()
                 
-                # 3. Convert descriptors, drop NaNs
-                chunk_subset[current_desc_cols] = chunk_subset[current_desc_cols].apply(pd.to_numeric, errors='coerce')
+                # Only apply to_numeric for features. Fingerprints are already numeric (0, 1, nan) after parsing.
+                # This avoids the unnecessary, memory-intensive apply() call for fingerprints.
+                if representation_type == "features":
+                    chunk_subset[current_desc_cols] = chunk_subset[current_desc_cols].apply(pd.to_numeric, errors='coerce')
+                
                 initial_chunk_rows = len(chunk_subset)
                 total_rows_processed += initial_chunk_rows
                 
                 chunk_valid = chunk_subset.dropna(subset=current_desc_cols, how='any')
+                # --- END MODIFICATION ---
                 
                 if not chunk_valid.empty:
                     total_rows_kept += len(chunk_valid)
-                    # 4. Separate info from descriptors
                     valid_info_chunks.append(chunk_valid[current_info_cols].copy())
                     valid_descriptor_chunks.append(chunk_valid[current_desc_cols].values.astype(dtype_to_use))
                 
@@ -271,18 +279,15 @@ def process_similarity_calculations(
         logging.error("No valid data rows found after processing all files in chunks. Aborting.")
         return
 
-    # 5. Final Assembly
     logging.info("Assembling final data from valid chunks...")
     X_original_main_valid = np.vstack(valid_descriptor_chunks)
     df_results_main = pd.concat(valid_info_chunks, ignore_index=True)
-    del valid_descriptor_chunks, valid_info_chunks
-    gc.collect()
+    del valid_descriptor_chunks, valid_info_chunks; gc.collect()
 
     logging.info(f"Finished chunk processing. Total rows read: {total_rows_processed}. Total valid rows kept: {total_rows_kept}.")
     logging.info(f"Final X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
     logging.info(f"Final df_results_main info shape: {df_results_main.shape}")
-
-    # Create MOLECULE ID
+    
     if 'Compound ChEMBL ID' in df_results_main.columns and 'ZINC_ID' in df_results_main.columns: 
         df_results_main['MOLECULE ID'] = df_results_main['Compound ChEMBL ID'].fillna(df_results_main['ZINC_ID'])
     elif 'Compound ChEMBL ID' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['Compound ChEMBL ID']
@@ -291,7 +296,6 @@ def process_similarity_calculations(
         if 'SMILES' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['SMILES']
         else: df_results_main['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_results_main.index).astype(str)
     df_results_main['MOLECULE ID'] = df_results_main['MOLECULE ID'].astype(str).fillna('MISSING_ID')
-    # --- END OF CHUNKING FLOW ---
     
     scaler = StandardScaler()
     logging.info(f"Fitting StandardScaler on main data of shape {X_original_main_valid.shape}") 
