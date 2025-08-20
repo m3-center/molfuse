@@ -80,17 +80,19 @@ desc_list = [
 mordred_calc_instance = Calculator(desc_list, ignore_3D=True) 
 # Get string names of descriptors for column headers and NaN initialization
 MORDRED_DESCRIPTOR_NAMES = [str(d) for d in mordred_calc_instance.descriptors]
-
+num_fingerprint_bits = 1024
+    
 
 # ------------------------ Helper Functions (from your snippets) ------------------------
 def compute_ecfp4_fingerprint_original_style(mol):
-    """Compute ECFP4 (radius=2, nBits=2048) fingerprint as a numpy array."""
+    """Compute ECFP4 (radius=2, nBits=1024) fingerprint as a numpy array."""
+    logging.info(f"Computing ECFP4 fingerprints with {num_fingerprint_bits} bits!")
     if mol is None: return None
     try:
         # For ECFP4, typically use the mol without explicit Hs from SMILES
-        mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+        mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=num_fingerprint_bits)
         fp = mfpgen.GetFingerprint(mol) 
-        arr = np.zeros((2048,), dtype=np.int8)
+        arr = np.zeros((num_fingerprint_bits,), dtype=np.int8)
         DataStructs.ConvertToNumpyArray(fp, arr)
         return arr
     except Exception as e:
@@ -269,14 +271,14 @@ def process_input_file_orig_style(input_csv_path, output_dir, representation_typ
                 if fp_array is not None:
                     for i, bit in enumerate(fp_array): base_row_dict[f"fp_{i}"] = int(bit)
                 else: # Fingerprint could not be calculated
-                    for i in range(2048): base_row_dict[f"fp_{i}"] = np.nan
+                    for i in range(num_fingerprint_bits): base_row_dict[f"fp_{i}"] = np.nan
             output_data_list.append(base_row_dict)
         else: 
             if representation_type == "features":
                 base_row_dict['DipoleMoment'] = np.nan
                 for desc_name in MORDRED_DESCRIPTOR_NAMES: base_row_dict[desc_name] = np.nan
             elif representation_type == "fingerprints":
-                for i in range(2048): base_row_dict[f"fp_{i}"] = np.nan
+                for i in range(num_fingerprint_bits): base_row_dict[f"fp_{i}"] = np.nan
             output_data_list.append(base_row_dict)
             if smiles and pd.notna(smiles):
                  logging.warning(f"SMILES '{smiles}' processed but not found in cache. Resulting data will be NaN.")

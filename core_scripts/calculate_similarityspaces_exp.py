@@ -82,7 +82,7 @@ def setup_script_logging(log_filename):
 # --- End Logging Setup ---
 
 FINGERPRINT_COLUMN_PREFIX = "fp_"
-NUM_FINGERPRINT_BITS = 2048 
+NUM_FINGERPRINT_BITS = 1024 
 PRECALCULATED_FP_STRING_COLUMN_NAME = "Fingerprint"
 
 def parse_fingerprint_string_column_in_df(df_input, 
