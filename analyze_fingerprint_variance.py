@@ -48,7 +48,7 @@ def calculate_bit_variance_from_files_in_chunks(file_paths, chunksize=50000):
                     
                     n_samples += parsed_bits.shape[0]
                     sum_x += np.sum(parsed_bits, axis=0)
-                    sum_x2 += np.sum(parsed_bits**2, axis=0) # Same as sum_x for binary
+                    sum_x2 += np.sum(parsed_bits**2, axis=0)
                     
         except Exception as e:
             logging.error(f"Error processing file {file_path}: {e}", exc_info=True)
@@ -64,16 +64,19 @@ def calculate_bit_variance_from_files_in_chunks(file_paths, chunksize=50000):
     logging.info(f"Variance calculation complete. Processed a total of {n_samples} molecules.")
     return variance
 
-def plot_variances(variances, output_dir):
-    """Generates and saves sorted, unsorted, and cumulative variance plots."""
+def plot_and_export_variances(variances, output_dir):
+    """
+    Generates plots and exports a CSV of bit variances.
+    Returns the sorted indices of the bits.
+    """
     if variances is None:
-        logging.error("Cannot plot, variance array is None.")
+        logging.error("Cannot plot or export, variance array is None.")
         return None
 
-    logging.info("Generating variance plots...")
+    logging.info("Generating variance plots and exporting data...")
     os.makedirs(output_dir, exist_ok=True)
     
-    # --- 1. Unsorted Variance Plot ---
+    # --- Unsorted Variance Plot ---
     plt.figure(figsize=(12, 6))
     plt.bar(range(NUM_FINGERPRINT_BITS), variances, width=1.0)
     plt.title(f"Variance of Each Bit Across the Dataset (Unsorted)", fontsize=14)
@@ -86,10 +89,11 @@ def plot_variances(variances, output_dir):
     plt.close()
     logging.info(f"Saved unsorted variance plot to: {unsorted_path}")
 
-    # --- 2. Sorted Variance Plot ---
+    # --- Prepare Sorted Data for Plots and CSV ---
     sorted_indices = np.argsort(variances)[::-1] # Sort descending
     sorted_vars = variances[sorted_indices]
     
+    # --- Sorted Variance Plot ---
     plt.figure(figsize=(12, 6))
     plt.bar(range(NUM_FINGERPRINT_BITS), sorted_vars, width=1.0)
     plt.title(f"Variance of Each Bit Across the Dataset (Sorted Descending)", fontsize=14)
@@ -97,7 +101,6 @@ def plot_variances(variances, output_dir):
     plt.ylabel("Variance", fontsize=12)
     plt.xlim(-1, NUM_FINGERPRINT_BITS)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
     top_k_values = [256, 512, 1024]
     for k in top_k_values:
         if k < NUM_FINGERPRINT_BITS:
@@ -108,40 +111,46 @@ def plot_variances(variances, output_dir):
     plt.close()
     logging.info(f"Saved sorted variance plot to: {sorted_path}")
     
-    # --- 3. Cumulative Variance Plot ---
+    # --- Cumulative Variance Plot ---
     total_variance = np.sum(sorted_vars)
     if total_variance == 0:
         logging.warning("Total variance is zero. Cannot generate cumulative plot.")
-        return sorted_indices
-        
-    cumulative_variance = np.cumsum(sorted_vars) / total_variance
+    else:
+        cumulative_variance = np.cumsum(sorted_vars) / total_variance
+        plt.figure(figsize=(12, 6))
+        plt.plot(range(1, NUM_FINGERPRINT_BITS + 1), cumulative_variance, marker='', linestyle='-')
+        plt.title("Cumulative Variance Explained by Top N Bits", fontsize=14)
+        plt.xlabel("Number of Top Bits Included (Sorted by Variance)", fontsize=12)
+        plt.ylabel("Cumulative Variance Explained (%)", fontsize=12)
+        plt.xlim(0, NUM_FINGERPRINT_BITS)
+        plt.ylim(0, 1.05)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        cutoffs = [0.80, 0.90, 0.95, 0.99]
+        for cutoff in cutoffs:
+            num_bits_for_cutoff = np.argmax(cumulative_variance >= cutoff) + 1
+            plt.axhline(y=cutoff, color='red', linestyle=':', linewidth=1)
+            plt.axvline(x=num_bits_for_cutoff, color='green', linestyle=':', linewidth=1)
+            label_text = f"{num_bits_for_cutoff} bits for {int(cutoff*100)}% variance"
+            plt.text(num_bits_for_cutoff + 50, cutoff - 0.05, label_text, fontsize=9, color='darkgreen')
+        plt.yticks(np.arange(0, 1.1, 0.1), [f"{int(y*100)}%" for y in np.arange(0, 1.1, 0.1)])
+        cumulative_path = os.path.join(output_dir, "fingerprint_bit_variance_cumulative.png")
+        plt.savefig(cumulative_path)
+        plt.close()
+        logging.info(f"Saved cumulative variance plot to: {cumulative_path}")
     
-    plt.figure(figsize=(12, 6))
-    plt.plot(range(1, NUM_FINGERPRINT_BITS + 1), cumulative_variance, marker='', linestyle='-')
-    plt.title("Cumulative Variance Explained by Top N Bits", fontsize=14)
-    plt.xlabel("Number of Top Bits Included (Sorted by Variance)", fontsize=12)
-    plt.ylabel("Cumulative Variance Explained (%)", fontsize=12)
-    plt.xlim(0, NUM_FINGERPRINT_BITS)
-    plt.ylim(0, 1.05)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Add and annotate variance cutoffs
-    cutoffs = [0.80, 0.90, 0.95, 0.99]
-    for cutoff in cutoffs:
-        # Find the number of bits to reach the cutoff
-        num_bits_for_cutoff = np.argmax(cumulative_variance >= cutoff) + 1
-        plt.axhline(y=cutoff, color='red', linestyle=':', linewidth=1)
-        plt.axvline(x=num_bits_for_cutoff, color='green', linestyle=':', linewidth=1)
-        # Annotation text
-        label_text = f"{num_bits_for_cutoff} bits for {int(cutoff*100)}% variance"
-        plt.text(num_bits_for_cutoff + 50, cutoff - 0.05, label_text, fontsize=9, color='darkgreen')
-
-    plt.yticks(np.arange(0, 1.1, 0.1), [f"{int(y*100)}%" for y in np.arange(0, 1.1, 0.1)]) # Format y-axis as percentage
-    
-    cumulative_path = os.path.join(output_dir, "fingerprint_bit_variance_cumulative.png")
-    plt.savefig(cumulative_path)
-    plt.close()
-    logging.info(f"Saved cumulative variance plot to: {cumulative_path}")
+    # --- NEW: Export Sorted Data to CSV ---
+    try:
+        df_variance = pd.DataFrame({
+            'bit_index': sorted_indices,
+            'variance': sorted_vars,
+            'variance_rank': np.arange(1, NUM_FINGERPRINT_BITS + 1) # Rank 1 is highest variance
+        })
+        csv_path = os.path.join(output_dir, "fingerprint_bit_variance_sorted.csv")
+        df_variance.to_csv(csv_path, index=False)
+        logging.info(f"Saved sorted bit variance data to: {csv_path}")
+    except Exception as e:
+        logging.error(f"Failed to export bit variance data to CSV: {e}")
+    # --- END NEW ---
 
     return sorted_indices
 
@@ -174,9 +183,9 @@ def main():
     bit_variances = calculate_bit_variance_from_files_in_chunks(files_to_process)
     
     if bit_variances is not None:
-        sorted_bit_indices = plot_variances(bit_variances, args.output_dir)
+        sorted_bit_indices = plot_and_export_variances(bit_variances, args.output_dir)
         
-        if sorted_bit_indices is not None and args.num_bits_to_select > 0:
+        if sorted_bit_indices is not None and args.num_bits_to_select > 0 and args.num_bits_to_select <= len(sorted_bit_indices):
             top_k_indices = sorted_bit_indices[:args.num_bits_to_select]
             logging.info(f"Top {args.num_bits_to_select} most variant bit indices (first 10): {top_k_indices[:10]}")
             
