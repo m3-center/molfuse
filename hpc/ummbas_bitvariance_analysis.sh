@@ -45,7 +45,7 @@ echo "Starting main_orchestrator.py..."
 python -u "${ANALYSIS_SCRIPT}" \
     --base_experiment_dir experiment_workspace_hyperparam_sweep/ \
     --target_id_name TyrosineProteinKinaseABL1_P00519 \
-    --num_bits_to_select 512 \
+    --num_bits_to_select 1024 \
     --output_dir fingerprint_variance_analysis
 
 EXIT_CODE=$?
