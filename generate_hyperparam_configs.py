@@ -18,7 +18,7 @@ SWEEP_REPORT_DIR = "final_report_hyperparam_sweep/"
 TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 
 BIT_SELECTION_CSV_PATH = "fingerprint_variance_analysis/fingerprint_bit_variance_sorted.csv"
-NUM_BITS_TO_USE = 1024
+NUM_BITS_TO_USE = 2048
 
 # --- MODIFIED: Hyperparameters and Dimensions to sweep ---
 # Fixed similarity space dimension for the UMAP sweep

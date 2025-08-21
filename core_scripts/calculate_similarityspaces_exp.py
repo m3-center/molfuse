@@ -14,40 +14,18 @@ CUML_AVAILABLE = False
 SKLEARN_UMAP_AVAILABLE = False 
 
 try:
-    import cuml
-    import cupy
-    
-    # Second, and more importantly, try to use the GPU.
-    # This will fail if no CUDA-enabled GPU is visible to the process.
-    try:
-        cupy.array([1, 2, 3]) # Attempt a minimal GPU operation
-        CUML_AVAILABLE = True # If both import and operation succeed, set to True
-    except cupy.cuda.runtime.CUDARuntimeError as e:
-        # This error occurs if CUDA drivers are present but no GPU is found/usable
-        print(f"INFO: cuML/CuPy imported, but no CUDA-enabled GPU is available. Falling back to CPU. Error: {e}")
-        CUML_AVAILABLE = False
-    except Exception as e:
-        # Catch other potential errors during GPU initialization
-        print(f"INFO: cuML/CuPy imported, but an unexpected error occurred during GPU check. Falling back to CPU. Error: {e}")
-        CUML_AVAILABLE = False
-
-except ImportError:
-    # This will be caught if cuml or cupy are not installed in the environment
-    print("INFO: cuML or CuPy not installed. Falling back to CPU.")
-    CUML_AVAILABLE = False
-
-# Import the specific classes after the check
-if CUML_AVAILABLE:
     from cuml import PCA as cumlPCA, UMAP as cumlUMAP, TSNE as cumlTSNE
+    CUML_AVAILABLE = True
+except ImportError:
+    pass 
 
-# Always import scikit-learn and umap-learn as fallbacks
 from sklearn.decomposition import PCA as sklearnPCA
 from sklearn.manifold import TSNE as sklearnTSNE
 try:
     from umap import UMAP as umapUMAP 
     SKLEARN_UMAP_AVAILABLE = True
 except ImportError:
-    pass # Will be logged later
+    pass 
 
 # --- Logging Setup ---
 logger = logging.getLogger() 
@@ -64,16 +42,13 @@ def setup_script_logging(log_filename):
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
             handler.close()
-    
     log_dir = os.path.dirname(log_filename)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-        
     file_handler = logging.FileHandler(log_filename, mode='w') 
     file_handler.setFormatter(log_formatter)
     file_handler.setLevel(logging.DEBUG) 
     logger.addHandler(file_handler)
-
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(log_formatter)
     stream_handler.setLevel(logging.INFO) 
@@ -88,9 +63,8 @@ PRECALCULATED_FP_STRING_COLUMN_NAME = "Fingerprint"
 def parse_fingerprint_string_column_in_df(df_input, 
                                           fp_string_col_name=PRECALCULATED_FP_STRING_COLUMN_NAME, 
                                           num_bits=NUM_FINGERPRINT_BITS):
-    # This function is memory-efficient as it operates on a chunk (df_input)
     if fp_string_col_name not in df_input.columns:
-        logger.warning(f"FP string column '{fp_string_col_name}' not found. No parsing.")
+        logger.warning(f"Fingerprint string column '{fp_string_col_name}' not found. No parsing done.")
         return df_input 
     fp_matrix = np.full((len(df_input), num_bits), np.nan) 
     for idx, fp_str in enumerate(df_input[fp_string_col_name]):
@@ -138,9 +112,9 @@ def get_descriptor_columns(df, representation_type, target_rdkit_features_list, 
         return None
 
 def load_and_prepare_target_ligands_for_coembedding(
-    target_ligands_unscaled_path, representation_type, target_rdkit_features_list, scaler_main_data
+    target_ligands_unscaled_path, representation_type, target_rdkit_features_list, scaler_main_data,
+    selected_bit_columns=None # --- NEW ARGUMENT ---
 ):
-    # This function loads the target ligands, which are assumed to be small, so no chunking needed here.
     if not target_ligands_unscaled_path or target_ligands_unscaled_path.lower() == "none" or not os.path.exists(target_ligands_unscaled_path):
         logger.warning(f"Target ligands file for co-embedding not provided, 'None', or not found: '{target_ligands_unscaled_path}'.")
         return None, None, None 
@@ -151,17 +125,29 @@ def load_and_prepare_target_ligands_for_coembedding(
             logger.warning(f"Target ligands file '{target_ligands_unscaled_path}' is empty.")
             return None, None, None
         
-        target_desc_cols = get_descriptor_columns(df_target_ligands_raw,
-                                                  representation_type, target_rdkit_features_list,
-                                                  is_parsed_fp=(representation_type == "fingerprints"))
-        if not target_desc_cols:
+        # Get all 2048 columns first
+        all_target_desc_cols = get_descriptor_columns(df_target_ligands_raw,
+                                                      representation_type, target_rdkit_features_list,
+                                                      is_parsed_fp=(representation_type == "fingerprints"))
+        if not all_target_desc_cols:
             logger.error(f"Could not get descriptor columns from target ligands file: {target_ligands_unscaled_path}.")
             return None, None, None
 
+        # --- NEW: Apply bit selection if provided ---
+        if representation_type == "fingerprints" and selected_bit_columns:
+            logging.info(f"Applying bit selection to target ligands. Using {len(selected_bit_columns)} of {len(all_target_desc_cols)} available bits.")
+            # Ensure the selected columns actually exist in the loaded dataframe
+            final_target_desc_cols = [col for col in selected_bit_columns if col in df_target_ligands_raw.columns]
+            if len(final_target_desc_cols) != len(selected_bit_columns):
+                logging.warning("Some selected bit columns were not found in the target ligand file.")
+        else:
+            final_target_desc_cols = all_target_desc_cols
+        # --- END NEW ---
+
         df_target_ligands_processed = df_target_ligands_raw.copy()
-        df_target_ligands_processed[target_desc_cols] = df_target_ligands_processed[target_desc_cols].apply(pd.to_numeric, errors='coerce')
+        df_target_ligands_processed[final_target_desc_cols] = df_target_ligands_processed[final_target_desc_cols].apply(pd.to_numeric, errors='coerce')
         original_target_rows = len(df_target_ligands_processed)
-        df_target_ligands_processed.dropna(subset=target_desc_cols, how='any', inplace=True)
+        df_target_ligands_processed.dropna(subset=final_target_desc_cols, how='any', inplace=True)
 
         if len(df_target_ligands_processed) < original_target_rows:
             logging.info(f"Dropped {original_target_rows - len(df_target_ligands_processed)} target ligands (co-embedding) due to NaNs.")
@@ -170,7 +156,7 @@ def load_and_prepare_target_ligands_for_coembedding(
             return None, None, None
             
         dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
-        X_target_unscaled_numeric = df_target_ligands_processed[target_desc_cols].values.astype(dtype_to_use)
+        X_target_unscaled_numeric = df_target_ligands_processed[final_target_desc_cols].values.astype(dtype_to_use)
 
         X_target_scaled_numeric = scaler_main_data.transform(X_target_unscaled_numeric)
         return df_target_ligands_processed, X_target_scaled_numeric, X_target_unscaled_numeric
@@ -179,36 +165,26 @@ def load_and_prepare_target_ligands_for_coembedding(
         return None, None, None
 
 def load_and_select_bits(bit_selection_csv_path, num_bits_to_use):
-    """
-    Loads a bit variance/ranking CSV and returns the column names for the top N bits.
-    """
     if not bit_selection_csv_path or not os.path.exists(bit_selection_csv_path):
         logging.warning(f"Bit selection CSV not found at '{bit_selection_csv_path}'. Using all bits.")
         return None
-    
     if num_bits_to_use is None or num_bits_to_use <= 0:
         logging.warning(f"Invalid num_bits_to_use ({num_bits_to_use}). Using all bits.")
         return None
-        
     try:
         logging.info(f"Loading top {num_bits_to_use} bits from: {bit_selection_csv_path}")
         df_bits = pd.read_csv(bit_selection_csv_path)
-        
         if 'bit_index' not in df_bits.columns:
             logging.error("'bit_index' column not found in selection CSV. Cannot select bits.")
             return None
-        
-        # Assumes the CSV is already sorted by variance (as analyze_fingerprint_variance.py does)
         top_indices = df_bits['bit_index'].head(num_bits_to_use).tolist()
-        
-        # Convert integer indices to column names (e.g., 1024 -> 'fp_1024')
         selected_bit_columns = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in top_indices]
-        
         logging.info(f"Successfully selected {len(selected_bit_columns)} bit columns for use.")
         return selected_bit_columns
     except Exception as e:
         logging.error(f"Failed to load or process bit selection CSV: {e}", exc_info=True)
         return None
+
     
 def process_similarity_calculations(
     chembl_mf_data_path, zinc_data_path, target_ligands_unscaled_path_for_tsne_and_coembed,
@@ -216,125 +192,81 @@ def process_similarity_calculations(
     output_simspace_dir, output_model_dir, target_rdkit_features_list,
     dr_method_flags, umap_metric_flags, tsne_params,
     run_coembedding_for_pca_umap, dr_method_configs,
-    current_random_state, fingerprint_bit_selection_csv, num_fingerprint_bits_to_use
+    current_random_state, 
+    fingerprint_bit_selection_csv, 
+    num_fingerprint_bits_to_use
     ):
 
     base_name_prefix = f"{target_id_name}_{representation_type}_dim{simspace_dim}"
     log_filename = os.path.join(output_model_dir, f"calculate_simspaces_{base_name_prefix}_seed{current_random_state}.log")
     setup_script_logging(log_filename)
-
     logger.info(f"--- process_similarity_calculations: Random_State: {current_random_state} ---")
     if CUML_AVAILABLE: logger.info("cuML is available.")
     else: logger.info("cuML is NOT available.")
     if SKLEARN_UMAP_AVAILABLE: logger.info("sklearn UMAP (umap-learn) is available.")
     else: logger.warning("sklearn UMAP (umap-learn) is NOT available. CPU UMAP will fail if attempted.")
-
     logging.info(f"Processing for: {base_name_prefix}")
     
-    # --- NEW CHUNKING DATA PREPARATION FLOW ---
-    # Determine descriptor columns from a small sample of the first file
-    try:
-        df_sample = pd.read_csv(chembl_mf_data_path, nrows=5)
-        if representation_type == "fingerprints":
-            df_sample = parse_fingerprint_string_column_in_df(df_sample)
-        descriptor_columns = get_descriptor_columns(df_sample, representation_type, target_rdkit_features_list, is_parsed_fp=(representation_type == "fingerprints"))
-        if not descriptor_columns: 
-            logging.error(f"No descriptor columns determined from sample of {chembl_mf_data_path}. Aborting."); return
-    except Exception as e:
-        logging.error(f"Failed to read sample from {chembl_mf_data_path} to determine columns: {e}"); return
+    # --- CHUNKING DATA PREPARATION FLOW ---
+    descriptor_columns_full = get_descriptor_columns(pd.read_csv(chembl_mf_data_path, nrows=5), representation_type, target_rdkit_features_list, is_parsed_fp=False)
+    if not descriptor_columns_full: logging.error("Could not determine full descriptor column set from sample. Aborting."); return
 
-    logging.info(f"Determined {len(descriptor_columns)} descriptor columns from data sample.")
-    
     selected_fp_columns = None
     if representation_type == "fingerprints" and fingerprint_bit_selection_csv:
         selected_fp_columns = load_and_select_bits(fingerprint_bit_selection_csv, num_fingerprint_bits_to_use)
         if selected_fp_columns:
-            # The new descriptor columns are now the selected subset
             descriptor_columns = selected_fp_columns
             logging.info(f"Using a SUBSET of {len(descriptor_columns)} fingerprint bits for all downstream processing.")
         else:
             logging.warning("Failed to load selected bits. Proceeding with all 2048 bits.")
+            descriptor_columns = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(NUM_FINGERPRINT_BITS)]
+    else:
+        descriptor_columns = get_descriptor_columns(pd.read_csv(chembl_mf_data_path, nrows=5), representation_type, target_rdkit_features_list, is_parsed_fp=False)
+        if representation_type == 'fingerprints': # get_descriptor_columns will return ['Fingerprint'], we need the expanded list
+            descriptor_columns = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(NUM_FINGERPRINT_BITS)]
+
+    if not descriptor_columns: logging.error("Descriptor columns could not be determined. Aborting."); return
+    logging.info(f"Final descriptor column set has {len(descriptor_columns)} columns.")
 
     info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
-    valid_info_chunks = []
-    valid_descriptor_chunks = []
-    chunksize = 100000 # This can be tuned based on memory. 25k rows * 2048 cols is manageable.
-
-    input_files_to_process = [chembl_mf_data_path]
-    if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path):
-        input_files_to_process.append(zinc_data_path)
-
-    total_rows_processed = 0
-    total_rows_kept = 0
+    valid_info_chunks, valid_descriptor_chunks = [], []
+    chunksize = 25000; total_rows_processed = 0; total_rows_kept = 0
     dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
+    input_files_to_process = [chembl_mf_data_path]
+    if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path): input_files_to_process.append(zinc_data_path)
 
     for file_path in input_files_to_process:
         logging.info(f"Processing file in chunks: {file_path}")
         try:
             for i, chunk in enumerate(pd.read_csv(file_path, chunksize=chunksize, low_memory=False)):
-                logging.info(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
+                logging.debug(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
+                if representation_type == "fingerprints" and PRECALCULATED_FP_STRING_COLUMN_NAME in chunk.columns:
+                    chunk = parse_fingerprint_string_column_in_df(chunk)
                 
-                # 1. Parse fingerprints if needed
-                if representation_type == "fingerprints":
-                    if PRECALCULATED_FP_STRING_COLUMN_NAME in chunk.columns:
-                        chunk = parse_fingerprint_string_column_in_df(chunk)
-                
-
-                current_desc_cols_in_chunk = [c for c in descriptor_columns if c in chunk.columns]
-                if not current_desc_cols_in_chunk:
-                    continue
-
-                # --- NEW: Apply bit selection HERE ---
-                if representation_type == "fingerprints" and selected_fp_columns:
-                    # After parsing, select only the top bits
-                    # Ensure all selected columns are actually present after parsing
-                    final_desc_cols_to_use = [c for c in selected_fp_columns if c in chunk.columns]
-                else:
-                    final_desc_cols_to_use = current_desc_cols_in_chunk
-
-                # 2. Select only necessary columns
+                final_desc_cols_to_use = [c for c in descriptor_columns if c in chunk.columns]
+                if not final_desc_cols_to_use: continue
                 current_info_cols = [c for c in info_cols_to_keep if c in chunk.columns]
-                current_desc_cols = [c for c in descriptor_columns if c in chunk.columns]
-                
-                if not current_desc_cols: # Skip chunk if it's missing descriptor columns
-                    logging.warning(f"Chunk {i+1} is missing descriptor columns. Skipping.")
-                    continue
-                
                 chunk_subset = chunk[current_info_cols + final_desc_cols_to_use]
-                
-                # 3. Convert descriptors, drop NaNs
                 if representation_type == "features":
                     chunk_subset[final_desc_cols_to_use] = chunk_subset[final_desc_cols_to_use].apply(pd.to_numeric, errors='coerce')
-                initial_chunk_rows = len(chunk_subset)
-                total_rows_processed += initial_chunk_rows
                 
+                total_rows_processed += len(chunk_subset)
                 chunk_valid = chunk_subset.dropna(subset=final_desc_cols_to_use, how='any')
-                
                 if not chunk_valid.empty:
                     total_rows_kept += len(chunk_valid)
-                    # 4. Separate info from descriptors
                     valid_info_chunks.append(chunk_valid[current_info_cols].copy())
                     valid_descriptor_chunks.append(chunk_valid[final_desc_cols_to_use].values.astype(dtype_to_use))
-                
                 del chunk, chunk_subset, chunk_valid
                 gc.collect()
+        except Exception as e: logging.error(f"Error processing file in chunks {file_path}: {e}", exc_info=True); return
 
-        except Exception as e:
-            logging.error(f"Error processing file in chunks {file_path}: {e}", exc_info=True)
-            return
+    if not valid_descriptor_chunks: logging.error("No valid data rows found after processing all files. Aborting."); return
 
-    if not valid_descriptor_chunks:
-        logging.error("No valid data rows found after processing all files in chunks. Aborting.")
-        return
-
-    # 5. Final Assembly
     logging.info("Assembling final data from valid chunks...")
     X_original_main_valid = np.vstack(valid_descriptor_chunks)
     df_results_main = pd.concat(valid_info_chunks, ignore_index=True)
-    del valid_descriptor_chunks, valid_info_chunks
-    gc.collect()
-
-    logging.info(f"Finished chunk processing. Total rows read: {total_rows_processed}. Total valid rows kept: {total_rows_kept}.")
+    del valid_descriptor_chunks, valid_info_chunks; gc.collect()
+    logging.info(f"Finished chunk processing. Total valid rows: {total_rows_kept}.")
     logging.info(f"Final X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
     logging.info(f"Final df_results_main info shape: {df_results_main.shape}")
 
@@ -359,12 +291,15 @@ def process_similarity_calculations(
         logging.info(f"Saved scaler model: {scaler_model_path}")
     except Exception as e: logging.error(f"Failed to save scaler model {scaler_model_path}: {e}")
 
-    df_target_ligands_for_coembed_info, X_target_scaled_for_coembed, X_target_original_for_coembed = None, None, None
     needs_coembed_data = dr_method_flags.get('tsne') or (run_coembedding_for_pca_umap and (dr_method_flags.get('pca') or dr_method_flags.get('umap')))
+    df_target_ligands_for_coembed_info, X_target_scaled_for_coembed, X_target_original_for_coembed = None, None, None
     if needs_coembed_data:
         df_target_ligands_for_coembed_info, X_target_scaled_for_coembed, X_target_original_for_coembed = \
-            load_and_prepare_target_ligands_for_coembedding( target_ligands_unscaled_path_for_tsne_and_coembed,
-                representation_type, target_rdkit_features_list, scaler )
+            load_and_prepare_target_ligands_for_coembedding( 
+                target_ligands_unscaled_path_for_tsne_and_coembed,
+                representation_type, target_rdkit_features_list, scaler,
+                selected_bit_columns=selected_fp_columns # <<< PASS THE SELECTED COLUMNS
+            )
         if not (X_target_scaled_for_coembed is not None and X_target_original_for_coembed is not None and df_target_ligands_for_coembed_info is not None):
             logging.warning("Failed to fully load/process target ligands for co-embedding. Some co-embedding steps will be skipped.")
         else: logging.info(f"Prepared {X_target_scaled_for_coembed.shape[0]} target ligands for co-embedding.")
@@ -462,10 +397,10 @@ def process_similarity_calculations(
             try: 
                 if attempt_cuml_umap: 
                     logging.info(f"Attempting cuML UMAP for {metric_name} (projection).")
-                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
+                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
                 elif SKLEARN_UMAP_AVAILABLE: 
                     logging.info(f"Using scikit-learn UMAP for {metric_name} (projection).")
-                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, init='tswspectral')
+                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
                 else: 
                     logging.warning(f"No suitable UMAP library for NON-CO-EMBEDDED UMAP ({metric_name}). Skipping."); 
                     for col in umap_cols: df_results_main[col] = np.nan 
@@ -653,6 +588,8 @@ if __name__ == "__main__":
     parser.add_argument("--output_simspace_dir", required=True)
     parser.add_argument("--output_model_dir", required=True)
     parser.add_argument("--rdkit_features_list_target_str", required=True)
+    parser.add_argument("--fingerprint_bit_selection_csv", default=None, help="Path to CSV with 'bit_index' column for feature selection.")
+    parser.add_argument("--num_fingerprint_bits_to_use", type=int, default=None, help="Number of top bits to select from the selection CSV.")
     parser.add_argument("--dr_method_pca", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_tsne", type=lambda x: (str(x).lower() == 'true'), default=False)
@@ -663,12 +600,10 @@ if __name__ == "__main__":
     parser.add_argument("--umap_metric_to_run_jaccard", action='store_true', default=False)
     parser.add_argument("--tsne_perplexity", type=float, default=30.0)
     parser.add_argument("--tsne_pca_components", type=int, default=50)
-    parser.add_argument("--n_neighbors", type=int, default=None, help="N_neighbors for cuML tSNE.") 
+    parser.add_argument("--n_neighbors", type=int, default=None) 
     parser.add_argument("--run_coembedding_for_pca_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_configs_json_str", required=True)
-    parser.add_argument("--random_state", type=int, default=42, help="Random state for DR algorithms.")
-    parser.add_argument("--fingerprint_bit_selection_csv", default=None, help="Path to CSV with 'bit_index' column for feature selection.")
-    parser.add_argument("--num_fingerprint_bits_to_use", type=int, default=None, help="Number of top bits to select from the selection CSV.")
+    parser.add_argument("--random_state", type=int, default=42)
     args_main = parser.parse_args()
 
     try:

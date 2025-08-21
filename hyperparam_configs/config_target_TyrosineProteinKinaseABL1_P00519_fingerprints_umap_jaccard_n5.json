@@ -64,7 +64,7 @@
     ],
     "run_coembedding_for_pca_umap": true,
     "fingerprint_bit_selection_csv_path": "fingerprint_variance_analysis/fingerprint_bit_variance_sorted.csv",
-    "num_fingerprint_bits_to_use": 1024
+    "num_fingerprint_bits_to_use": 2048
   },
   "targets": [
     {
