@@ -17,6 +17,9 @@ SWEEP_REPORT_DIR = "final_report_hyperparam_sweep/"
 # Target protein to use for the sweep (must match an 'id_name' in the base config)
 TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 
+BIT_SELECTION_CSV_PATH = "fingerprint_variance_analysis/fingerprint_bit_variance_sorted.csv"
+NUM_BITS_TO_USE = 1024
+
 # --- MODIFIED: Hyperparameters and Dimensions to sweep ---
 # Fixed similarity space dimension for the UMAP sweep
 UMAP_SIMSPACE_DIM_FOR_SWEEP = [10]
@@ -74,11 +77,17 @@ def generate_configs():
                 
                 new_config = copy.deepcopy(base_config)
                 
-                # --- Modify config for this specific UMAP run ---
-                new_config["global_settings"]["simspace_dims_to_test"] = UMAP_SIMSPACE_DIM_FOR_SWEEP # Use UMAP-specific DIM
+                # Modify config for this specific UMAP run
+                new_config["global_settings"]["simspace_dims_to_test"] = UMAP_SIMSPACE_DIM_FOR_SWEEP
                 new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
                 new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
                 
+                # --- NEW: Add bit selection settings if it's a fingerprints run ---
+                if repr_type == "fingerprints":
+                    new_config["global_settings"]["fingerprint_bit_selection_csv_path"] = BIT_SELECTION_CSV_PATH
+                    new_config["global_settings"]["num_fingerprint_bits_to_use"] = NUM_BITS_TO_USE
+                # --- END NEW ---
+
                 new_config["targets"] = target_config_list
                 new_config["representations"] = [repr_type]
                 
@@ -103,11 +112,16 @@ def generate_configs():
 
             new_config = copy.deepcopy(base_config)
 
-            # --- Modify config for this specific t-SNE run ---
-            new_config["global_settings"]["simspace_dims_to_test"] = TSNE_SIMSPACE_DIM_FOR_SWEEP # Use t-SNE-specific DIM
+            # Modify config for this specific t-SNE run
+            new_config["global_settings"]["simspace_dims_to_test"] = TSNE_SIMSPACE_DIM_FOR_SWEEP
             new_config["global_settings"]["tsne_pca_components"] = pca_comps
             new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
             new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+
+            # --- NEW: Add bit selection settings for this fingerprints run ---
+            new_config["global_settings"]["fingerprint_bit_selection_csv_path"] = BIT_SELECTION_CSV_PATH
+            new_config["global_settings"]["num_fingerprint_bits_to_use"] = NUM_BITS_TO_USE
+            # --- END NEW ---
             
             new_config["targets"] = target_config_list
             new_config["representations"] = [repr_type]
@@ -125,6 +139,7 @@ def generate_configs():
 
     print("\n--- Hyperparameter configuration generation complete! ---")
     print(f"All generated configs will output to base directory: '{SWEEP_WORKSPACE_DIR}'")
+    print(f"Fingerprint-based configs will use the top {NUM_BITS_TO_USE} bits from '{BIT_SELECTION_CSV_PATH}'")
 
 
 if __name__ == "__main__":

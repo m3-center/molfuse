@@ -178,13 +178,45 @@ def load_and_prepare_target_ligands_for_coembedding(
         logger.error(f"Error loading/processing target ligands from '{target_ligands_unscaled_path}': {e}", exc_info=True)
         return None, None, None
 
+def load_and_select_bits(bit_selection_csv_path, num_bits_to_use):
+    """
+    Loads a bit variance/ranking CSV and returns the column names for the top N bits.
+    """
+    if not bit_selection_csv_path or not os.path.exists(bit_selection_csv_path):
+        logging.warning(f"Bit selection CSV not found at '{bit_selection_csv_path}'. Using all bits.")
+        return None
+    
+    if num_bits_to_use is None or num_bits_to_use <= 0:
+        logging.warning(f"Invalid num_bits_to_use ({num_bits_to_use}). Using all bits.")
+        return None
+        
+    try:
+        logging.info(f"Loading top {num_bits_to_use} bits from: {bit_selection_csv_path}")
+        df_bits = pd.read_csv(bit_selection_csv_path)
+        
+        if 'bit_index' not in df_bits.columns:
+            logging.error("'bit_index' column not found in selection CSV. Cannot select bits.")
+            return None
+        
+        # Assumes the CSV is already sorted by variance (as analyze_fingerprint_variance.py does)
+        top_indices = df_bits['bit_index'].head(num_bits_to_use).tolist()
+        
+        # Convert integer indices to column names (e.g., 1024 -> 'fp_1024')
+        selected_bit_columns = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in top_indices]
+        
+        logging.info(f"Successfully selected {len(selected_bit_columns)} bit columns for use.")
+        return selected_bit_columns
+    except Exception as e:
+        logging.error(f"Failed to load or process bit selection CSV: {e}", exc_info=True)
+        return None
+    
 def process_similarity_calculations(
     chembl_mf_data_path, zinc_data_path, target_ligands_unscaled_path_for_tsne_and_coembed,
     simspace_dim, representation_type, target_id_name,
     output_simspace_dir, output_model_dir, target_rdkit_features_list,
     dr_method_flags, umap_metric_flags, tsne_params,
     run_coembedding_for_pca_umap, dr_method_configs,
-    current_random_state 
+    current_random_state, fingerprint_bit_selection_csv, num_fingerprint_bits_to_use
     ):
 
     base_name_prefix = f"{target_id_name}_{representation_type}_dim{simspace_dim}"
@@ -213,6 +245,16 @@ def process_similarity_calculations(
 
     logging.info(f"Determined {len(descriptor_columns)} descriptor columns from data sample.")
     
+    selected_fp_columns = None
+    if representation_type == "fingerprints" and fingerprint_bit_selection_csv:
+        selected_fp_columns = load_and_select_bits(fingerprint_bit_selection_csv, num_fingerprint_bits_to_use)
+        if selected_fp_columns:
+            # The new descriptor columns are now the selected subset
+            descriptor_columns = selected_fp_columns
+            logging.info(f"Using a SUBSET of {len(descriptor_columns)} fingerprint bits for all downstream processing.")
+        else:
+            logging.warning("Failed to load selected bits. Proceeding with all 2048 bits.")
+
     info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
     valid_info_chunks = []
     valid_descriptor_chunks = []
@@ -237,6 +279,19 @@ def process_similarity_calculations(
                     if PRECALCULATED_FP_STRING_COLUMN_NAME in chunk.columns:
                         chunk = parse_fingerprint_string_column_in_df(chunk)
                 
+
+                current_desc_cols_in_chunk = [c for c in descriptor_columns if c in chunk.columns]
+                if not current_desc_cols_in_chunk:
+                    continue
+
+                # --- NEW: Apply bit selection HERE ---
+                if representation_type == "fingerprints" and selected_fp_columns:
+                    # After parsing, select only the top bits
+                    # Ensure all selected columns are actually present after parsing
+                    final_desc_cols_to_use = [c for c in selected_fp_columns if c in chunk.columns]
+                else:
+                    final_desc_cols_to_use = current_desc_cols_in_chunk
+
                 # 2. Select only necessary columns
                 current_info_cols = [c for c in info_cols_to_keep if c in chunk.columns]
                 current_desc_cols = [c for c in descriptor_columns if c in chunk.columns]
@@ -245,20 +300,21 @@ def process_similarity_calculations(
                     logging.warning(f"Chunk {i+1} is missing descriptor columns. Skipping.")
                     continue
                 
-                chunk_subset = chunk[current_info_cols + current_desc_cols]
+                chunk_subset = chunk[current_info_cols + final_desc_cols_to_use]
                 
                 # 3. Convert descriptors, drop NaNs
-                chunk_subset[current_desc_cols] = chunk_subset[current_desc_cols].apply(pd.to_numeric, errors='coerce')
+                if representation_type == "features":
+                    chunk_subset[final_desc_cols_to_use] = chunk_subset[final_desc_cols_to_use].apply(pd.to_numeric, errors='coerce')
                 initial_chunk_rows = len(chunk_subset)
                 total_rows_processed += initial_chunk_rows
                 
-                chunk_valid = chunk_subset.dropna(subset=current_desc_cols, how='any')
+                chunk_valid = chunk_subset.dropna(subset=final_desc_cols_to_use, how='any')
                 
                 if not chunk_valid.empty:
                     total_rows_kept += len(chunk_valid)
                     # 4. Separate info from descriptors
                     valid_info_chunks.append(chunk_valid[current_info_cols].copy())
-                    valid_descriptor_chunks.append(chunk_valid[current_desc_cols].values.astype(dtype_to_use))
+                    valid_descriptor_chunks.append(chunk_valid[final_desc_cols_to_use].values.astype(dtype_to_use))
                 
                 del chunk, chunk_subset, chunk_valid
                 gc.collect()
@@ -611,6 +667,8 @@ if __name__ == "__main__":
     parser.add_argument("--run_coembedding_for_pca_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_configs_json_str", required=True)
     parser.add_argument("--random_state", type=int, default=42, help="Random state for DR algorithms.")
+    parser.add_argument("--fingerprint_bit_selection_csv", default=None, help="Path to CSV with 'bit_index' column for feature selection.")
+    parser.add_argument("--num_fingerprint_bits_to_use", type=int, default=None, help="Number of top bits to select from the selection CSV.")
     args_main = parser.parse_args()
 
     try:
@@ -643,6 +701,7 @@ if __name__ == "__main__":
         args_main.output_simspace_dir, args_main.output_model_dir, target_rdkit_features_list_main,
         dr_method_flags_dict_main, active_umap_metrics_main, tsne_params_dict_main,
         args_main.run_coembedding_for_pca_umap, dr_method_configs_dict_main,
-        args_main.random_state 
+        args_main.random_state, args_main.fingerprint_bit_selection_csv,
+        args_main.num_fingerprint_bits_to_use 
     )
     logging.info("Similarity space calculation script finished (direct run).")
