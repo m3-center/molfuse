@@ -137,8 +137,8 @@ def main(config_path, representation_mode, random_seed_value):
         logging.error(f"FATAL: Failed to copy configuration file '{config_path}' to workspace. Aborting run. Error: {e}")
         return
 
-    bit_selection_csv_path = gs.get("fingerprint_bit_selection_csv_path") # Can be None
-    num_bits_to_use = gs.get("num_fingerprint_bits_to_use") # Can be None
+    # bit_selection_csv_path = gs.get("fingerprint_bit_selection_csv_path") # Can be None
+    # num_bits_to_use = gs.get("num_fingerprint_bits_to_use") # Can be None
 
     rdkit_features_list_target_json_str = json.dumps(gs.get('rdkit_features_list_target', []))
     run_coembedding_pca_umap_flag = gs.get('run_coembedding_for_pca_umap', False)
@@ -224,13 +224,6 @@ def main(config_path, representation_mode, random_seed_value):
                 if os.path.exists(current_zinc_filtered_path): cmd_calc_simspace.extend(["--zinc_data_path", os.path.abspath(current_zinc_filtered_path)])
                 else: cmd_calc_simspace.extend(["--zinc_data_path", "None"])
 
-                if representation_mode == "fingerprints" and bit_selection_csv_path and num_bits_to_use:
-                    logging.info(f"Adding bit selection to command: file={bit_selection_csv_path}, num_bits={num_bits_to_use}")
-                    cmd_calc_simspace.extend([
-                        "--fingerprint_bit_selection_csv", os.path.abspath(bit_selection_csv_path),
-                        "--num_fingerprint_bits_to_use", str(num_bits_to_use)
-                    ])
-                
                 active_dr_methods_cfg = config["dimensionality_reduction_methods"]
                 cmd_calc_simspace.append(f"--dr_method_pca={str('pca' in active_dr_methods_cfg)}")
                 has_umap = any("umap" in k for k in active_dr_methods_cfg); cmd_calc_simspace.append(f"--dr_method_umap={str(has_umap)}")
