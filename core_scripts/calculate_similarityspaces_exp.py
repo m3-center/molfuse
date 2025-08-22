@@ -7,7 +7,6 @@ from compress_pickle import dump
 from sklearn.preprocessing import StandardScaler
 import argparse
 import json 
-import time 
 
 # CUML / Sklearn imports
 CUML_AVAILABLE = False
@@ -112,8 +111,7 @@ def get_descriptor_columns(df, representation_type, target_rdkit_features_list, 
         return None
 
 def load_and_prepare_target_ligands_for_coembedding(
-    target_ligands_unscaled_path, representation_type, target_rdkit_features_list, scaler_main_data,
-    selected_bit_columns=None # --- NEW ARGUMENT ---
+    target_ligands_unscaled_path, representation_type, target_rdkit_features_list, scaler_main_data
 ):
     if not target_ligands_unscaled_path or target_ligands_unscaled_path.lower() == "none" or not os.path.exists(target_ligands_unscaled_path):
         logger.warning(f"Target ligands file for co-embedding not provided, 'None', or not found: '{target_ligands_unscaled_path}'.")
@@ -133,16 +131,7 @@ def load_and_prepare_target_ligands_for_coembedding(
             logger.error(f"Could not get descriptor columns from target ligands file: {target_ligands_unscaled_path}.")
             return None, None, None
 
-        # --- NEW: Apply bit selection if provided ---
-        if representation_type == "fingerprints" and selected_bit_columns:
-            logging.info(f"Applying bit selection to target ligands. Using {len(selected_bit_columns)} of {len(all_target_desc_cols)} available bits.")
-            # Ensure the selected columns actually exist in the loaded dataframe
-            final_target_desc_cols = [col for col in selected_bit_columns if col in df_target_ligands_raw.columns]
-            if len(final_target_desc_cols) != len(selected_bit_columns):
-                logging.warning("Some selected bit columns were not found in the target ligand file.")
-        else:
-            final_target_desc_cols = all_target_desc_cols
-        # --- END NEW ---
+        final_target_desc_cols = all_target_desc_cols
 
         df_target_ligands_processed = df_target_ligands_raw.copy()
         df_target_ligands_processed[final_target_desc_cols] = df_target_ligands_processed[final_target_desc_cols].apply(pd.to_numeric, errors='coerce')
@@ -185,55 +174,47 @@ def load_and_select_bits(bit_selection_csv_path, num_bits_to_use):
         logging.error(f"Failed to load or process bit selection CSV: {e}", exc_info=True)
         return None
 
-    
 def process_similarity_calculations(
     chembl_mf_data_path, zinc_data_path, target_ligands_unscaled_path_for_tsne_and_coembed,
     simspace_dim, representation_type, target_id_name,
     output_simspace_dir, output_model_dir, target_rdkit_features_list,
     dr_method_flags, umap_metric_flags, tsne_params,
     run_coembedding_for_pca_umap, dr_method_configs,
-    current_random_state, 
-    fingerprint_bit_selection_csv, 
-    num_fingerprint_bits_to_use
+    current_random_state 
     ):
 
     base_name_prefix = f"{target_id_name}_{representation_type}_dim{simspace_dim}"
     log_filename = os.path.join(output_model_dir, f"calculate_simspaces_{base_name_prefix}_seed{current_random_state}.log")
     setup_script_logging(log_filename)
+
     logger.info(f"--- process_similarity_calculations: Random_State: {current_random_state} ---")
     if CUML_AVAILABLE: logger.info("cuML is available.")
     else: logger.info("cuML is NOT available.")
     if SKLEARN_UMAP_AVAILABLE: logger.info("sklearn UMAP (umap-learn) is available.")
     else: logger.warning("sklearn UMAP (umap-learn) is NOT available. CPU UMAP will fail if attempted.")
+
     logging.info(f"Processing for: {base_name_prefix}")
     
     # --- CHUNKING DATA PREPARATION FLOW ---
-    descriptor_columns_full = get_descriptor_columns(pd.read_csv(chembl_mf_data_path, nrows=5), representation_type, target_rdkit_features_list, is_parsed_fp=False)
-    if not descriptor_columns_full: logging.error("Could not determine full descriptor column set from sample. Aborting."); return
+    try:
+        df_sample = pd.read_csv(chembl_mf_data_path, nrows=5)
+        if representation_type == "fingerprints":
+            df_sample = parse_fingerprint_string_column_in_df(df_sample)
+        descriptor_columns = get_descriptor_columns(df_sample, representation_type, target_rdkit_features_list, is_parsed_fp=(representation_type == "fingerprints"))
+        if not descriptor_columns: 
+            logging.error(f"No descriptor columns determined from sample of {chembl_mf_data_path}. Aborting."); return
+    except Exception as e:
+        logging.error(f"Failed to read sample from {chembl_mf_data_path} to determine columns: {e}"); return
 
-    selected_fp_columns = None
-    if representation_type == "fingerprints" and fingerprint_bit_selection_csv:
-        selected_fp_columns = load_and_select_bits(fingerprint_bit_selection_csv, num_fingerprint_bits_to_use)
-        if selected_fp_columns:
-            descriptor_columns = selected_fp_columns
-            logging.info(f"Using a SUBSET of {len(descriptor_columns)} fingerprint bits for all downstream processing.")
-        else:
-            logging.warning("Failed to load selected bits. Proceeding with all 2048 bits.")
-            descriptor_columns = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(NUM_FINGERPRINT_BITS)]
-    else:
-        descriptor_columns = get_descriptor_columns(pd.read_csv(chembl_mf_data_path, nrows=5), representation_type, target_rdkit_features_list, is_parsed_fp=False)
-        if representation_type == 'fingerprints': # get_descriptor_columns will return ['Fingerprint'], we need the expanded list
-            descriptor_columns = [f"{FINGERPRINT_COLUMN_PREFIX}{i}" for i in range(NUM_FINGERPRINT_BITS)]
-
-    if not descriptor_columns: logging.error("Descriptor columns could not be determined. Aborting."); return
-    logging.info(f"Final descriptor column set has {len(descriptor_columns)} columns.")
-
+    logging.info(f"Determined {len(descriptor_columns)} descriptor columns from data sample.")
+    
     info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
     valid_info_chunks, valid_descriptor_chunks = [], []
     chunksize = 25000; total_rows_processed = 0; total_rows_kept = 0
     dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
     input_files_to_process = [chembl_mf_data_path]
-    if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path): input_files_to_process.append(zinc_data_path)
+    if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path):
+        input_files_to_process.append(zinc_data_path)
 
     for file_path in input_files_to_process:
         logging.info(f"Processing file in chunks: {file_path}")
@@ -268,9 +249,7 @@ def process_similarity_calculations(
     del valid_descriptor_chunks, valid_info_chunks; gc.collect()
     logging.info(f"Finished chunk processing. Total valid rows: {total_rows_kept}.")
     logging.info(f"Final X_original_main_valid shape: {X_original_main_valid.shape}, dtype: {X_original_main_valid.dtype}")
-    logging.info(f"Final df_results_main info shape: {df_results_main.shape}")
-
-    # Create MOLECULE ID
+    
     if 'Compound ChEMBL ID' in df_results_main.columns and 'ZINC_ID' in df_results_main.columns: 
         df_results_main['MOLECULE ID'] = df_results_main['Compound ChEMBL ID'].fillna(df_results_main['ZINC_ID'])
     elif 'Compound ChEMBL ID' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['Compound ChEMBL ID']
@@ -279,7 +258,6 @@ def process_similarity_calculations(
         if 'SMILES' in df_results_main.columns: df_results_main['MOLECULE ID'] = df_results_main['SMILES']
         else: df_results_main['MOLECULE ID'] = 'UNKNOWN_ID_' + pd.Series(df_results_main.index).astype(str)
     df_results_main['MOLECULE ID'] = df_results_main['MOLECULE ID'].astype(str).fillna('MISSING_ID')
-    # --- END OF CHUNKING FLOW ---
     
     scaler = StandardScaler()
     logging.info(f"Fitting StandardScaler on main data of shape {X_original_main_valid.shape}") 
@@ -291,15 +269,12 @@ def process_similarity_calculations(
         logging.info(f"Saved scaler model: {scaler_model_path}")
     except Exception as e: logging.error(f"Failed to save scaler model {scaler_model_path}: {e}")
 
-    needs_coembed_data = dr_method_flags.get('tsne') or (run_coembedding_for_pca_umap and (dr_method_flags.get('pca') or dr_method_flags.get('umap')))
     df_target_ligands_for_coembed_info, X_target_scaled_for_coembed, X_target_original_for_coembed = None, None, None
+    needs_coembed_data = dr_method_flags.get('tsne') or (run_coembedding_for_pca_umap and (dr_method_flags.get('pca') or dr_method_flags.get('umap')))
     if needs_coembed_data:
         df_target_ligands_for_coembed_info, X_target_scaled_for_coembed, X_target_original_for_coembed = \
-            load_and_prepare_target_ligands_for_coembedding( 
-                target_ligands_unscaled_path_for_tsne_and_coembed,
-                representation_type, target_rdkit_features_list, scaler,
-                selected_bit_columns=selected_fp_columns # <<< PASS THE SELECTED COLUMNS
-            )
+            load_and_prepare_target_ligands_for_coembedding( target_ligands_unscaled_path_for_tsne_and_coembed,
+                representation_type, target_rdkit_features_list, scaler )
         if not (X_target_scaled_for_coembed is not None and X_target_original_for_coembed is not None and df_target_ligands_for_coembed_info is not None):
             logging.warning("Failed to fully load/process target ligands for co-embedding. Some co-embedding steps will be skipped.")
         else: logging.info(f"Prepared {X_target_scaled_for_coembed.shape[0]} target ligands for co-embedding.")
@@ -308,10 +283,10 @@ def process_similarity_calculations(
     X_target_pre_reduced_for_manifold_coembed = None
     if representation_type == "fingerprints":
         n_pca_components_for_manifold = tsne_params.get('pca_components', 50)
-        logging.info(f"Fingerprints detected. Applying initial PCA to {n_pca_components_for_manifold} components before UMAP/t-SNE.")
+        logging.info(f"Fingerprints detected. Applying initial PCA to {n_pca_components_for_manifold} components before some UMAP/t-SNE.")
         n_effective_pca_components = min(n_pca_components_for_manifold, X_scaled_main.shape[0] - 1 if X_scaled_main.shape[0]>1 else 1, X_scaled_main.shape[1])
         if n_effective_pca_components < 2:
-            logging.error(f"Cannot perform pre-reduction PCA, effective components ({n_effective_pca_components}) is too low. Using full-dimensional scaled data for UMAP/t-SNE.")
+            logging.error(f"Cannot perform pre-reduction PCA, effective components ({n_effective_pca_components}) is too low.")
             X_main_pre_reduced_for_manifold = X_scaled_main
         else:
             try:
@@ -328,10 +303,11 @@ def process_similarity_calculations(
                 X_main_pre_reduced_for_manifold = X_scaled_main
                 X_target_pre_reduced_for_manifold_coembed = X_target_scaled_for_coembed
     else:
-        logging.info("Features detected. UMAP will run on original scaled feature space.")
+        logging.info("Features detected. No pre-reduction PCA before UMAP.")
         X_main_pre_reduced_for_manifold = X_scaled_main
         X_target_pre_reduced_for_manifold_coembed = X_target_scaled_for_coembed
 
+    # --- PCA ---
     if dr_method_flags.get('pca'):
         pca_config = dr_method_configs.get('pca', {})
         pca_cols = [f'PCA-{i+1}' for i in range(simspace_dim)]
@@ -369,38 +345,49 @@ def process_similarity_calculations(
             except Exception as e: logging.error(f"CO-EMBEDDED PCA failed: {e}", exc_info=True)
             gc.collect()
 
+    # --- UMAP ---
     if dr_method_flags.get('umap'):
         for metric_name, run_metric_flag in umap_metric_flags.items():
             if not run_metric_flag: continue
             
             umap_config = dr_method_configs.get(f"umap_{metric_name}", {})
-            n_neighbors_val = umap_config.get('n_neighbors', 15)
-            min_dist_val = umap_config.get('min_dist', 0.1)
             umap_cols = [f"UMAP-{metric_name.capitalize()}-{i+1}" for i in range(simspace_dim)]
             
-            current_X_main_umap = X_scaled_main
-            current_X_target_coembed_umap = X_target_scaled_for_coembed
-            attempt_cuml_umap = CUML_AVAILABLE 
+            # --- Clean and Explicit Data Path Logic for UMAP ---
+            current_X_main_umap = None; current_X_target_coembed_umap = None
+            attempt_cuml_umap = CUML_AVAILABLE
+            n_neighbors_val = umap_config.get('n_neighbors', 15)
+            min_dist_val = umap_config.get('min_dist', 0.1)
 
-            if representation_type == "fingerprints":
-                if metric_name.lower() in ["hamming", "manhattan", "jaccard"]:
+            if representation_type == "features":
+                logging.info(f"UMAP ({metric_name}) on features: using SCALED data.")
+                current_X_main_umap = X_scaled_main
+                current_X_target_coembed_umap = X_target_scaled_for_coembed
+            
+            elif representation_type == "fingerprints":
+                if metric_name.lower() in ["jaccard", "hamming", "manhattan"]:
+                    logging.info(f"UMAP ({metric_name}) on fingerprints: using ORIGINAL, UNSCALED, FULL-DIMENSIONAL data.")
                     current_X_main_umap = X_original_main_valid
                     current_X_target_coembed_umap = X_target_original_for_coembed
                     attempt_cuml_umap = False 
-                    logging.info(f"UMAP '{metric_name}' on fingerprints: using UNSCALED data and forcing scikit-learn.")
-                else: # e.g., Euclidean UMAP on fingerprints, now on pre-reduced data
-                    logging.info(f"For fingerprints, UMAP ({metric_name}) will run on the PCA pre-reduced data.")
+                    logging.info(f"Forcing scikit-learn UMAP for '{metric_name}' on fingerprints.")
+                else:
+                    logging.info(f"UMAP ({metric_name}) on fingerprints: using PCA PRE-REDUCED data.")
                     current_X_main_umap = X_main_pre_reduced_for_manifold
                     current_X_target_coembed_umap = X_target_pre_reduced_for_manifold_coembed
             
+            if current_X_main_umap is None:
+                logging.error(f"Input data for UMAP ({metric_name}) was not assigned. Skipping."); continue
+
+            # Non-co-embedded UMAP (Projection Model)
             umap_model_main_for_projection = None 
             try: 
                 if attempt_cuml_umap: 
-                    logging.info(f"Attempting cuML UMAP for {metric_name} (projection).")
-                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
+                    logging.info(f"Attempting cuML UMAP for {metric_name} (projection) with n_neighbors={n_neighbors_val}.")
+                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
                 elif SKLEARN_UMAP_AVAILABLE: 
-                    logging.info(f"Using scikit-learn UMAP for {metric_name} (projection).")
-                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
+                    logging.info(f"Using scikit-learn UMAP for {metric_name} (projection) with n_neighbors={n_neighbors_val}.")
+                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
                 else: 
                     logging.warning(f"No suitable UMAP library for NON-CO-EMBEDDED UMAP ({metric_name}). Skipping."); 
                     for col in umap_cols: df_results_main[col] = np.nan 
@@ -419,10 +406,10 @@ def process_similarity_calculations(
                     for col in umap_cols: df_results_main[col] = np.nan 
             except Exception as e: 
                 logging.error(f"NON-CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
-                if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
+                if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE:
                     logging.info(f"cuML UMAP failed for {metric_name}, trying scikit-learn UMAP (projection) as fallback...")
                     try:
-                        umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
+                        umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
                         umap_res_main_fb = umap_model_main_for_projection.fit_transform(current_X_main_umap)
                         if umap_res_main_fb.shape[0] == len(df_results_main):
                             for i in range(simspace_dim): df_results_main[umap_cols[i]] = umap_res_main_fb[:, i]
@@ -446,8 +433,8 @@ def process_similarity_calculations(
                     X_coembed_umap = np.vstack((current_X_main_umap, current_X_target_coembed_umap))
                     logging.info(f"CO-EMBEDDED UMAP ({metric_name}) on data shape {X_coembed_umap.shape}")
                     umap_model_co = None
-                    if attempt_cuml_umap: umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
-                    elif SKLEARN_UMAP_AVAILABLE: umap_model_co = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
+                    if attempt_cuml_umap: umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
+                    elif SKLEARN_UMAP_AVAILABLE: umap_model_co = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
                     else: logging.warning(f"No UMAP lib for {metric_name}. Skip co-embedding."); continue
                     
                     umap_res_co = umap_model_co.fit_transform(X_coembed_umap)
@@ -462,23 +449,6 @@ def process_similarity_calculations(
                     else: logging.error(f"UMAP co-embed length mismatch for {metric_name}.")
                 except Exception as e: 
                     logging.error(f"CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
-                    # Fallback logic for co-embedded UMAP
-                    if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
-                        logging.info(f"cuML CO-EMBEDDED UMAP failed for {metric_name}, trying scikit-learn UMAP (co-embedding) as fallback...")
-                        try:
-                            umap_model_co_fb = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
-                            umap_res_co_fb = umap_model_co_fb.fit_transform(X_coembed_umap) 
-                            umap_res_target_co_fb = umap_res_co_fb[current_X_main_umap.shape[0]:]
-                            if len(umap_res_target_co_fb) == len(df_target_ligands_for_coembed_info):
-                                df_umap_target_co_coords_fb = pd.DataFrame(umap_res_target_co_fb, columns=umap_cols, index=df_target_ligands_for_coembed_info.index)
-                                df_target_ids_coembed_umap_fb = df_target_ligands_for_coembed_info[id_cols] 
-                                df_target_projected_umap_coembed_with_ids_fb = df_target_ids_coembed_umap_fb.join(df_umap_target_co_coords_fb, how="inner")
-                                umap_target_coembed_proj_path_fb = os.path.join(output_simspace_dir, f"{base_name_prefix}_{metric_name}_UMAP_COEMBED_TARGET_PROJECTIONS_sklearn_fallback.csv")
-                                df_target_projected_umap_coembed_with_ids_fb.to_csv(umap_target_coembed_proj_path_fb, index=False)
-                                logging.info(f"Saved scikit-learn CO-EMBEDDED UMAP ({metric_name}) target projections (fallback) to {umap_target_coembed_proj_path_fb}")
-                            else: logging.error(f"scikit-learn UMAP Co-embedding (fallback) length mismatch for metric {metric_name}.")
-                        except Exception as e_co_umap_fb:
-                             logging.error(f"scikit-learn CO-EMBEDDED UMAP (fallback, {metric_name}) also failed: {e_co_umap_fb}", exc_info=True)
                 gc.collect()
 
     # --- t-SNE ---
@@ -494,9 +464,8 @@ def process_similarity_calculations(
                         logging.info("For fingerprints, t-SNE will use the already computed pre-reduced data.")
                         if X_main_pre_reduced_for_manifold is not None and X_target_pre_reduced_for_manifold_coembed is not None:
                             X_tsne_pca_reduced = np.vstack((X_main_pre_reduced_for_manifold, X_target_pre_reduced_for_manifold_coembed))
-                        else:
-                            logging.error("Pre-reduced data for t-SNE (fingerprints) is missing. Skipping.")
-                    else: # For features, run the original t-SNE PCA step
+                        else: logging.error("Pre-reduced data for t-SNE (fingerprints) is missing. Skipping.")
+                    else:
                         X_for_tsne_combined = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
                         actual_pca_comps = min(tsne_params['pca_components'], X_for_tsne_combined.shape[0]-1 if X_for_tsne_combined.shape[0]>1 else 1, X_for_tsne_combined.shape[1])
                         if actual_pca_comps < 2:
@@ -519,11 +488,8 @@ def process_similarity_calculations(
                             if perp_final != float(tsne_params['perplexity']): logging.info(f"Adjusted t-SNE perplexity to {perp_final}")
                             tsne_model = None
                             tsne_init_kwargs = {'n_components': simspace_dim, 'perplexity': perp_final, 'random_state': current_random_state}
-                            # cuml_verbose = 1 if logger.isEnabledFor(logging.INFO) else 0 
-                            # if logger.isEnabledFor(logging.DEBUG): cuml_verbose = 4
-                            # sklearn_verbose = 1 if logger.isEnabledFor(logging.DEBUG) else 0
-                            cuml_verbose = 0
-                            sklearn_verbose = 0
+                            cuml_verbose = 4 if logger.isEnabledFor(logging.DEBUG) else 1
+                            sklearn_verbose = 1 if logger.isEnabledFor(logging.DEBUG) else 0
                             if attempt_cuml_tsne_final:
                                 tsne_init_kwargs.update({'method': 'barnes_hut', 'verbose': cuml_verbose})
                                 if tsne_params.get('n_neighbors') is not None: tsne_init_kwargs['n_neighbors'] = tsne_params['n_neighbors']
@@ -557,9 +523,8 @@ def process_similarity_calculations(
 
     output_csv_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_similarity_space.csv")
     try:
-        # Note: descriptor_columns are no longer in df_results_main
-        info_cols = [c for c in df_results_main.columns if not c.startswith(('PCA-','UMAP-','t-SNE-'))]
         dr_cols = [c for c in df_results_main.columns if c.startswith(('PCA-','UMAP-','t-SNE-'))]
+        info_cols = [c for c in df_results_main.columns if c not in dr_cols]
         cols_to_save = [c for c in info_cols + dr_cols if c in df_results_main.columns] 
         if cols_to_save:
             df_results_main[cols_to_save].to_csv(output_csv_path, index=False)
@@ -588,8 +553,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_simspace_dir", required=True)
     parser.add_argument("--output_model_dir", required=True)
     parser.add_argument("--rdkit_features_list_target_str", required=True)
-    parser.add_argument("--fingerprint_bit_selection_csv", default=None, help="Path to CSV with 'bit_index' column for feature selection.")
-    parser.add_argument("--num_fingerprint_bits_to_use", type=int, default=None, help="Number of top bits to select from the selection CSV.")
     parser.add_argument("--dr_method_pca", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument("--dr_method_tsne", type=lambda x: (str(x).lower() == 'true'), default=False)
@@ -615,20 +578,10 @@ if __name__ == "__main__":
     os.makedirs(args_main.output_model_dir, exist_ok=True)
     
     dr_method_flags_dict_main = {'pca': args_main.dr_method_pca, 'umap': args_main.dr_method_umap, 'tsne': args_main.dr_method_tsne}
-    active_umap_metrics_main = {}
-    if args_main.dr_method_umap:
-        if args_main.umap_metric_to_run_euclidean: active_umap_metrics_main['euclidean'] = True
-        if args_main.umap_metric_to_run_cosine: active_umap_metrics_main['cosine'] = True
-        if args_main.umap_metric_to_run_manhattan: active_umap_metrics_main['manhattan'] = True
-        if args_main.umap_metric_to_run_hamming: active_umap_metrics_main['hamming'] = True
-        if args_main.umap_metric_to_run_jaccard: active_umap_metrics_main['jaccard'] = True
-        if not active_umap_metrics_main: logging.warning("UMAP requested but no UMAP metrics enabled.")
-    else: logging.info("UMAP method not requested.")
+    active_umap_metrics_main = {m: getattr(args_main, f"umap_metric_to_run_{m}") for m in ['euclidean', 'cosine', 'manhattan', 'hamming', 'jaccard'] if hasattr(args_main, f"umap_metric_to_run_{m}") and getattr(args_main, f"umap_metric_to_run_{m}")}
     
-    tsne_params_dict_main = {'perplexity': args_main.tsne_perplexity, 
-                             'pca_components': args_main.tsne_pca_components}
-    if args_main.n_neighbors is not None:
-        tsne_params_dict_main['n_neighbors'] = args_main.n_neighbors
+    tsne_params_dict_main = {'perplexity': args_main.tsne_perplexity, 'pca_components': args_main.tsne_pca_components}
+    if args_main.n_neighbors is not None: tsne_params_dict_main['n_neighbors'] = args_main.n_neighbors
 
     process_similarity_calculations(
         args_main.chembl_mf_data_path, args_main.zinc_data_path, args_main.target_ligands_unscaled_path_for_tsne_and_coembed, 
@@ -636,7 +589,6 @@ if __name__ == "__main__":
         args_main.output_simspace_dir, args_main.output_model_dir, target_rdkit_features_list_main,
         dr_method_flags_dict_main, active_umap_metrics_main, tsne_params_dict_main,
         args_main.run_coembedding_for_pca_umap, dr_method_configs_dict_main,
-        args_main.random_state, args_main.fingerprint_bit_selection_csv,
-        args_main.num_fingerprint_bits_to_use 
+        args_main.random_state
     )
     logging.info("Similarity space calculation script finished (direct run).")
