@@ -422,7 +422,7 @@ def process_similarity_calculations(
                 if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
                     logging.info(f"cuML UMAP failed for {metric_name}, trying scikit-learn UMAP (projection) as fallback...")
                     try:
-                        umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
+                        umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
                         umap_res_main_fb = umap_model_main_for_projection.fit_transform(current_X_main_umap)
                         if umap_res_main_fb.shape[0] == len(df_results_main):
                             for i in range(simspace_dim): df_results_main[umap_cols[i]] = umap_res_main_fb[:, i]
@@ -446,8 +446,8 @@ def process_similarity_calculations(
                     X_coembed_umap = np.vstack((current_X_main_umap, current_X_target_coembed_umap))
                     logging.info(f"CO-EMBEDDED UMAP ({metric_name}) on data shape {X_coembed_umap.shape}")
                     umap_model_co = None
-                    if attempt_cuml_umap: umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
-                    elif SKLEARN_UMAP_AVAILABLE: umap_model_co = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
+                    if attempt_cuml_umap: umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
+                    elif SKLEARN_UMAP_AVAILABLE: umap_model_co = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
                     else: logging.warning(f"No UMAP lib for {metric_name}. Skip co-embedding."); continue
                     
                     umap_res_co = umap_model_co.fit_transform(X_coembed_umap)
@@ -466,7 +466,7 @@ def process_similarity_calculations(
                     if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE and ("metric is not supported" in str(e).lower() or "cuML Error" in str(e) or "libcuml. Persönlicher Fehler" in str(e)):
                         logging.info(f"cuML CO-EMBEDDED UMAP failed for {metric_name}, trying scikit-learn UMAP (co-embedding) as fallback...")
                         try:
-                            umap_model_co_fb = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False)
+                            umap_model_co_fb = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=15, min_dist=0.1, verbose=False, unique=True)
                             umap_res_co_fb = umap_model_co_fb.fit_transform(X_coembed_umap) 
                             umap_res_target_co_fb = umap_res_co_fb[current_X_main_umap.shape[0]:]
                             if len(umap_res_target_co_fb) == len(df_target_ligands_for_coembed_info):
