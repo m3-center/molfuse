@@ -117,6 +117,7 @@ def main(config_path, representation_mode, random_seed_value):
         return
 
     gs = config['global_settings']
+    affinity_cutoff = gs.get("affinity_cutoff_nM") # Can be None if not in config
     workspace_base_dir = gs['workspace_base_dir']
     
     run_specific_name = f"run_seed{random_seed_value}_repr{representation_mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -265,7 +266,10 @@ def main(config_path, representation_mode, random_seed_value):
                             "--output_dir", os.path.abspath(results_out_dir_proj),
                             "--target_id_name", target_id_name, "--representation_type", repr_type,
                             "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
-                        
+
+                        if affinity_cutoff is not None:
+                            cmd_pa_proj.append(f"--affinity_cutoff={affinity_cutoff}")
+
                         if not dr_key == "tsne": # Projection for PCA/UMAP requires models and separate actives
                             model_root_name = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}"
                             cmd_pa_proj.extend([f"--target_ligands_repr_path={os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else 'None')}",

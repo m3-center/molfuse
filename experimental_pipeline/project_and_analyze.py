@@ -330,12 +330,16 @@ def main():
     parser.add_argument("--target_ligands_repr_path", default=None)
     parser.add_argument("--model_dir_for_projection", default=None)
     parser.add_argument("--model_name_root_for_projection", default=None)
+    parser.add_argument("--affinity_cutoff", type=float, default=100000.0, 
+                        help="Affinity cutoff in nM. Only held-out actives with 'Standard Value (nM)' at or below this value will be used for analysis. Default is 100,000 nM (100 uM).")
+    
     args = parser.parse_args()
     
     # The name for output files and plot titles should be derived from the unique output directory
     dr_name_for_outputs = os.path.basename(os.path.normpath(args.output_dir)).replace('_', '-')
     
     logging.info(f"--- project_and_analyze.py started for Target: {args.target_id_name}, Repr: {args.representation_type}, DR: {dr_name_for_outputs}, Dim: {args.simspace_dim} ---")
+    logging.info(f"Using affinity cutoff for actives: <= {args.affinity_cutoff} nM")
 
     try:
         target_rdkit_features_list = json.loads(args.rdkit_features_list_target_str)
@@ -382,6 +386,20 @@ def main():
         except Exception as e:
             logging.error(f"Error processing co-embedded simspace file {args.simspace_csv_path}: {e}", exc_info=True)
     
+    if args.affinity_cutoff is not None and 'Standard Value (nM)' in df_projected_target_actives.columns:
+        logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
+        # Ensure the activity column is numeric, coercing errors
+        df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
+        
+        # Keep rows that are less than or equal to the cutoff, OR where the value is NaN (to keep actives without reported affinity)
+        original_active_count = len(df_projected_target_actives)
+        df_projected_target_actives = df_projected_target_actives[
+            (df_projected_target_actives['Standard Value (nM)'] <= args.affinity_cutoff) |
+            (df_projected_target_actives['Standard Value (nM)'].isna())
+        ].copy()
+        filtered_active_count = len(df_projected_target_actives)
+        logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
+    
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives projected or loaded for DR: {args.dr_short_name} (method key: {args.dr_method_key}). Cannot perform ranking analysis.")
         # Save empty metrics file so report generator doesn't fail finding it
@@ -400,57 +418,40 @@ def main():
     try: df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
     except Exception as e: logging.error(f"Error loading main simspace file {args.simspace_csv_path}: {e}"); df_simspace_main_data = pd.DataFrame()
     
+    if df_projected_target_actives.empty:
+        logging.warning(f"No target actives remaining after affinity filtering. Cannot perform ranking.");
+        # (save empty files and return logic here)
+        return
+    if df_simspace_main_data.empty:
+        logging.error(f"Main similarity space data is empty. Cannot perform ranking."); return
+    
+    
     mf_cloud_coords = pd.DataFrame(); df_zinc_decoys_with_coords = pd.DataFrame()
-    # Coords in simspace_csv_path are named with args.dr_short_name
     coord_cols_for_analysis = [f"{args.dr_short_name}-{i+1}" for i in range(args.simspace_dim)]
 
     if not df_simspace_main_data.empty:
-        if not all(c in df_simspace_main_data.columns for c in coord_cols_for_analysis):
-            logging.warning(f"Main simspace CSV {args.simspace_csv_path} missing one or more expected coordinate columns for {args.dr_short_name}: {coord_cols_for_analysis}. Present: {df_simspace_main_data.columns.tolist()}")
-        elif 'MOLECULE ID' not in df_simspace_main_data.columns:
-            logging.warning(f"Main simspace CSV {args.simspace_csv_path} missing 'MOLECULE ID' column.")
-        else:
-            df_simspace_main_data['MOLECULE ID'] = df_simspace_main_data['MOLECULE ID'].astype(str)
-            chembl_mask = ~df_simspace_main_data['MOLECULE ID'].str.startswith('ZINC', na=False)
-            mf_cloud_df_full = df_simspace_main_data[chembl_mask].copy()
-
-            if args.affinity_cutoff is not None:
-                logging.info(f"Applying affinity cutoff of <= {args.affinity_cutoff} nM to the MF cloud.")
-                if 'Standard Value (nM)' in mf_cloud_df_full.columns:
-                    mf_cloud_df_full['Standard Value (nM)'] = pd.to_numeric(mf_cloud_df_full['Standard Value (nM)'], errors='coerce')
-                    original_mf_cloud_size = len(mf_cloud_df_full)
-                    
-                    mf_cloud_df_full.dropna(subset=['Standard Value (nM)'], inplace=True)
-                    mf_cloud_df_full = mf_cloud_df_full[mf_cloud_df_full['Standard Value (nM)'] <= args.affinity_cutoff].copy()
-                    
-                    logging.info(f"MF cloud size reduced from {original_mf_cloud_size} to {len(mf_cloud_df_full)} after applying cutoff.")
-                else:
-                    logging.warning("'Standard Value (nM)' column not found in simspace CSV. Cannot apply affinity cutoff.")
-
-            mf_cloud_coords_temp = mf_cloud_df_full[coord_cols_for_analysis].dropna()
-            if not mf_cloud_coords_temp.empty: mf_cloud_coords = mf_cloud_coords_temp
-            else: logging.warning(f"MF cloud for {args.dr_short_name} is empty after coordinate selection/dropna from {args.simspace_csv_path}.")
+        # Check for 'DataSource' first as it's more explicit
+        if 'DataSource' in df_simspace_main_data.columns:
+            mf_cloud_mask = df_simspace_main_data['DataSource'] == 'ChEMBL_MF'
+            zinc_mask = df_simspace_main_data['DataSource'] == 'ZINC'
+        # Fallback to MOLECULE ID if DataSource is missing
+        elif 'MOLECULE ID' in df_simspace_main_data.columns:
+            mf_cloud_mask = ~df_simspace_main_data['MOLECULE ID'].str.startswith('ZINC', na=False)
             zinc_mask = df_simspace_main_data['MOLECULE ID'].str.startswith('ZINC', na=False)
-            df_zinc_decoys_all_info = df_simspace_main_data[zinc_mask].copy()
-            id_cols_zinc = [col for col in ['SMILES', 'MOLECULE ID', 'ZINC_ID'] if col in df_zinc_decoys_all_info.columns]
-            df_zinc_decoys_with_coords_temp = df_zinc_decoys_all_info[id_cols_zinc + coord_cols_for_analysis].dropna(subset=coord_cols_for_analysis)
-            if not df_zinc_decoys_with_coords_temp.empty: df_zinc_decoys_with_coords = df_zinc_decoys_with_coords_temp
-            else: logging.warning(f"ZINC decoys for {args.dr_short_name} is empty after coordinate selection/dropna from {args.simspace_csv_path}.")
-    else:
-        logging.warning(f"Main simspace data from {args.simspace_csv_path} is empty. Cannot extract MF cloud or ZINC decoys.")
+        else:
+            logging.error("'DataSource' or 'MOLECULE ID' column not found in simspace CSV. Cannot distinguish ZINC/ChEMBL.")
+            mf_cloud_mask = pd.Series(False, index=df_simspace_main_data.index)
+            zinc_mask = pd.Series(False, index=df_simspace_main_data.index)
 
-    if mf_cloud_coords.empty:
-        logging.warning(f"MF Cloud is empty for {args.dr_short_name}. Scores for actives and decoys will be NaN.")
-        df_target_actives_scored = df_projected_target_actives.copy() # Keep original projected actives
-        df_target_actives_scored['min_dist_to_mf_cloud'] = np.nan
-        df_target_actives_scored['score'] = np.nan
-        df_zinc_decoys_scored = df_zinc_decoys_with_coords.copy() 
-        if not df_zinc_decoys_scored.empty:
-            df_zinc_decoys_scored['min_dist_to_mf_cloud'] = np.nan
-            df_zinc_decoys_scored['score'] = np.nan
+        mf_cloud_df_full = df_simspace_main_data[mf_cloud_mask].copy()
+        mf_cloud_coords = mf_cloud_df_full.dropna(subset=coord_cols_for_analysis)
+        df_zinc_decoys_all_info = df_simspace_main_data[zinc_mask].copy()
+        df_zinc_decoys_with_coords = df_zinc_decoys_all_info.dropna(subset=coord_cols_for_analysis)
     else:
-        df_target_actives_scored = calculate_compound_scores(df_projected_target_actives, mf_cloud_coords, args.dr_short_name, args.simspace_dim)
-        df_zinc_decoys_scored = calculate_compound_scores(df_zinc_decoys_with_coords, mf_cloud_coords, args.dr_short_name, args.simspace_dim)
+        logging.warning("Could not split main simspace data. Ranking may be incorrect.")
+        
+    df_target_actives_scored = calculate_compound_scores(df_projected_target_actives, mf_cloud_coords, args.dr_short_name, args.simspace_dim)
+    df_zinc_decoys_scored = calculate_compound_scores(df_zinc_decoys_with_coords, mf_cloud_coords, args.dr_short_name, args.simspace_dim)
 
     if not df_target_actives_scored.empty: df_target_actives_scored['TYPE'] = 'HELDOUT_ACTIVE'
     if not df_zinc_decoys_scored.empty : df_zinc_decoys_scored['TYPE'] = 'DECOY'       
@@ -509,7 +510,7 @@ def main():
             df_docking_output = df_for_ranking_and_docking[final_docking_cols].copy()
             coord_rename_map = {old_col: f"COORD_{i+1}" for i, old_col in enumerate(coord_cols_for_analysis) if old_col in df_docking_output.columns}
             df_docking_output.rename(columns=coord_rename_map, inplace=True)
-            # Filename uses args.dr_short_name which is specific to this analysis run (e.g. PCA or PCA-Coembed)
+
             docking_filename = f"{args.target_id_name.upper()}-{args.dr_short_name.upper().replace('-', '')}-{args.simspace_dim}D-{args.representation_type.upper()}.csv"
             docking_output_path = os.path.join(args.output_dir, docking_filename)
             try:
@@ -544,7 +545,6 @@ def main():
         ranking_metrics['spearman_rho_affinity_vs_score'] = np.nan
 
     df_ranking_metrics_output = pd.DataFrame([ranking_metrics])
-    # Filename uses args.dr_short_name (e.g. PCA or PCA-Coembed)
     metrics_csv_path = os.path.join(args.output_dir, f"{args.target_id_name}_{args.representation_type}_{args.dr_short_name.replace('-', '_')}_dim{args.simspace_dim}_ranking_metrics.csv")
     try: df_ranking_metrics_output.to_csv(metrics_csv_path, index=False); logging.info(f"Saved ranking metrics to: {metrics_csv_path}")
     except Exception as e: logging.error(f"Failed to save ranking metrics CSV {metrics_csv_path}: {e}")
@@ -562,13 +562,10 @@ def main():
         actives_for_plot = df_target_actives_scored[df_target_actives_scored['TYPE']=='HELDOUT_ACTIVE']
         if not actives_for_plot.empty:
             logging.info("Generating 2D plots...")
-            # Pass args.dr_short_name (which reflects the current strategy being analyzed by this script run)
-            # to plot_projection_results for consistent naming and title.
-            # The coordinate columns in df_target_actives_scored and mf_cloud_coords should align with this args.dr_short_name.
             plot_projection_results(actives_for_plot, 
                                     df_simspace_main_data, mf_cloud_coords, 
                                     args.output_dir, args.target_id_name, 
-                                    args.dr_short_name, # This is the key: use the dr_short_name specific to this analysis run
+                                    args.dr_short_name,
                                     args.simspace_dim, args.representation_type)
         else:
             logging.info(f"No HELDOUT_ACTIVE type compounds to plot for {args.dr_short_name}.")

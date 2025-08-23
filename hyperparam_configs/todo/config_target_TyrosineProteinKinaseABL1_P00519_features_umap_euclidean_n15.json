@@ -17,6 +17,7 @@
       5
     ],
     "tsne_pca_components": 50,
+    "affinity_cutoff_nM": 100000,
     "workspace_base_dir": "experiment_workspace_hyperparam_sweep/",
     "final_report_dir": "final_report_hyperparam_sweep/",
     "n_jobs_molcalcs": -1,
@@ -62,9 +63,7 @@
       "Vabc",
       "MW"
     ],
-    "run_coembedding_for_pca_umap": true,
-    "fingerprint_bit_selection_csv_path": "fingerprint_variance_analysis/fingerprint_bit_variance_sorted.csv",
-    "num_fingerprint_bits_to_use": 2048
+    "run_coembedding_for_pca_umap": true
   },
   "targets": [
     {
@@ -77,12 +76,12 @@
     }
   ],
   "representations": [
-    "fingerprints"
+    "features"
   ],
   "dimensionality_reduction_methods": {
-    "umap_jaccard": {
-      "short_name": "UMAP-Jaccard",
-      "metric": "jaccard",
+    "umap_euclidean": {
+      "short_name": "UMAP-Euclidean",
+      "metric": "euclidean",
       "allow_coembedding": true,
       "n_neighbors": 15
     }

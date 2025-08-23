@@ -17,6 +17,7 @@
       5
     ],
     "tsne_pca_components": 50,
+    "affinity_cutoff_nM": 100000,
     "workspace_base_dir": "experiment_workspace_hyperparam_sweep/",
     "final_report_dir": "final_report_hyperparam_sweep/",
     "n_jobs_molcalcs": -1,

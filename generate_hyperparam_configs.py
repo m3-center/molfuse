@@ -20,6 +20,8 @@ TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 BIT_SELECTION_CSV_PATH = "fingerprint_variance_analysis/fingerprint_bit_variance_sorted.csv"
 NUM_BITS_TO_USE = 2048
 
+AFFINITY_CUTOFF = 100000
+
 # --- MODIFIED: Hyperparameters and Dimensions to sweep ---
 # Fixed similarity space dimension for the UMAP sweep
 UMAP_SIMSPACE_DIM_FOR_SWEEP = [10]
@@ -81,6 +83,7 @@ def generate_configs():
                 new_config["global_settings"]["simspace_dims_to_test"] = UMAP_SIMSPACE_DIM_FOR_SWEEP
                 new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
                 new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+                new_config["global_settings"]["affinity_cutoff_nM"] = AFFINITY_CUTOFF
                 
                 # --- NEW: Add bit selection settings if it's a fingerprints run ---
                 if repr_type == "fingerprints":
