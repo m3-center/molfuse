@@ -384,10 +384,10 @@ def process_similarity_calculations(
             try: 
                 if attempt_cuml_umap: 
                     logging.info(f"Attempting cuML UMAP for {metric_name} (projection) with n_neighbors={n_neighbors_val}.")
-                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
+                    umap_model_main_for_projection = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
                 elif SKLEARN_UMAP_AVAILABLE: 
                     logging.info(f"Using scikit-learn UMAP for {metric_name} (projection) with n_neighbors={n_neighbors_val}.")
-                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
+                    umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
                 else: 
                     logging.warning(f"No suitable UMAP library for NON-CO-EMBEDDED UMAP ({metric_name}). Skipping."); 
                     for col in umap_cols: df_results_main[col] = np.nan 
@@ -409,7 +409,7 @@ def process_similarity_calculations(
                 if attempt_cuml_umap and SKLEARN_UMAP_AVAILABLE:
                     logging.info(f"cuML UMAP failed for {metric_name}, trying scikit-learn UMAP (projection) as fallback...")
                     try:
-                        umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
+                        umap_model_main_for_projection = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
                         umap_res_main_fb = umap_model_main_for_projection.fit_transform(current_X_main_umap)
                         if umap_res_main_fb.shape[0] == len(df_results_main):
                             for i in range(simspace_dim): df_results_main[umap_cols[i]] = umap_res_main_fb[:, i]
@@ -433,8 +433,8 @@ def process_similarity_calculations(
                     X_coembed_umap = np.vstack((current_X_main_umap, current_X_target_coembed_umap))
                     logging.info(f"CO-EMBEDDED UMAP ({metric_name}) on data shape {X_coembed_umap.shape}")
                     umap_model_co = None
-                    if attempt_cuml_umap: umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
-                    elif SKLEARN_UMAP_AVAILABLE: umap_model_co = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False)
+                    if attempt_cuml_umap: umap_model_co = cumlUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
+                    elif SKLEARN_UMAP_AVAILABLE: umap_model_co = umapUMAP(n_components=simspace_dim, metric=metric_name, random_state=current_random_state, n_neighbors=n_neighbors_val, min_dist=min_dist_val, verbose=False, unique=True)
                     else: logging.warning(f"No UMAP lib for {metric_name}. Skip co-embedding."); continue
                     
                     umap_res_co = umap_model_co.fit_transform(X_coembed_umap)
