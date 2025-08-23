@@ -208,19 +208,23 @@ def process_similarity_calculations(
 
     logging.info(f"Determined {len(descriptor_columns)} descriptor columns from data sample.")
     
-    info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID']
+    info_cols_to_keep = ['SMILES', 'Compound ChEMBL ID', 'ZINC_ID', 'DataSource']
     valid_info_chunks, valid_descriptor_chunks = [], []
     chunksize = 25000; total_rows_processed = 0; total_rows_kept = 0
     dtype_to_use = np.int8 if representation_type == "fingerprints" else np.float32
-    input_files_to_process = [chembl_mf_data_path]
+    
+    input_file_map = {chembl_mf_data_path: "ChEMBL_MF"}
     if zinc_data_path and zinc_data_path.lower() != 'none' and os.path.exists(zinc_data_path):
-        input_files_to_process.append(zinc_data_path)
-
-    for file_path in input_files_to_process:
-        logging.info(f"Processing file in chunks: {file_path}")
+        input_file_map[zinc_data_path] = "ZINC"
+        
+    for file_path, source_name in input_file_map.items():
+        logging.info(f"Processing file in chunks: {file_path} (DataSource: {source_name})")
+        
         try:
             for i, chunk in enumerate(pd.read_csv(file_path, chunksize=chunksize, low_memory=False)):
                 logging.debug(f"  Processing chunk {i+1} from {os.path.basename(file_path)}...")
+                
+                chunk['DataSource'] = source_name
                 if representation_type == "fingerprints" and PRECALCULATED_FP_STRING_COLUMN_NAME in chunk.columns:
                     chunk = parse_fingerprint_string_column_in_df(chunk)
                 
