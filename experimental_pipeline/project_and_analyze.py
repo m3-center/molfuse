@@ -6,6 +6,8 @@ import logging
 import json
 from compress_pickle import load as decompress_pickle_load
 from scipy.spatial import distance
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc as sklearn_auc
@@ -45,49 +47,30 @@ def project_target_ligands_with_models(target_ligands_repr_df_input, scaler_mode
                                        representation_type, simspace_dim, dr_method_key, dr_short_name,
                                        target_rdkit_features_list):
     if target_ligands_repr_df_input.empty: logging.warning("Target ligands DataFrame for projection is empty."); return pd.DataFrame()
-    target_ligands_repr_df = target_ligands_repr_df_input.copy() # Work on a copy
+    target_ligands_repr_df = target_ligands_repr_df_input.copy()
     descriptor_columns = get_descriptor_columns_for_proj(target_ligands_repr_df, representation_type, target_rdkit_features_list)
     if not descriptor_columns: return pd.DataFrame()
     
-    # Keep original columns for joining back later, using the index from valid rows
-    original_cols_df_indexed = target_ligands_repr_df.set_index(pd.RangeIndex(len(target_ligands_repr_df))) # Ensure unique index for join
-    
+    original_cols_df = target_ligands_repr_df.copy()
     target_ligands_repr_df[descriptor_columns] = target_ligands_repr_df[descriptor_columns].apply(pd.to_numeric, errors='coerce')
     valid_rows_mask = target_ligands_repr_df[descriptor_columns].notna().all(axis=1)
-    target_ligands_valid_for_projection_df = target_ligands_repr_df[valid_rows_mask].copy() # Explicit copy for chained assignment warning
+    target_ligands_valid_df = target_ligands_repr_df[valid_rows_mask]
+    if len(target_ligands_valid_df) < len(target_ligands_repr_df):
+        logging.info(f"Dropped {len(target_ligands_repr_df) - len(target_ligands_valid_df)} target ligands with NaN values before projection.")
+    if target_ligands_valid_df.empty: logging.warning("Target ligands DataFrame is empty after NaN drop."); return pd.DataFrame()
     
-    if len(target_ligands_valid_for_projection_df) < len(target_ligands_repr_df):
-        logging.info(f"Dropped {len(target_ligands_repr_df) - len(target_ligands_valid_for_projection_df)} target ligands with NaN descriptor values before projection.")
-    if target_ligands_valid_for_projection_df.empty: logging.warning("Target ligands DataFrame is empty after NaN drop for projection."); return pd.DataFrame()
-    
-    X_target = target_ligands_valid_for_projection_df[descriptor_columns].values.astype(np.float32)
-    try: 
-        X_target_scaled = scaler_model.transform(X_target)
-    except Exception as e: 
-        logging.error(f"Error scaling target ligands for {dr_short_name}: {e}"); return pd.DataFrame()
+    X_target = target_ligands_valid_df[descriptor_columns].values.astype(np.float32)
+    try: X_target_scaled = scaler_model.transform(X_target)
+    except Exception as e: logging.error(f"Error scaling target ligands for {dr_short_name}: {e}"); return pd.DataFrame()
     
     projected_coords_values = None
     try:
-        # For UMAP, cuML's transform might expect CPU data if model was trained on CPU or data is small
-        # Sklearn models always expect CPU data for transform
-        if CUML_AVAILABLE and 'umap' in dr_method_key.lower() and hasattr(dr_model, 'transform'):
-            # Ensure data is on CPU if cuML UMAP model might have been pickled from CPU or expects CPU input for transform
-            # This is a complex area; often cuML transform handles cupy/numpy arrays.
-            # For safety, if issues arise, explicitly convert X_target_scaled to cupy array if model is GPU, or ensure numpy for CPU.
-            # Defaulting to letting cuML handle it unless specific errors occur.
-            # with using_device_type('cpu'): # This might be too restrictive if model is GPU
-            projected_coords_values = dr_model.transform(X_target_scaled)
-        else: # PCA (cuML/sklearn) or sklearn UMAP
-            projected_coords_values = dr_model.transform(X_target_scaled)
-    except Exception as e: 
-        logging.error(f"Error transforming target ligands with DR model {dr_short_name}: {e}"); return pd.DataFrame()
+        projected_coords_values = dr_model.transform(X_target_scaled)
+    except Exception as e: logging.error(f"Error transforming target ligands with DR model {dr_short_name}: {e}"); return pd.DataFrame()
     
     projection_cols_names = [f"{dr_short_name}-{i+1}" for i in range(simspace_dim)]
-    # Use index from target_ligands_valid_for_projection_df to align with original_cols_df_indexed
-    df_projected_coords_only = pd.DataFrame(projected_coords_values[:, :simspace_dim], columns=projection_cols_names, index=target_ligands_valid_for_projection_df.index)
-    
-    # Join based on the original index of valid rows
-    df_projected_ligands_full_info = original_cols_df_indexed.loc[df_projected_coords_only.index].join(df_projected_coords_only)
+    df_projected_coords_only = pd.DataFrame(projected_coords_values[:, :simspace_dim], columns=projection_cols_names, index=target_ligands_valid_df.index)
+    df_projected_ligands_full_info = original_cols_df.loc[df_projected_coords_only.index].join(df_projected_coords_only)
     return df_projected_ligands_full_info.reset_index(drop=True)
 
 
@@ -333,59 +316,26 @@ def plot_projection_results(df_projected_target_actives_with_min_dist, df_simspa
         plt.close()
 
 def main():
-    parser = argparse.ArgumentParser(description="Project target ligands, analyze distances, calculate ranking metrics, and save full ranking for docking.")
-    parser.add_argument("--target_ligands_repr_path", default=None, help="Path to CSV of target ligands (featurized/fingerprinted) - for PCA/UMAP projection.")
-    parser.add_argument("--precomputed_target_projections_path", default=None, help="Path to CSV of pre-calculated target ligand projections (used for t-SNE and co-embedded PCA/UMAP).")
-    parser.add_argument("--simspace_csv_path", required=True, help="Path to the comprehensive similarity space CSV (main data).")
-    parser.add_argument("--model_dir_for_projection", default=None, help="Directory containing scaler and DR models (for PCA/UMAP projection).")
-    parser.add_argument("--model_name_root_for_projection", default=None, help="Base name for finding models (e.g., target_repr_dimX).")
-    # dr_method_key is the original key from config (e.g. "pca", "umap_euclidean")
-    parser.add_argument("--dr_method_key", required=True, help="Key for DR method from config (e.g., 'pca', 'umap_euclidean', 'tsne').")
-    # dr_short_name is the name used for coordinate columns (e.g. "PCA", "UMAP-Euclidean", "t-SNE")
-    # For co-embedded runs, orchestrator might pass "PCA" here, but output files from this script use args.output_dir structure.
-    # The filename convention in THIS script uses args.dr_short_name directly.
-    # The orchestrator should pass a dr_short_name here that leads to unique output filenames if necessary,
-    # e.g. "PCA" for projection strategy, "PCA-Coembed" for coembedding strategy analysis (if orchestrator passes that)
-    # OR rely on args.output_dir being unique. Current orchestrator makes output_dir unique.
-    # The --dr_short_name passed here is PRIMARILY for LOOKING UP coordinate columns.
-    parser.add_argument("--dr_short_name", required=True, help="Short name for DR method used for coordinate column lookup (e.g., 'PCA', 'UMAP-Euclidean', 't-SNE'). This script will use it for output file naming too.")
-    parser.add_argument("--simspace_dim", type=int, required=True, help="Dimensionality of the similarity space.")
-    parser.add_argument("--k_for_knn", type=str, required=True, help="Comma-separated list of k values for k-NN distance.")
-    parser.add_argument("--output_dir", required=True, help="Directory to save analysis results.")
-    parser.add_argument("--target_id_name", required=True, help="Target ID name for file naming.")
+    parser = argparse.ArgumentParser(description="Project target ligands, analyze distances, and calculate ranking metrics.")
+    parser.add_argument("--simspace_csv_path", required=True, help="Path to the similarity space CSV.")
+    parser.add_argument("--dr_method_key", required=True, help="Key for DR method from config (e.g., 'pca', 'umap_euclidean').")
+    parser.add_argument("--dr_short_name", required=True, help="Short name for DR method for coordinate column lookup.")
+    parser.add_argument("--simspace_dim", type=int, required=True)
+    parser.add_argument("--k_for_knn", type=str, required=True)
+    parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--target_id_name", required=True)
     parser.add_argument("--representation_type", required=True, choices=["features", "fingerprints"])
-    parser.add_argument("--rdkit_features_list_target_str", required=True, help="JSON string of target RDKit feature names.")
-    parser.add_argument("--affinity_cutoff", type=int, default=None,
-                        help="Affinity cutoff in nM for defining the MF cloud. If not set, no cutoff is applied.")
+    parser.add_argument("--rdkit_features_list_target_str", required=True)
+    # Arguments for projection strategy
+    parser.add_argument("--target_ligands_repr_path", default=None)
+    parser.add_argument("--model_dir_for_projection", default=None)
+    parser.add_argument("--model_name_root_for_projection", default=None)
     args = parser.parse_args()
     
-    # Use args.dr_short_name (which is passed by orchestrator and can be "PCA" or "PCA-Coembed" etc.)
-    # for the output filenames from THIS script.
-    # The dr_short_name passed by orchestrator for COORD LOOKUP in precomputed files is the BASE name.
-    # Let's make a distinction:
-    dr_short_name_for_coord_lookup = args.dr_short_name 
-    # For output filenames generated by this script, we want them to reflect the overall strategy.
-    # The output_dir is already strategy-specific. So, filenames inside can use the base dr_short_name.
-    # However, plots embed this name in titles, so using the strategy-specific name from output_dir base is better.
-    # Let's use a name derived from the output_dir for file naming consistency.
-    # If output_dir is .../PCA-Coembed/, then this should be "PCA-Coembed".
-    # If output_dir is .../PCA/, then this should be "PCA".
-    # This makes report generation easier if it expects filenames based on the directory structure.
-    output_dir_leaf_name = os.path.basename(args.output_dir) # e.g., PCA, PCA_Coembed
-    # Convert filesystem safe (PCA_Coembed) to display safe (PCA-Coembed) if needed for titles, or use args.dr_short_name if orchestrator sends the display name
-    # Let's assume args.dr_short_name passed by orchestrator is the one to use for naming output files from THIS script.
-    # Orchestrator passes "PCA" (for projection) or "PCA-Coembed" (for coembed analysis) as args.dr_short_name for THIS script.
-    # But for coord lookup in precomputed coembed files, it needs the base name.
-    # Let's clarify. Orchestrator's `current_dr_short_name_for_output` becomes `args.dr_short_name` here.
-    # Orchestrator's `dr_short_name_for_coords` becomes `args.dr_short_name_for_coord_lookup` if we add a new arg.
-    # For now, `args.dr_short_name` is used for coord lookup. IF it's "PCA-Coembed", coord lookup will fail if cols are "PCA-1".
-    # The orchestrator was changed to pass the BASE name as --dr_short_name for coord lookup.
-    # So, filenames from this script should use that BASE name.
-    # The uniqueness comes from the args.output_dir.
-
-    logging.info(f"--- project_and_analyze.py started for Target: {args.target_id_name}, Repr: {args.representation_type}, DR: {args.dr_short_name}, Dim: {args.simspace_dim}, Output: {args.output_dir} ---")
-    if args.affinity_cutoff is not None:
-        logging.info(f"--- SPECIAL RUN: Applying affinity cutoff of {args.affinity_cutoff} nM to the MF Cloud ---")
+    # The name for output files and plot titles should be derived from the unique output directory
+    dr_name_for_outputs = os.path.basename(os.path.normpath(args.output_dir)).replace('_', '-')
+    
+    logging.info(f"--- project_and_analyze.py started for Target: {args.target_id_name}, Repr: {args.representation_type}, DR: {dr_name_for_outputs}, Dim: {args.simspace_dim} ---")
 
     try:
         target_rdkit_features_list = json.loads(args.rdkit_features_list_target_str)
@@ -393,67 +343,45 @@ def main():
         logging.error(f"Error parsing --rdkit_features_list_target_str: {e}. Aborting."); return
 
     df_projected_target_actives = pd.DataFrame()
-    if args.precomputed_target_projections_path and os.path.exists(args.precomputed_target_projections_path):
-        logging.info(f"Loading pre-computed target active projections for DR method key {args.dr_method_key} (coord name base: {args.dr_short_name}) from: {args.precomputed_target_projections_path}")
+    df_simspace_main_data = pd.DataFrame()
+    
+    # CASE 1: Projection strategy - target actives must be loaded/projected separately.
+    # The main simspace CSV contains only MF Cloud + ZINC.
+    if args.target_ligands_repr_path and args.target_ligands_repr_path.lower() != 'none':
+        logging.info(f"PROJECTION strategy detected. Projecting target actives...")
         try:
-            df_projected_target_actives = pd.read_csv(args.precomputed_target_projections_path)
-            # Columns in precomputed file are named with args.dr_short_name (e.g. "PCA-1", "UMAP-Euclidean-1")
-            expected_coord_cols = [f"{args.dr_short_name}-{i+1}" for i in range(args.simspace_dim)]
-            if not all(col in df_projected_target_actives.columns for col in expected_coord_cols):
-                logging.warning(f"Precomputed target projections {args.precomputed_target_projections_path} missing expected columns {expected_coord_cols}. Present: {df_projected_target_actives.columns.tolist()}")
-                # Attempt common renames if needed (e.g. if cols are just '0','1' or tSNE specific from older format)
-                current_cols = df_projected_target_actives.columns.tolist()
-                rename_map = {}
-                # Try to map '0', '1', ... to 'DR_SHORT_NAME-1', 'DR_SHORT_NAME-2', ...
-                for i in range(args.simspace_dim):
-                    if str(i) in current_cols and expected_coord_cols[i] not in current_cols :
-                        rename_map[str(i)] = expected_coord_cols[i]
-                if rename_map:
-                    logging.info(f"Attempting to rename columns in precomputed projections: {rename_map}")
-                    df_projected_target_actives.rename(columns=rename_map, inplace=True)
-                
-                # Re-check after rename attempt
-                if not all(col in df_projected_target_actives.columns for col in expected_coord_cols):
-                    logging.error(f"Precomputed target projections still unusable after rename attempt. Invalidate.")
-                    df_projected_target_actives = pd.DataFrame() # Invalidate
-        except Exception as e: 
-            logging.error(f"Error loading pre-computed target projections from {args.precomputed_target_projections_path}: {e}")
-            df_projected_target_actives = pd.DataFrame() # Ensure it's empty on error
+            df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
+            scaler_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_scaler.lzma")
+            metric = args.dr_method_key.split("_")[-1] if "umap" in args.dr_method_key else ""
+            dr_model_filename = f"{args.model_name_root_for_projection}_{args.dr_short_name.replace('-','_')}_model.lzma" if args.dr_method_key != "pca" else f"{args.model_name_root_for_projection}_PCA_model.lzma"
+            if "umap" in args.dr_method_key:
+                dr_model_filename = f"{args.model_name_root_for_projection}_{metric}_UMAP_model.lzma"
+            dr_model_path = os.path.join(args.model_dir_for_projection, dr_model_filename)
             
-    if df_projected_target_actives.empty and not (args.precomputed_target_projections_path and os.path.exists(args.precomputed_target_projections_path)):
-        # This block is for projection strategy (PCA/UMAP using models)
-        logging.info(f"Projecting target actives for {args.target_id_name} ({args.representation_type}, DR: {args.dr_short_name}, dim={args.simspace_dim}) using models...")
-        if not args.target_ligands_repr_path or not os.path.exists(args.target_ligands_repr_path):
-            logging.error(f"Target ligands representation path for projection not provided or not found: {args.target_ligands_repr_path}.")
-        elif not args.model_dir_for_projection or not os.path.exists(args.model_dir_for_projection):
-             logging.error(f"Model directory for projection not provided or not found: {args.model_dir_for_projection}.")
-        elif not args.model_name_root_for_projection:
-            logging.error(f"Model name root for projection not provided.")
-        else:
-            try:
-                scaler_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_scaler.lzma")
-                dr_model_filename_part = ""
-                if args.dr_method_key == "pca": dr_model_filename_part = "PCA_model.lzma"
-                elif "umap" in args.dr_method_key:
-                    metric_for_filename = args.dr_method_key.split("_")[1] if "_" in args.dr_method_key else args.dr_method_key 
-                    dr_model_filename_part = f"{metric_for_filename}_UMAP_model.lzma"
-                
-                if not dr_model_filename_part: logging.error(f"Could not determine DR model filename for key: {args.dr_method_key}")
-                else:
-                    dr_model_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_{dr_model_filename_part}")
-                    if not os.path.exists(scaler_path): logging.error(f"Scaler model not found: {scaler_path}")
-                    elif not os.path.exists(dr_model_path): logging.error(f"DR model not found: {dr_model_path}")
-                    else:
-                        with open(scaler_path, "rb") as f: scaler_model = decompress_pickle_load(f)
-                        with open(dr_model_path, "rb") as f: dr_model = decompress_pickle_load(f)
-                        df_target_ligands_repr_raw = pd.read_csv(args.target_ligands_repr_path, low_memory=False)
-                        df_projected_target_actives = project_target_ligands_with_models(
-                            df_target_ligands_repr_raw, scaler_model, dr_model,
-                            args.representation_type, args.simspace_dim, args.dr_method_key, args.dr_short_name, # Pass args.dr_short_name for coord naming
-                            target_rdkit_features_list
-                        )
-            except Exception as e: logging.error(f"Error during model loading or projection for {args.dr_short_name}: {e}")
+            with open(scaler_path, "rb") as f: scaler_model = decompress_pickle_load(f)
+            with open(dr_model_path, "rb") as f: dr_model = decompress_pickle_load(f)
+            df_target_ligands_repr_raw = pd.read_csv(args.target_ligands_repr_path, low_memory=False)
+            
+            df_projected_target_actives = project_target_ligands_with_models(
+                df_target_ligands_repr_raw, scaler_model, dr_model,
+                args.representation_type, args.simspace_dim, args.dr_method_key, args.dr_short_name,
+                target_rdkit_features_list)
+        except Exception as e:
+            logging.error(f"Error during model loading or projection for {args.dr_short_name}: {e}", exc_info=True)
 
+    # CASE 2: Co-embedding strategy - actives are already in the simspace_csv_path
+    else:
+        logging.info(f"CO-EMBEDDING strategy detected. Extracting actives from: {args.simspace_csv_path}")
+        try:
+            df_full_coembed_space = pd.read_csv(args.simspace_csv_path, low_memory=False)
+            if 'DataSource' not in df_full_coembed_space.columns:
+                logging.error("'DataSource' column not found in co-embedded simspace CSV. Cannot split data.")
+            else:
+                df_projected_target_actives = df_full_coembed_space[df_full_coembed_space['DataSource'] == 'HELDOUT_ACTIVE'].copy()
+                df_simspace_main_data = df_full_coembed_space[df_full_coembed_space['DataSource'] != 'HELDOUT_ACTIVE'].copy()
+        except Exception as e:
+            logging.error(f"Error processing co-embedded simspace file {args.simspace_csv_path}: {e}", exc_info=True)
+    
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives projected or loaded for DR: {args.dr_short_name} (method key: {args.dr_method_key}). Cannot perform ranking analysis.")
         # Save empty metrics file so report generator doesn't fail finding it

@@ -327,21 +327,27 @@ def process_similarity_calculations(
                 if col not in df_results_main: df_results_main[col] = np.nan
         gc.collect()
         
-        if run_coembedding_for_pca_umap and pca_config.get("allow_coembedding", False) and X_target_scaled_for_coembed is not None and df_target_ligands_for_coembed_info is not None:
+        if run_coembedding_for_pca_umap and X_target_scaled_for_coembed is not None and df_target_ligands_for_coembed_info is not None:
             try: 
-                X_for_pca_coembed = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
-                logging.info(f"CO-EMBEDDED PCA on data shape {X_for_pca_coembed.shape}")
+                X_coembed = np.vstack((X_scaled_main, X_target_scaled_for_coembed))
+                logging.info(f"CO-EMBEDDED PCA on data shape {X_coembed.shape}")
                 pca_model_co = (cumlPCA(n_components=simspace_dim, random_state=current_random_state) if CUML_AVAILABLE else sklearnPCA(n_components=simspace_dim, random_state=current_random_state))
-                pca_res_co = pca_model_co.fit_transform(X_for_pca_coembed)
-                pca_res_target_co = pca_res_co[X_scaled_main.shape[0]:]
-                if len(pca_res_target_co) == len(df_target_ligands_for_coembed_info):
-                    df_pca_target_co_coords = pd.DataFrame(pca_res_target_co, columns=pca_cols, index=df_target_ligands_for_coembed_info.index)
-                    id_cols = [c for c in ['SMILES','Compound ChEMBL ID','Activity Type','Standard Value (nM)','accession'] if c in df_target_ligands_for_coembed_info]
-                    df_target_co_ids = df_target_ligands_for_coembed_info[id_cols]
-                    df_target_pca_co_full = df_target_co_ids.join(df_pca_target_co_coords, how="inner")
-                    pca_co_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_PCA_COEMBED_TARGET_PROJECTIONS.csv")
-                    df_target_pca_co_full.to_csv(pca_co_path, index=False); logging.info(f"Saved CO-EMBEDDED PCA target projections: {pca_co_path}")
-                else: logging.error("PCA co-embed length mismatch.")
+                pca_res_co = pca_model_co.fit_transform(X_coembed)
+                
+                # --- NEW: Construct and save the FULL co-embedded space ---
+                df_coembed_coords = pd.DataFrame(pca_res_co, columns=[f'PCA-{i+1}' for i in range(simspace_dim)])
+                df_main_info = df_results_main[['MOLECULE ID', 'SMILES', 'DataSource']]
+                df_target_info = df_target_ligands_for_coembed_info[['SMILES', 'Activity Type', 'Standard Value (nM)', 'accession']]
+                df_target_info['MOLECULE ID'] = df_target_ligands_for_coembed_info['Compound ChEMBL ID']
+                df_target_info['DataSource'] = 'HELDOUT_ACTIVE'
+                df_full_info_coembed = pd.concat([df_main_info, df_target_info], ignore_index=True)
+                df_full_space_coembed = pd.concat([df_full_info_coembed, df_coembed_coords], axis=1)
+                
+                pca_co_space_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_PCA_similarity_space_COEMBED.csv")
+                df_full_space_coembed.to_csv(pca_co_space_path, index=False)
+                logging.info(f"Saved FULL CO-EMBEDDED PCA space to: {pca_co_space_path}")
+                # --- END NEW ---
+
             except Exception as e: logging.error(f"CO-EMBEDDED PCA failed: {e}", exc_info=True)
             gc.collect()
 
@@ -438,15 +444,22 @@ def process_similarity_calculations(
                     else: logging.warning(f"No UMAP lib for {metric_name}. Skip co-embedding."); continue
                     
                     umap_res_co = umap_model_co.fit_transform(X_coembed_umap)
-                    umap_res_target_co = umap_res_co[current_X_main_umap.shape[0]:]
-                    if len(umap_res_target_co) == len(df_target_ligands_for_coembed_info):
-                        df_umap_target_co_coords = pd.DataFrame(umap_res_target_co, columns=umap_cols, index=df_target_ligands_for_coembed_info.index)
-                        id_cols = [c for c in ['SMILES','Compound ChEMBL ID','Activity Type','Standard Value (nM)','accession'] if c in df_target_ligands_for_coembed_info]
-                        df_target_co_ids = df_target_ligands_for_coembed_info[id_cols]
-                        df_target_umap_co_full = df_target_co_ids.join(df_umap_target_co_coords, how="inner")
-                        umap_co_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_{metric_name}_UMAP_COEMBED_TARGET_PROJECTIONS.csv")
-                        df_target_umap_co_full.to_csv(umap_co_path, index=False); logging.info(f"Saved CO-EMBEDDED UMAP ({metric_name}) target projections: {umap_co_path}")
-                    else: logging.error(f"UMAP co-embed length mismatch for {metric_name}.")
+                    
+                    # --- NEW: Construct and save the FULL co-embedded space ---
+                    umap_cols = [f"UMAP-{metric_name.capitalize()}-{i+1}" for i in range(simspace_dim)]
+                    df_coembed_coords = pd.DataFrame(umap_res_co, columns=umap_cols)
+                    df_main_info = df_results_main[['MOLECULE ID', 'SMILES', 'DataSource']]
+                    df_target_info = df_target_ligands_for_coembed_info[['SMILES', 'Activity Type', 'Standard Value (nM)', 'accession']]
+                    df_target_info['MOLECULE ID'] = df_target_ligands_for_coembed_info['Compound ChEMBL ID']
+                    df_target_info['DataSource'] = 'HELDOUT_ACTIVE'
+                    df_full_info_coembed = pd.concat([df_main_info, df_target_info], ignore_index=True)
+                    df_full_space_coembed = pd.concat([df_full_info_coembed, df_coembed_coords], axis=1)
+
+                    umap_co_space_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_{metric_name}_UMAP_similarity_space_COEMBED.csv")
+                    df_full_space_coembed.to_csv(umap_co_space_path, index=False)
+                    logging.info(f"Saved FULL CO-EMBEDDED UMAP ({metric_name}) space to: {umap_co_space_path}")
+                    # --- END NEW ---
+
                 except Exception as e: 
                     logging.error(f"CO-EMBEDDED UMAP ({metric_name}) failed: {e}", exc_info=True)
                 gc.collect()
@@ -501,24 +514,28 @@ def process_similarity_calculations(
                                 tsne_model = sklearnTSNE(**tsne_init_kwargs); logging.info("Using sklearn t-SNE")
                             
                             tsne_embedding = tsne_model.fit_transform(X_tsne_pca_reduced)
+                            
+                            tsne_cols = [f't-SNE-{i+1}' for i in range(simspace_dim)]
+                            df_coembed_coords = pd.DataFrame(tsne_embedding, columns=tsne_cols)
+                            df_main_info = df_results_main[['MOLECULE ID', 'SMILES', 'DataSource']]
+                            df_target_info = df_target_ligands_for_coembed_info[['SMILES', 'Activity Type', 'Standard Value (nM)', 'accession']]
+                            df_target_info['MOLECULE ID'] = df_target_ligands_for_coembed_info['Compound ChEMBL ID']
+                            df_target_info['DataSource'] = 'HELDOUT_ACTIVE'
+                            df_full_info_coembed = pd.concat([df_main_info, df_target_info], ignore_index=True)
+                            df_full_space_coembed = pd.concat([df_full_info_coembed, df_coembed_coords], axis=1)
+                            
+                            tsne_co_space_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_tSNE_similarity_space_COEMBED.csv")
+                            df_full_space_coembed.to_csv(tsne_co_space_path, index=False)
+                            logging.info(f"Saved FULL CO-EMBEDDED t-SNE space to: {tsne_co_space_path}")
+                            # --- END NEW ---
+                            
+                            # Also populate df_results_main with the non-coembedded portion for consistency
                             tsne_emb_main = tsne_embedding[:X_scaled_main.shape[0]]
                             if tsne_emb_main.shape[0] == len(df_results_main):
                                 for i in range(simspace_dim): df_results_main[tsne_cols[i]] = tsne_emb_main[:, i]
-                            else: logging.error("t-SNE main result length mismatch.")
-                            
-                            tsne_emb_target = tsne_embedding[X_scaled_main.shape[0]:]
-                            if len(tsne_emb_target) == len(df_target_ligands_for_coembed_info):
-                                df_tsne_target_coords = pd.DataFrame(tsne_emb_target, columns=tsne_cols, index=df_target_ligands_for_coembed_info.index)
-                                id_cols_tsne = [c for c in ['SMILES','Compound ChEMBL ID','Activity Type','Standard Value (nM)','accession'] if c in df_target_ligands_for_coembed_info]
-                                df_target_ids_tsne = df_target_ligands_for_coembed_info[id_cols_tsne]
-                                df_target_tsne_full = df_target_ids_tsne.join(df_tsne_target_coords, how="inner")
-                                tsne_target_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_tSNE_TARGET_PROJECTIONS.csv")
-                                df_target_tsne_full.to_csv(tsne_target_path, index=False); logging.info(f"Saved t-SNE target projections: {tsne_target_path}")
-                            else: logging.error("t-SNE target result length mismatch.")
+
                 except Exception as e: 
-                    logging.error(f"t-SNE failed: {e}", exc_info=True); 
-                    for col in tsne_cols: df_results_main[col] = np.nan
-        else: logging.info("Skipping t-SNE (dim != 2).")
+                    logging.error(f"t-SNE failed: {e}", exc_info=True)
         gc.collect()
 
     output_csv_path = os.path.join(output_simspace_dir, f"{base_name_prefix}_similarity_space.csv")
