@@ -184,8 +184,7 @@ def main(config_path, representation_mode, random_seed_value):
                     "--output_dir", os.path.abspath(target_ligands_repr_calc_output_dir),
                     "--representation_type", repr_type,
                     "--file_label", f"{target_id_name}_target_ligands_for_calc", 
-                    "--n_jobs", str(gs.get('n_jobs_molcalcs', -1)),
-                    "--random_seed", str(random_seed_value) 
+                    "--n_jobs", str(gs.get('n_jobs_molcalcs', -1))
                 ]
                 if not run_command(cmd_molcalcs_target, f"MolCalcs Target ({repr_type}) for {target_id_name}"):
                     logging.warning(f"Target ligand {repr_type} calculation failed. Co-embedding may be affected.")
