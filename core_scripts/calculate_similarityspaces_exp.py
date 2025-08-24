@@ -7,7 +7,7 @@ from compress_pickle import dump
 from sklearn.preprocessing import StandardScaler
 import argparse
 import json
-from core_scripts.utils import PassthroughScaler
+from .utils import PassthroughScaler
 
 # --- Module Imports & Global Setup ---
 # We still try to import cuml to set a basic availability flag,
