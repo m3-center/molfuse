@@ -83,7 +83,7 @@
       "short_name": "UMAP-Euclidean",
       "metric": "euclidean",
       "allow_coembedding": true,
-      "n_neighbors": 5
+      "n_neighbors": 150
     }
   }
 }

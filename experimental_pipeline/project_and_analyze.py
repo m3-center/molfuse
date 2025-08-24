@@ -11,6 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc as sklearn_auc
+from core_scripts.utils import PassthroughScaler
 
 # CUML imports
 try:

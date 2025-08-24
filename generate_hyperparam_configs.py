@@ -29,9 +29,9 @@ UMAP_SIMSPACE_DIM_FOR_SWEEP = [10]
 TSNE_SIMSPACE_DIM_FOR_SWEEP = [2]
 
 # Reduced n_neighbors options for UMAP
-UMAP_N_NEIGHBORS_OPTIONS = [5, 15, 30]
+UMAP_N_NEIGHBORS_OPTIONS = [15, 50, 100, 150]
 # Kept tsne_pca_components options the same
-TSNE_PCA_COMPONENTS_OPTIONS = [25, 50, 75]
+TSNE_PCA_COMPONENTS_OPTIONS = [25, 50, 100]
 # --- END MODIFICATION ---
 
 # DR methods to test for each representation

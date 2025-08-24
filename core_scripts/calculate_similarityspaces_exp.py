@@ -7,6 +7,7 @@ from compress_pickle import dump
 from sklearn.preprocessing import StandardScaler
 import argparse
 import json
+from core_scripts.utils import PassthroughScaler
 
 # --- Module Imports & Global Setup ---
 # We still try to import cuml to set a basic availability flag,
@@ -52,11 +53,6 @@ def is_gpu_available():
         # Catch a wide range of errors (ImportError, CUDARuntimeError, etc.)
         logger.warning(f"CUDA device not found or failed to initialize. Falling back to scikit-learn (CPU). Error: {e}")
         return False
-
-class PassthroughScaler:
-    def fit(self, X, y=None): return self
-    def transform(self, X, y=None): return X
-    def fit_transform(self, X, y=None): return self.fit(X).transform(X)
 
 # --- Helper Functions ---
 def setup_script_logging(log_filename):
@@ -323,7 +319,7 @@ def main():
         for metric in active_metrics:
             umap_params = dr_configs.get(f"umap_{metric}", {})
             n_neighbors = umap_params.get('n_neighbors', 15)
-            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {'n_components': args.simspace_dim, 'metric': metric, 'random_state': args.random_state, 'n_neighbors': n_neighbors}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors}}
+            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {'n_components': args.simspace_dim, 'metric': metric, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'unique': True}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'unique': True}}
             out_paths = {'dr_cols': [f'UMAP-{metric.capitalize()}-{i+1}' for i in range(args.simspace_dim)], 'projection_model': os.path.join(args.output_model_dir, f"{base_name}_{metric}_UMAP_model.lzma"), 'coembed_space': os.path.join(args.output_simspace_dir, f"{base_name}_{metric}_UMAP_similarity_space_COEMBED.csv")}
             umap_coords = run_umap_for_metric(metric, X_data_dict, df_info, df_target, umap_config, out_paths, GPU_ENABLED)
             df_results = df_results.join(umap_coords)

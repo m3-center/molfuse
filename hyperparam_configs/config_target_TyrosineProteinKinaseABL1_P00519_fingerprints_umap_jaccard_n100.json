@@ -85,7 +85,7 @@
       "short_name": "UMAP-Jaccard",
       "metric": "jaccard",
       "allow_coembedding": true,
-      "n_neighbors": 5
+      "n_neighbors": 100
     }
   }
 }

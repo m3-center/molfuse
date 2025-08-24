@@ -1,0 +1,8 @@
+datasets/*
+datasets_debugging/*
+test_outputs/*
+*.lzma
+*.png
+*.log
+*.out
+*.err
