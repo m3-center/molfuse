@@ -217,7 +217,9 @@ def main(config_path, representation_mode, random_seed_value):
                     "--rdkit_features_list_target_str", rdkit_features_list_target_json_str,
                     f"--run_coembedding_for_pca_umap={str(run_coembedding_pca_umap_flag)}",
                     "--dr_method_configs_json_str", dr_method_configs_json_str,
-                    "--random_state", str(random_seed_value) ]
+                    "--random_state", str(random_seed_value),
+                    "--log_file_path", os.path.abspath(log_file_name) 
+                    ]
                 if os.path.exists(current_zinc_filtered_path): cmd_calc_simspace.extend(["--zinc_data_path", os.path.abspath(current_zinc_filtered_path)])
                 else: cmd_calc_simspace.extend(["--zinc_data_path", "None"])
                 
