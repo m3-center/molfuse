@@ -4,6 +4,10 @@ import os
 import argparse
 import logging
 import json
+import sys
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 from compress_pickle import load as decompress_pickle_load
 from scipy.spatial import distance
 import matplotlib
@@ -11,9 +15,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc as sklearn_auc
-import sys
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
 from core_scripts.utils import PassthroughScaler
 
 # CUML imports

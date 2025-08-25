@@ -1,18 +1,21 @@
+import os
+import sys
+import logging
+import gc
+import argparse
+import json
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+import numpy as np
+import pandas as pd
+from compress_pickle import dump
+
+from sklearn.preprocessing import StandardScaler
 from sklearn.manifold import TSNE as sklearnTSNE
 from sklearn.decomposition import PCA as sklearnPCA
 from core_scripts.utils import PassthroughScaler
-import os
-import numpy as np
-import pandas as pd
-import logging
-import gc
-from compress_pickle import dump
-from sklearn.preprocessing import StandardScaler
-import argparse
-import json
-import sys
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
 
 # --- Module Imports & Global Setup ---
 # We still try to import cuml to set a basic availability flag,
