@@ -238,12 +238,13 @@ def run_tsne(X_pre_reduced, df_info, X_target_pre_reduced, df_target_info, confi
         logger.warning("Cannot run t-SNE: held-out actives data is missing.")
         return pd.DataFrame(columns=out_paths['dr_cols'])
     X_coembed = np.vstack((X_pre_reduced, X_target_pre_reduced))
-    perplexity = min(config['sklearn_params']
-                     ['perplexity'], X_coembed.shape[0] - 1)
-    model = cumlTSNE(**config['cuml_params']) if use_gpu else sklearnTSNE(
-        perplexity=perplexity, **config['sklearn_params'])
+    sklearn_params = config['sklearn_params'].copy()
+    adjusted_perplexity = min(sklearn_params.get('perplexity', 30.0), X_coembed.shape[0] - 1)
+    sklearn_params['perplexity'] = adjusted_perplexity
+    model = cumlTSNE(**config['cuml_params']) if use_gpu else sklearnTSNE(**sklearn_params)
+
     logger.info(
-        f"Fitting t-SNE on co-embedded data ({X_coembed.shape}) with perplexity={perplexity}...")
+        f"Fitting t-SNE on co-embedded data ({X_coembed.shape}) with perplexity={adjusted_perplexity}...")
     coembed_coords = model.fit_transform(X_coembed)
     df_coembed = construct_coembedded_dataframe(
         df_info, df_target_info, coembed_coords, out_paths['dr_cols'])
