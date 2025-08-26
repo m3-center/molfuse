@@ -246,17 +246,15 @@ def main(config_path, representation_mode, random_seed_value):
                         logging.error(f"Main projection simspace CSV not found: {comprehensive_simspace_csv_PROJECTION}. Cannot run analysis for this dim.")
                         continue
 
+                    # --- PROJECTION STRATEGY RUN (PCA / UMAP Only) ---
                     for dr_key, dr_params_cfg in active_dr_methods_cfg.items():
+                        if dr_key == "tsne":
+                            continue # t-SNE is handled in the co-embedding block below
+
                         base_dr_short_name = dr_params_cfg["short_name"]
-                        
-                        # --- PROJECTION STRATEGY RUN ---
-                        # For PCA/UMAP, this is the explicit projection. For t-SNE, it's just the standard run.
-                        proj_strat_label = "Projection" if not dr_key == "tsne" else "CoEmbedding (Native)"
+                        proj_strat_label = "Projection"
                         proj_output_leaf_name = base_dr_short_name
                         logging.info(f"          --- ({proj_strat_label}) Analyzing DR: {proj_output_leaf_name} ---")
-
-                        if dr_key == "tsne" and simspace_dim_val != 2:
-                            logging.info("Skipping t-SNE analysis (dim != 2)."); continue
 
                         results_out_dir_proj = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", proj_output_leaf_name.replace('-', '_'))
                         os.makedirs(results_out_dir_proj, exist_ok=True)
@@ -268,25 +266,28 @@ def main(config_path, representation_mode, random_seed_value):
                             "--output_dir", os.path.abspath(results_out_dir_proj),
                             "--target_id_name", target_id_name, "--representation_type", repr_type,
                             "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
-
+                        
                         if affinity_cutoff is not None:
                             cmd_pa_proj.append(f"--affinity_cutoff={affinity_cutoff}")
 
-                        if not dr_key == "tsne": # Projection for PCA/UMAP requires models and separate actives
-                            model_root_name = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}"
-                            cmd_pa_proj.extend([f"--target_ligands_repr_path={os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else 'None')}",
-                                                f"--model_dir_for_projection={os.path.abspath(models_output_dir_dim)}",
-                                                f"--model_name_root_for_projection={model_root_name}"])
+                        model_root_name = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}"
+                        cmd_pa_proj.extend([f"--target_ligands_repr_path={os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else 'None')}",
+                                            f"--model_dir_for_projection={os.path.abspath(models_output_dir_dim)}",
+                                            f"--model_name_root_for_projection={model_root_name}"])
 
                         if not run_command(cmd_pa_proj, f"Analyze ({proj_output_leaf_name}, {repr_type}, dim{simspace_dim_val})"):
                             logging.error(f"Analysis failed for {proj_output_leaf_name}.")
 
-                        # --- CO-EMBEDDING STRATEGY RUN (for PCA/UMAP) ---
-                        if run_coembedding_pca_umap_flag and dr_params_cfg.get("allow_coembedding", False) and (dr_key.startswith("pca") or dr_key.startswith("umap")):
+                    # --- CO-EMBEDDING STRATEGY RUN (for PCA/UMAP) ---
+                    if run_coembedding_pca_umap_flag:
+                        for dr_key, dr_params_cfg in active_dr_methods_cfg.items():
+                            if not (dr_params_cfg.get("allow_coembedding", False) and (dr_key.startswith("pca") or dr_key.startswith("umap"))):
+                                continue
+                            
+                            base_dr_short_name = dr_params_cfg["short_name"]
                             coembed_output_leaf_name = f"{base_dr_short_name}-Coembed"
                             logging.info(f"          --- (CoEmbedding) Analyzing DR: {coembed_output_leaf_name} ---")
 
-                            # Find the dedicated co-embedded similarity space file
                             metric = dr_params_cfg.get("metric", "")
                             coembed_space_filename = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_{base_dr_short_name.replace('-', '_')}_similarity_space_COEMBED.csv"
                             if dr_key.startswith("umap"):
@@ -302,7 +303,7 @@ def main(config_path, representation_mode, random_seed_value):
                             os.makedirs(results_out_dir_coembed, exist_ok=True)
                             
                             cmd_pa_coembed = [ "python", "experimental_pipeline/project_and_analyze.py",
-                                "--simspace_csv_path", os.path.abspath(simspace_csv_for_coembed_analysis), # Use the co-embedded file
+                                "--simspace_csv_path", os.path.abspath(simspace_csv_for_coembed_analysis),
                                 "--dr_method_key", dr_key, "--dr_short_name", base_dr_short_name,
                                 "--simspace_dim", str(simspace_dim_val), "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])),
                                 "--output_dir", os.path.abspath(results_out_dir_coembed),
@@ -311,7 +312,37 @@ def main(config_path, representation_mode, random_seed_value):
                             
                             if not run_command(cmd_pa_coembed, f"Analyze ({coembed_output_leaf_name}, {repr_type}, dim{simspace_dim_val})"):
                                 logging.error(f"Analysis failed for {coembed_output_leaf_name}.")
-                
+
+                    # --- DEDICATED T-SNE BLOCK (Always Co-Embedded) ---
+                    if 'tsne' in active_dr_methods_cfg:
+                        dr_key = 'tsne'
+                        dr_params_cfg = active_dr_methods_cfg[dr_key]
+                        base_dr_short_name = dr_params_cfg["short_name"]
+                        
+                        if simspace_dim_val != 2:
+                            logging.info("Skipping t-SNE analysis because similarity space dimension is not 2.")
+                        else:
+                            logging.info(f"          --- (CoEmbedding - Native) Analyzing DR: t-SNE ---")
+                            
+                            simspace_csv_for_tsne = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_tSNE_similarity_space_COEMBED.csv")
+                            
+                            if not os.path.exists(simspace_csv_for_tsne):
+                                logging.error(f"t-SNE co-embedded simspace file not found: {simspace_csv_for_tsne}. Skipping analysis.")
+                            else:
+                                results_out_dir_tsne = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", base_dr_short_name.replace('-', '_'))
+                                os.makedirs(results_out_dir_tsne, exist_ok=True)
+                                
+                                cmd_pa_tsne = [ "python", "experimental_pipeline/project_and_analyze.py",
+                                    "--simspace_csv_path", os.path.abspath(simspace_csv_for_tsne),
+                                    "--dr_method_key", dr_key, "--dr_short_name", base_dr_short_name,
+                                    "--simspace_dim", str(simspace_dim_val), "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])),
+                                    "--output_dir", os.path.abspath(results_out_dir_tsne),
+                                    "--target_id_name", target_id_name, "--representation_type", repr_type,
+                                    "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
+
+                                if not run_command(cmd_pa_tsne, f"Analyze (t-SNE, {repr_type}, dim{simspace_dim_val})"):
+                                    logging.error(f"Analysis failed for t-SNE.")
+                    
                 elif target_processing_mode == "similarity_space_only":
                     logging.info(f"        --- Step 2c: Ranking ZINC Decoys (Similarity Space Only Mode) ---")
                     for dr_key_rank, dr_params_rank_cfg in active_dr_methods_cfg.items():
