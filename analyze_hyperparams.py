@@ -14,8 +14,6 @@ import re
 from datetime import datetime
 
 # --- LaTeX Preamble and Helper Functions (Unchanged) ---
-# (The LATEX_DOCUMENT_PREAMBLE, LATEX_DOCUMENT_END, and helper functions
-# like escape_latex_text_content, clean_for_label, etc., remain the same)
 LATEX_DOCUMENT_PREAMBLE = r"""
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
@@ -82,7 +80,6 @@ def add_figure_to_latex_standalone(latex_content_list, relative_fig_path_in_tex,
                                f"  \\label{{fig:{clean_label}}}", r"\end{figure}", "\n"])
 
 def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, caption_text, label_text, placement="[H]", font_size=r"\small"):
-    # (This function can remain largely the same, but ensure it handles numeric formatting well)
     clean_label = clean_for_label(label_text)
     if dataframe is None or dataframe.empty:
         latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty.\n")
@@ -95,27 +92,26 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
         df_latex[col] = df_latex[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
     df_latex.columns = [escape_latex_text_content(c.replace('_', ' ').title()) for c in df_latex.columns]
     col_format = 'l' * len(df_latex.columns)
-    latex_table_string = df_latex.to_latex(index=False, escape=False, column_format=col_format, booktabs=True)
+    
+    # --- MODIFIED LINE: Removed the incompatible 'booktabs' argument ---
+    latex_table_string = df_latex.to_latex(index=False, escape=False, column_format=col_format)
+    # --- END MODIFICATION ---
+
     latex_content_list.append(latex_table_string)
     latex_content_list.extend([r"\end{table}", "\n"])
 
-# --- Logging and Data Collection ---
+# --- Logging and Data Collection (Unchanged) ---
 agg_log_file_name = f"hyperparam_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s',
                     handlers=[ logging.FileHandler(agg_log_file_name, mode='w'), logging.StreamHandler() ])
 
 def find_all_replicate_runs(base_experiment_dir):
-    # (This function remains unchanged)
     pattern = os.path.join(base_experiment_dir, "run_seed*_repr*_*_*")
     replicate_dirs = [d for d in glob.glob(pattern) if os.path.isdir(d)]
     logging.info(f"Found {len(replicate_dirs)} replicate run directories.")
     return sorted(replicate_dirs)
 
 def collect_metrics_from_replicates(replicate_run_dirs):
-    """
-    Collects metrics from all replicate runs and intelligently extracts the
-    hyperparameter that was swept for that specific run.
-    """
     all_metrics_data = []
     for rep_dir_path in replicate_run_dirs:
         logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
@@ -128,13 +124,11 @@ def collect_metrics_from_replicates(replicate_run_dirs):
             run_config = json.load(f)
 
         gs = run_config['global_settings']
-        # There should only be one representation and one DR method in each sweep config
         repr_type = run_config['representations'][0]
         dr_method_key = list(run_config['dimensionality_reduction_methods'].keys())[0]
         dr_params = run_config['dimensionality_reduction_methods'][dr_method_key]
         dr_short_name = dr_params['short_name']
         
-        # --- Determine which hyperparameter was swept in this run ---
         hyperparam_name, hyperparam_value = "N/A", "N/A"
         if 'n_neighbors' in dr_params:
             hyperparam_name = 'n_neighbors'
@@ -145,7 +139,6 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         elif 'tsne_pca_components' in gs:
             hyperparam_name = 'tsne_pca_components'
             hyperparam_value = gs['tsne_pca_components']
-        # --- End ---
 
         target_info = run_config['targets'][0]
         target_id_name = target_info['id_name']
@@ -179,7 +172,7 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         
     return pd.DataFrame(all_metrics_data)
 
-# --- Main Report Generation ---
+# --- Main Report Generation (Unchanged) ---
 def main_report_generation():
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a LaTeX report.")
     parser.add_argument("--base_experiment_dir", required=True, help="Base directory containing all hyperparameter sweep run folders.")
@@ -202,19 +195,16 @@ def main_report_generation():
         logging.error("Aggregated metrics DataFrame is empty. Aborting."); return
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_hyperparam_metrics_aggregated.csv"), index=False)
     
-    # --- DYNAMICALLY GENERATE REPORT SECTIONS FOR EACH SWEEP ---
     latex_content.append(get_section_header_latex_standalone(1, 'Hyperparameter Sweep Analysis'))
     
-    # Find all unique sweeps that were performed
     unique_sweeps = df_agg[['Representation', 'DR_Method', 'Hyperparameter_Name']].drop_duplicates().to_records(index=False)
 
     for repr_type, dr_method, hyperparam_name in unique_sweeps:
-        if hyperparam_name == 'N/A': continue # Skip non-swept methods like PCA
+        if hyperparam_name == 'N/A': continue
 
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {dr_method} ({repr_type})')}")
         latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
 
-        # Filter data for the current sweep
         df_sweep = df_agg[
             (df_agg['Representation'] == repr_type) &
             (df_agg['DR_Method'] == dr_method) &
@@ -223,7 +213,6 @@ def main_report_generation():
 
         if df_sweep.empty: continue
 
-        # --- Generate Plots for this Sweep ---
         for metric_col in ['ROC_AUC', 'EF_1Perc']:
             plt.figure(figsize=(8, 6))
             summary = df_sweep.groupby('Hyperparameter_Value')[metric_col].agg(['mean', 'std']).reset_index().fillna(0)
@@ -245,7 +234,6 @@ def main_report_generation():
             
             add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
 
-        # --- Generate Summary Table for this Sweep ---
         summary_table = df_sweep.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean', 'std']).reset_index()
         summary_table.columns = ['_'.join(col).strip() for col in summary_table.columns.values]
         summary_table.rename(columns={'Hyperparameter_Value_': hyperparam_name}, inplace=True)
@@ -253,7 +241,6 @@ def main_report_generation():
         caption = f"Performance metrics for {dr_method} ({repr_type}) across different values of {hyperparam_name}."
         add_dataframe_as_latex_table_standalone(latex_content, summary_table, caption, clean_for_label(f"table_{repr_type}_{dr_method}_{hyperparam_name}"))
 
-    # --- Final Report Generation ---
     latex_content.append(LATEX_DOCUMENT_END)
     report_tex_filename = "hyperparameter_analysis_report.tex"
     report_tex_path = os.path.join(report_output_abs_dir, report_tex_filename)
@@ -261,7 +248,6 @@ def main_report_generation():
         f.write("\n".join(latex_content))
     logging.info(f"Hyperparameter analysis report structure generated: {report_tex_path}")
 
-    # (LaTeX compilation logic remains the same)
     try:
         for i in range(2): 
             subprocess.run(["pdflatex", "-interaction=nonstopmode", "-output-directory", report_output_abs_dir, report_tex_path], capture_output=True, text=True, check=False)
@@ -270,7 +256,6 @@ def main_report_generation():
         else: logging.warning(f"PDF report not found after compilation attempts.")
     except Exception as e:
         logging.error(f"LaTeX compilation error: {e}", exc_info=True)
-
 
 if __name__ == "__main__":
     main_report_generation()
