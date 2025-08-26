@@ -1,10 +1,3 @@
-from core_scripts.utils import PassthroughScaler
-from sklearn.decomposition import PCA as sklearnPCA
-from sklearn.manifold import TSNE as sklearnTSNE
-from sklearn.preprocessing import StandardScaler
-from compress_pickle import dump
-import pandas as pd
-import numpy as np
 import os
 import sys
 import logging
@@ -16,6 +9,15 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from compress_pickle import dump
+import pandas as pd
+import numpy as np
+
+from sklearn.decomposition import PCA as sklearnPCA
+from sklearn.manifold import TSNE as sklearnTSNE
+from sklearn.preprocessing import StandardScaler
+
+from core_scripts.utils import PassthroughScaler
 
 # ... (Module imports and initial setup are unchanged) ...
 try:
