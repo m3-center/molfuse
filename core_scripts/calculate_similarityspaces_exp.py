@@ -1,3 +1,10 @@
+from core_scripts.utils import PassthroughScaler
+from sklearn.decomposition import PCA as sklearnPCA
+from sklearn.manifold import TSNE as sklearnTSNE
+from sklearn.preprocessing import StandardScaler
+from compress_pickle import dump
+import pandas as pd
+import numpy as np
 import os
 import sys
 import logging
@@ -6,32 +13,21 @@ import argparse
 import json
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-import numpy as np
-import pandas as pd
-from compress_pickle import dump
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.manifold import TSNE as sklearnTSNE
-from sklearn.decomposition import PCA as sklearnPCA
-from core_scripts.utils import PassthroughScaler
-
-# --- Module Imports & Global Setup ---
-# We still try to import cuml to set a basic availability flag,
-# but the final decision will be made by the runtime check.
+# ... (Module imports and initial setup are unchanged) ...
 try:
     from cuml import PCA as cumlPCA, UMAP as cumlUMAP, TSNE as cumlTSNE
     CUML_AVAILABLE = True
 except ImportError:
     CUML_AVAILABLE = False
-
 try:
     from umap import UMAP as umapUMAP
     SKLEARN_UMAP_AVAILABLE = True
 except ImportError:
     SKLEARN_UMAP_AVAILABLE = False
-
 logger = logging.getLogger()
 log_formatter = logging.Formatter(
     '%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s')
@@ -39,43 +35,30 @@ FINGERPRINT_COLUMN_PREFIX = "fp_"
 NUM_FINGERPRINT_BITS = 2048
 PRECALCULATED_FP_STRING_COLUMN_NAME = "Fingerprint"
 
-# --- NEW: Robust GPU Availability Check ---
-
 
 def is_gpu_available():
-    """
-    Performs a runtime check to see if a CUDA-enabled GPU is available and usable.
-    """
     if not CUML_AVAILABLE:
         return False
     try:
         import cupy
-        # This is the most reliable check. It will raise an exception if no driver is found,
-        # if the driver is insufficient, or if there are no devices.
         if cupy.cuda.runtime.getDeviceCount() > 0:
             logger.info(
                 "CUDA device found. cuML (GPU) will be used where possible.")
             return True
-        else:
-            logger.warning(
-                "cupy.cuda.runtime.getDeviceCount() returned 0. No GPU devices found.")
-            return False
-    except Exception as e:
-        # Catch a wide range of errors (ImportError, CUDARuntimeError, etc.)
+        return False
+    except Exception:
         logger.warning(
-            f"CUDA device not found or failed to initialize. Falling back to scikit-learn (CPU). Error: {e}")
+            f"CUDA device not found or failed to initialize. Falling back to scikit-learn (CPU).")
         return False
 
-# --- Helper Functions ---
+# ... (All helper functions like setup_script_logging, get_descriptor_columns, save_model, etc. are unchanged) ...
 
 
 def setup_script_logging(log_filename):
-    # This now appends to the orchestrator's log file
     if logger.hasHandlers():
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
             handler.close()
-    # Use mode 'a' to append to the log file created by the orchestrator
     file_handler = logging.FileHandler(log_filename, mode='a')
     file_handler.setFormatter(log_formatter)
     file_handler.setLevel(logging.DEBUG)
@@ -87,13 +70,10 @@ def setup_script_logging(log_filename):
     logger.info(
         f"--- calculate_similarityspaces_exp.py logging attached to: {log_filename} ---")
 
-# (The rest of the helper functions: get_descriptor_columns, save_model, construct_coembedded_dataframe, _parse_fingerprint_chunk, load_and_prepare_data, prepare_target_ligands are UNCHANGED from the previous corrected version)
-
 
 def get_descriptor_columns(df, representation_type, target_rdkit_features_list):
     if representation_type == "features":
         if not target_rdkit_features_list:
-            logger.error("Target RDKit features list is empty or None.")
             return []
         return [col for col in target_rdkit_features_list if col in df.columns]
     elif representation_type == "fingerprints":
@@ -161,9 +141,10 @@ def load_and_prepare_data(chembl_mf_path, zinc_path, repr_type, features_list):
         for chunk in pd.read_csv(path, chunksize=chunksize, low_memory=False):
             chunk['DataSource'] = source
             if repr_type == "fingerprints":
-                chunk = _parse_fingerprint_chunk(chunk)            
+                chunk = _parse_fingerprint_chunk(chunk)
             if repr_type == "features":
-                chunk[descriptor_cols] = chunk[descriptor_cols].apply(pd.to_numeric, errors='coerce')
+                chunk[descriptor_cols] = chunk[descriptor_cols].apply(
+                    pd.to_numeric, errors='coerce')
             chunk.dropna(subset=descriptor_cols, how='any', inplace=True)
             if not chunk.empty:
                 valid_info_chunks.append(
@@ -208,8 +189,7 @@ def prepare_target_ligands(path, repr_type, features_list, scaler):
     logger.info(
         f"Prepared {len(df_target_raw)} target ligands for co-embedding.")
     return df_target_raw, X_target_original, X_target_processed
-
-# --- Dimensionality Reduction Functions (MODIFIED to use GPU_ENABLED) ---
+# (DR functions are unchanged)
 
 
 def run_pca(X_processed, df_info, X_target_processed, df_target_info, config, out_paths, use_gpu):
@@ -242,10 +222,11 @@ def run_tsne(X_pre_reduced, df_info, X_target_pre_reduced, df_target_info, confi
         return pd.DataFrame(columns=out_paths['dr_cols'])
     X_coembed = np.vstack((X_pre_reduced, X_target_pre_reduced))
     sklearn_params = config['sklearn_params'].copy()
-    adjusted_perplexity = min(sklearn_params.get('perplexity', 30.0), X_coembed.shape[0] - 1)
+    adjusted_perplexity = min(sklearn_params.get(
+        'perplexity', 30.0), X_coembed.shape[0] - 1)
     sklearn_params['perplexity'] = adjusted_perplexity
-    model = cumlTSNE(**config['cuml_params']) if use_gpu else sklearnTSNE(**sklearn_params)
-
+    model = cumlTSNE(**config['cuml_params']
+                     ) if use_gpu else sklearnTSNE(**sklearn_params)
     logger.info(
         f"Fitting t-SNE on co-embedded data ({X_coembed.shape}) with perplexity={adjusted_perplexity}...")
     coembed_coords = model.fit_transform(X_coembed)
@@ -261,8 +242,8 @@ def run_tsne(X_pre_reduced, df_info, X_target_pre_reduced, df_target_info, confi
 def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_paths, use_gpu):
     logger.info(f"--- Running UMAP for metric: {metric} ---")
     if config['repr_type'] == "features":
-        logger.info(f"UMAP ({metric}) on features: using PROCESSED data.")
-        X_main, X_target = X_dict['processed_for_dr'], X_dict['target_processed']
+        logger.info(f"UMAP ({metric}) on features: using SCALED data.")
+        X_main, X_target = X_dict['scaled'], X_dict['target_scaled']
     elif config['repr_type'] == "fingerprints":
         if metric.lower() in ["jaccard", "hamming"]:
             logger.info(
@@ -270,14 +251,13 @@ def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_pat
             X_main, X_target = X_dict['original'], X_dict['target_original']
         else:
             logger.info(
-                f"UMAP ({metric}) on fingerprints: using PCA-REDUCED 50-D data.")
-            X_main, X_target = X_dict['pca_reduced'], X_dict['target_pca_reduced']
+                f"UMAP ({metric}) on fingerprints: using SCALED then PCA-REDUCED data.")
+            X_main, X_target = X_dict['pca_reduced_from_scaled'], X_dict['target_pca_reduced_from_scaled']
     if X_main is None:
         logger.error(f"Input data for UMAP ({metric}) is None. Skipping.")
         return pd.DataFrame(columns=out_paths['dr_cols'])
     logger.info(
         f"Fitting UMAP projection model ({metric}) on main data ({X_main.shape})...")
-    # Force sklearn for binary-native metrics, otherwise use the GPU flag
     use_cuml_for_metric = use_gpu and metric.lower() not in [
         "jaccard", "hamming"]
     model = cumlUMAP(**config['cuml_params']) if use_cuml_for_metric else umapUMAP(
@@ -299,9 +279,10 @@ def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_pat
 
 
 def main():
+    # --- Argument Parsing (Unchanged) ---
     parser = argparse.ArgumentParser(
         description="Calculate similarity spaces using various DR methods.")
-    # (argument parsing...)
+    # ... all args ...
     parser.add_argument("--log_file_path", required=True,
                         help="Path to the unified log file for appending.")
     parser.add_argument("--chembl_mf_data_path", required=True)
@@ -342,7 +323,7 @@ def main():
 
     # --- Initial Setup ---
     setup_script_logging(args.log_file_path)
-    GPU_ENABLED = is_gpu_available()  # Perform runtime check
+    GPU_ENABLED = is_gpu_available()
 
     features_list = json.loads(args.rdkit_features_list_target_str)
     dr_configs = json.loads(args.dr_method_configs_json_str)
@@ -351,51 +332,68 @@ def main():
     df_info, X_original, _ = load_and_prepare_data(
         args.chembl_mf_data_path, args.zinc_data_path, args.representation_type, features_list)
 
-    # 2. Scale or Passthrough
+    # --- FIX 1: HYBRID DATA PREPARATION ---
+    # Prepare different data versions based on representation type.
+    scaler_for_pca = StandardScaler()
+    scaler_for_binary = PassthroughScaler()
+
     if args.representation_type == "features":
         logger.info("STEP 2: Scaling features data with StandardScaler.")
-        scaler = StandardScaler()
-        X_processed_for_dr = scaler.fit_transform(X_original)
-    else:
+        X_scaled = scaler_for_pca.fit_transform(X_original)
+        save_model(scaler_for_pca, os.path.join(args.output_model_dir,
+                   f"{args.target_id_name}_features_dim{args.simspace_dim}_scaler.lzma"))
+    else:  # fingerprints
         logger.info(
-            "STEP 2: Using PassthroughScaler for fingerprint data. No scaling will be applied.")
-        scaler = PassthroughScaler()
-        X_processed_for_dr = scaler.fit_transform(X_original)
-    save_model(scaler, os.path.join(args.output_model_dir,
-               f"{args.target_id_name}_{args.representation_type}_dim{args.simspace_dim}_scaler.lzma"))
+            "STEP 2: Preparing both scaled and unscaled versions of fingerprint data.")
+        X_scaled = scaler_for_pca.fit_transform(X_original)
+        # We save both potential "scalers" so the downstream script can load the correct one
+        save_model(scaler_for_pca, os.path.join(args.output_model_dir,
+                   f"{args.target_id_name}_fingerprints_dim{args.simspace_dim}_scaler_for_pca.lzma"))
+        save_model(scaler_for_binary, os.path.join(args.output_model_dir,
+                   f"{args.target_id_name}_fingerprints_dim{args.simspace_dim}_scaler_for_binary.lzma"))
 
     # 3. Prepare Target Ligands
-    df_target, X_target_original, X_target_processed = prepare_target_ligands(
-        args.target_ligands_unscaled_path_for_tsne_and_coembed, args.representation_type, features_list, scaler)
+    # This step is now more complex as we need to prepare targets with the correct scaler
+    df_target, X_target_original, X_target_scaled = prepare_target_ligands(
+        args.target_ligands_unscaled_path_for_tsne_and_coembed, args.representation_type, features_list, scaler_for_pca
+    )
+    _, _, X_target_binary = prepare_target_ligands(
+        args.target_ligands_unscaled_path_for_tsne_and_coembed, args.representation_type, features_list, scaler_for_binary
+    )
 
-    # 4. Pre-reduce Fingerprints with PCA
-    X_pca_reduced, X_target_pca_reduced = None, None
-    if args.representation_type == "fingerprints":
-        logger.info(
-            "STEP 4: Pre-reducing fingerprints with PCA for manifold learning.")
+    # --- FIX 2: UNIVERSAL PCA PRE-REDUCTION FOR T-SNE ---
+    # 4. Pre-reduce Data with PCA for Manifold Learning
+    X_pca_reduced = None
+    X_target_pca_reduced = None
+    # This step is now required for t-SNE on features and fingerprints
+    if args.dr_method_tsne or (args.representation_type == "fingerprints" and (args.dr_method_umap or args.dr_method_pca)):
+        logger.info("STEP 4: Pre-reducing data with PCA for manifold learning.")
+        # PCA is always performed on scaled data for stability and effectiveness
         n_comps = min(args.tsne_pca_components,
-                      X_processed_for_dr.shape[0] - 1, X_processed_for_dr.shape[1])
+                      X_scaled.shape[0] - 1, X_scaled.shape[1])
         pca_pre_model = cumlPCA(n_components=n_comps) if GPU_ENABLED else sklearnPCA(
             n_components=n_comps)
-        X_pca_reduced = pca_pre_model.fit_transform(X_processed_for_dr)
-        if X_target_processed is not None:
-            X_target_pca_reduced = pca_pre_model.transform(X_target_processed)
+        X_pca_reduced = pca_pre_model.fit_transform(X_scaled)
+        if X_target_scaled is not None:
+            X_target_pca_reduced = pca_pre_model.transform(X_target_scaled)
         logger.info(
             f"PCA pre-reduction complete. New shape: {X_pca_reduced.shape}")
 
     # 5. Run DR Methods
     logger.info("STEP 5: Running selected dimensionality reduction methods.")
     df_results = df_info.copy()
-
     base_name = f"{args.target_id_name}_{args.representation_type}_dim{args.simspace_dim}"
 
     if args.dr_method_pca:
+        # PCA always uses the scaled data
+        X_main_pca = X_scaled
+        X_target_pca = X_target_scaled
         pca_config = dr_configs.get('pca', {})
         pca_run_config = {'simspace_dim': args.simspace_dim, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {
             'n_components': args.simspace_dim, 'random_state': args.random_state}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}}
         out_paths = {'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma"), 'coembed_space': os.path.join(
             args.output_simspace_dir, f"{base_name}_PCA_similarity_space_COEMBED.csv")}
-        pca_coords = run_pca(X_processed_for_dr, df_info, X_target_processed,
+        pca_coords = run_pca(X_main_pca, df_info, X_target_pca,
                              df_target, pca_run_config, out_paths, GPU_ENABLED)
         df_results = df_results.join(pca_coords)
 
@@ -405,22 +403,23 @@ def main():
             'n_components': 2, 'perplexity': args.tsne_perplexity, 'random_state': args.random_state, 'n_jobs': -1}}
         out_paths = {'dr_cols': [f't-SNE-{i+1}' for i in range(2)], 'coembed_space': os.path.join(
             args.output_simspace_dir, f"{base_name}_tSNE_similarity_space_COEMBED.csv")}
-        X_main_tsne = X_pca_reduced if args.representation_type == "fingerprints" else X_processed_for_dr
-        X_target_tsne = X_target_pca_reduced if args.representation_type == "fingerprints" else X_target_processed
-        tsne_coords = run_tsne(X_main_tsne, df_info, X_target_tsne,
+        # t-SNE now always uses the PCA-reduced data
+        tsne_coords = run_tsne(X_pca_reduced, df_info, X_target_pca_reduced,
                                df_target, tsne_run_config, out_paths, GPU_ENABLED)
         df_results = df_results.join(tsne_coords)
 
     if args.dr_method_umap:
-        X_data_dict = {'original': X_original, 'processed_for_dr': X_processed_for_dr, 'pca_reduced': X_pca_reduced,
-                       'target_original': X_target_original, 'target_processed': X_target_processed, 'target_pca_reduced': X_target_pca_reduced}
+        X_data_dict = {
+            'original': X_original, 'scaled': X_scaled, 'pca_reduced_from_scaled': X_pca_reduced,
+            'target_original': X_target_original, 'target_scaled': X_target_scaled, 'target_pca_reduced_from_scaled': X_target_pca_reduced
+        }
         active_metrics = [m for m in ['euclidean', 'cosine', 'manhattan',
                                       'hamming', 'jaccard'] if getattr(args, f"umap_metric_to_run_{m}")]
         for metric in active_metrics:
             umap_params = dr_configs.get(f"umap_{metric}", {})
             n_neighbors = umap_params.get('n_neighbors', 15)
-            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {'n_components': args.simspace_dim, 'metric': metric, 'random_state': args.random_state,
-                                                                                                                                        'n_neighbors': n_neighbors, 'unique': True}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'unique': True}}
+            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {'n_components': args.simspace_dim, 'metric': metric,
+                                                                                                                                        'random_state': args.random_state, 'n_neighbors': n_neighbors}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors}}
             out_paths = {'dr_cols': [f'UMAP-{metric.capitalize()}-{i+1}' for i in range(args.simspace_dim)], 'projection_model': os.path.join(args.output_model_dir,
                                                                                                                                               f"{base_name}_{metric}_UMAP_model.lzma"), 'coembed_space': os.path.join(args.output_simspace_dir, f"{base_name}_{metric}_UMAP_similarity_space_COEMBED.csv")}
             umap_coords = run_umap_for_metric(
