@@ -360,7 +360,18 @@ def main():
         logging.info(f"PROJECTION strategy detected. Projecting target actives...")
         try:
             df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
-            scaler_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_scaler.lzma")
+            
+            scaler_suffix = "scaler.lzma" # Default for features
+            if args.representation_type == "fingerprints":
+                # For fingerprints, choose the scaler based on the DR method
+                if args.dr_method_key in ["umap_jaccard", "umap_hamming"]:
+                    scaler_suffix = "scaler_for_binary.lzma"
+                    logging.info("Using PassthroughScaler for binary-native UMAP metric.")
+                else:
+                    scaler_suffix = "scaler_for_pca.lzma"
+                    logging.info("Using StandardScaler for Euclidean-like DR method.")
+                    
+            scaler_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_{scaler_suffix}")
             metric = args.dr_method_key.split("_")[-1] if "umap" in args.dr_method_key else ""
             dr_model_filename = f"{args.model_name_root_for_projection}_{args.dr_short_name.replace('-','_')}_model.lzma" if args.dr_method_key != "pca" else f"{args.model_name_root_for_projection}_PCA_model.lzma"
             if "umap" in args.dr_method_key:

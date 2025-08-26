@@ -254,7 +254,7 @@ def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_pat
         else:
             logger.info(
                 f"UMAP ({metric}) on fingerprints: using SCALED then PCA-REDUCED data.")
-            X_main, X_target = X_dict['pca_reduced_from_scaled'], X_dict['target_pca_reduced_from_scaled']
+            X_main, X_target = X_dict['pca_reduced'], X_dict['target_pca_reduced']
     if X_main is None:
         logger.error(f"Input data for UMAP ({metric}) is None. Skipping.")
         return pd.DataFrame(columns=out_paths['dr_cols'])
