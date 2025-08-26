@@ -283,6 +283,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Calculate similarity spaces using various DR methods.")
     # ... all args ...
+    parser.add_argument("--fingerprint_pca_components", type=int, default=50) 
     parser.add_argument("--log_file_path", required=True,
                         help="Path to the unified log file for appending.")
     parser.add_argument("--chembl_mf_data_path", required=True)
@@ -363,21 +364,25 @@ def main():
 
     # --- FIX 2: UNIVERSAL PCA PRE-REDUCTION FOR T-SNE ---
     # 4. Pre-reduce Data with PCA for Manifold Learning
-    X_pca_reduced = None
-    X_target_pca_reduced = None
-    # This step is now required for t-SNE on features and fingerprints
-    if args.dr_method_tsne or (args.representation_type == "fingerprints" and (args.dr_method_umap or args.dr_method_pca)):
-        logger.info("STEP 4: Pre-reducing data with PCA for manifold learning.")
-        # PCA is always performed on scaled data for stability and effectiveness
-        n_comps = min(args.tsne_pca_components,
-                      X_scaled.shape[0] - 1, X_scaled.shape[1])
-        pca_pre_model = cumlPCA(n_components=n_comps) if GPU_ENABLED else sklearnPCA(
-            n_components=n_comps)
+    X_pca_reduced, X_target_pca_reduced = None, None
+    if args.representation_type == "fingerprints":
+        logger.info("STEP 4: Pre-reducing SCALED fingerprints with PCA for manifold learning.")
+        n_comps = min(args.fingerprint_pca_components, X_scaled.shape[0] - 1, X_scaled.shape[1])
+        pca_pre_model = cumlPCA(n_components=n_comps) if GPU_ENABLED else sklearnPCA(n_components=n_comps)
         X_pca_reduced = pca_pre_model.fit_transform(X_scaled)
         if X_target_scaled is not None:
             X_target_pca_reduced = pca_pre_model.transform(X_target_scaled)
-        logger.info(
-            f"PCA pre-reduction complete. New shape: {X_pca_reduced.shape}")
+        logger.info(f"Fingerprint PCA pre-reduction complete. New shape: {X_pca_reduced.shape}")
+    
+    elif args.representation_type == "features" and args.dr_method_tsne:
+        # This block is now ONLY for t-SNE on features, restoring the old correct behavior
+        logger.info("STEP 4: Pre-reducing SCALED features with PCA for t-SNE.")
+        n_comps = min(args.tsne_pca_components, X_scaled.shape[0] - 1, X_scaled.shape[1])
+        pca_pre_model = cumlPCA(n_components=n_comps) if GPU_ENABLED else sklearnPCA(n_components=n_comps)
+        X_pca_reduced = pca_pre_model.fit_transform(X_scaled)
+        if X_target_scaled is not None:
+            X_target_pca_reduced = pca_pre_model.transform(X_target_scaled)
+        logger.info(f"Feature PCA pre-reduction for t-SNE complete. New shape: {X_pca_reduced.shape}")
 
     # 5. Run DR Methods
     logger.info("STEP 5: Running selected dimensionality reduction methods.")
@@ -388,17 +393,15 @@ def main():
         # PCA always uses the scaled data
         X_main_pca = X_scaled
         X_target_pca = X_target_scaled
-        pca_config = dr_configs.get('pca', {})
         pca_run_config = {'simspace_dim': args.simspace_dim, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {
             'n_components': args.simspace_dim, 'random_state': args.random_state}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}}
         out_paths = {'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma"), 'coembed_space': os.path.join(
             args.output_simspace_dir, f"{base_name}_PCA_similarity_space_COEMBED.csv")}
-        pca_coords = run_pca(X_main_pca, df_info, X_target_pca,
+        pca_coords = run_pca(X_scaled, df_info, X_target_scaled,
                              df_target, pca_run_config, out_paths, GPU_ENABLED)
         df_results = df_results.join(pca_coords)
 
     if args.dr_method_tsne and args.simspace_dim == 2:
-        tsne_config = dr_configs.get('tsne', {})
         tsne_run_config = {'cuml_params': {'n_components': 2, 'random_state': args.random_state}, 'sklearn_params': {
             'n_components': 2, 'perplexity': args.tsne_perplexity, 'random_state': args.random_state, 'n_jobs': -1}}
         out_paths = {'dr_cols': [f't-SNE-{i+1}' for i in range(2)], 'coembed_space': os.path.join(
@@ -410,8 +413,8 @@ def main():
 
     if args.dr_method_umap:
         X_data_dict = {
-            'original': X_original, 'scaled': X_scaled, 'pca_reduced_from_scaled': X_pca_reduced,
-            'target_original': X_target_original, 'target_scaled': X_target_scaled, 'target_pca_reduced_from_scaled': X_target_pca_reduced
+            'original': X_original, 'scaled': X_scaled, 'pca_reduced': X_pca_reduced,
+            'target_original': X_target_original, 'target_scaled': X_target_scaled, 'target_pca_reduced': X_target_pca_reduced
         }
         active_metrics = [m for m in ['euclidean', 'cosine', 'manhattan',
                                       'hamming', 'jaccard'] if getattr(args, f"umap_metric_to_run_{m}")]

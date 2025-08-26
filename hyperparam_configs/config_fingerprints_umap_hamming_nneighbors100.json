@@ -10,7 +10,7 @@
     "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
     "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
     "simspace_dims_to_test": [
-      10
+      2
     ],
     "k_for_knn_distance": [
       3,
@@ -63,7 +63,8 @@
       "Vabc",
       "MW"
     ],
-    "run_coembedding_for_pca_umap": true
+    "run_coembedding_for_pca_umap": true,
+    "fingerprint_pca_components": 50
   },
   "targets": [
     {

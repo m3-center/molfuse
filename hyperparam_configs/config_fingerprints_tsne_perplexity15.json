@@ -10,7 +10,7 @@
     "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
     "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
     "simspace_dims_to_test": [
-      10
+      2
     ],
     "k_for_knn_distance": [
       3,
@@ -64,8 +64,7 @@
       "MW"
     ],
     "run_coembedding_for_pca_umap": true,
-    "fingerprint_bit_selection_csv_path": "fingerprint_variance_analysis/fingerprint_bit_variance_sorted.csv",
-    "num_fingerprint_bits_to_use": 2048
+    "fingerprint_pca_components": 50
   },
   "targets": [
     {
@@ -81,11 +80,10 @@
     "fingerprints"
   ],
   "dimensionality_reduction_methods": {
-    "umap_jaccard": {
-      "short_name": "UMAP-Jaccard",
-      "metric": "jaccard",
-      "allow_coembedding": true,
-      "n_neighbors": 150
+    "tsne": {
+      "short_name": "t-SNE",
+      "perplexity": 15,
+      "allow_coembedding": true
     }
   }
 }

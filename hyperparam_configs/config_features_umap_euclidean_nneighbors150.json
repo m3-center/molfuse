@@ -10,7 +10,7 @@
     "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
     "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
     "simspace_dims_to_test": [
-      10
+      2
     ],
     "k_for_knn_distance": [
       3,
@@ -76,14 +76,14 @@
     }
   ],
   "representations": [
-    "fingerprints"
+    "features"
   ],
   "dimensionality_reduction_methods": {
     "umap_euclidean": {
       "short_name": "UMAP-Euclidean",
       "metric": "euclidean",
       "allow_coembedding": true,
-      "n_neighbors": 15
+      "n_neighbors": 150
     }
   }
 }
