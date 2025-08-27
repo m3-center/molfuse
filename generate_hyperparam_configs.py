@@ -32,8 +32,8 @@ HYPERPARAM_PLAN = {
         "tsne": {
             "sweep": True,
             "param_name": "perplexity", # Now sweeping perplexity for features
-            # "values": [15, 30, 50]
-            "values": [100, 150]
+            # "values": [15, 30, 50, 100, 150]
+            "values": [200, 250, 500]
         }
     },
     "fingerprints": {
@@ -56,8 +56,8 @@ HYPERPARAM_PLAN = {
         "tsne": {
             "sweep": True,
             "param_name": "perplexity", # Now sweeping perplexity for fingerprints
-            # "values": [15, 30, 50]
-            "values": [100, 150]
+            # "values": [15, 30, 50, 100, 150]
+            "values": [200, 250, 500]
         }
     }
 }
