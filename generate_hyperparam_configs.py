@@ -23,39 +23,41 @@ FIXED_DIMS = {
 
 HYPERPARAM_PLAN = {
     "features": {
-        "pca": {"sweep": False},
-        "umap_euclidean": {
-            "sweep": True,
-            "param_name": "n_neighbors",
-            "values": [30, 50, 100, 150]
-        },
+        # "pca": {"sweep": False},
+        # "umap_euclidean": {
+        #     "sweep": True,
+        #     "param_name": "n_neighbors",
+        #     "values": [30, 50, 100, 150]
+        # },
         "tsne": {
             "sweep": True,
             "param_name": "perplexity", # Now sweeping perplexity for features
-            "values": [15, 30, 50]
+            # "values": [15, 30, 50]
+            "values": [100, 150]
         }
     },
     "fingerprints": {
-        "pca": {"sweep": False},
-        "umap_euclidean": {
-            "sweep": True,
-            "param_name": "n_neighbors",
-            "values": [30, 50, 100, 150]
-        },
-        "umap_jaccard": {
-            "sweep": True,
-            "param_name": "n_neighbors",
-            "values": [30, 50, 100, 150]
-        },
-        "umap_hamming": {
-            "sweep": True,
-            "param_name": "n_neighbors",
-            "values": [30, 50, 100, 150]
-        },
+        # "pca": {"sweep": False},
+        # "umap_euclidean": {
+        #     "sweep": True,
+        #     "param_name": "n_neighbors",
+        #     "values": [30, 50, 100, 150]
+        # },
+        # "umap_jaccard": {
+        #     "sweep": True,
+        #     "param_name": "n_neighbors",
+        #     "values": [30, 50, 100, 150]
+        # },
+        # "umap_hamming": {
+        #     "sweep": True,
+        #     "param_name": "n_neighbors",
+        #     "values": [30, 50, 100, 150]
+        # },
         "tsne": {
             "sweep": True,
             "param_name": "perplexity", # Now sweeping perplexity for fingerprints
-            "values": [15, 30, 50]
+            # "values": [15, 30, 50]
+            "values": [100, 150]
         }
     }
 }
