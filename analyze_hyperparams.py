@@ -195,41 +195,32 @@ def main_report_generation():
         if df_exp.empty: continue
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
         
+        # --- START OF DEFINITIVE FIX ---
         if hyperparam_name != 'N/A':
             latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
             
+            # Group by the hyperparameter and calculate stats
+            summary = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs).sort_values(by='Hyperparameter_Value')
+            summary.columns = ['_'.join(col).strip() for col in summary.columns.values]
+            summary.reset_index(inplace=True)
+
             for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
                 plt.figure(figsize=(8, 6))
-                summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(agg_funcs).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
-                
-                # --- START OF DEFINITIVE FIX ---
-                # This correctly and robustly flattens the column names
-                summary.columns = [
-                    f"{col[0]}_{col[1].__name__}" if isinstance(col[1], type(lambda:0)) else
-                    f"{col[0]}_{col[1]}" if isinstance(col, tuple) and col[1] != '' else
-                    col[0]
-                    for col in summary.columns
-                ]
                 
                 median_col_name = f'{metric_col}_median'
-                p05_col_name = f'{metric_col}_<lambda>' # Note: Pandas might name it <lambda> or <lambda_0>
-                p95_col_name = f'{metric_col}_<lambda>'
-
-                # Check for different lambda naming conventions
+                p05_col_name = f'{metric_col}_<lambda_0>'
+                p95_col_name = f'{metric_col}_<lambda_1>'
+                
+                # Check for alternate pandas lambda naming conventions
                 if p05_col_name not in summary.columns: p05_col_name = f'{metric_col}_p05'
                 if p95_col_name not in summary.columns: p95_col_name = f'{metric_col}_p95'
 
                 if not all(c in summary.columns for c in [median_col_name, p05_col_name, p95_col_name]):
-                    # Fallback for even older pandas versions
-                    p05_col_name = f'{metric_col}_<lambda_0>'
-                    p95_col_name = f'{metric_col}_<lambda_1>'
-                    if not all(c in summary.columns for c in [median_col_name, p05_col_name, p95_col_name]):
-                        logging.error(f"Could not find required stat columns for plotting {metric_col}. Columns available: {summary.columns}. Skipping plot.")
-                        plt.close(); continue
-
+                    logging.error(f"Could not find required stat columns for plotting {metric_col}. Columns: {summary.columns}. Skipping.")
+                    plt.close(); continue
+                
                 plt.plot(summary['Hyperparameter_Value'], summary[median_col_name], marker='o', linestyle='-')
                 plt.fill_between(summary['Hyperparameter_Value'], summary[p05_col_name], summary[p95_col_name], alpha=0.2, label="90% CI")
-                # --- END OF FIX ---
                 
                 title = f'Median {metric_col} vs. {hyperparam_name} for {method} ({strategy})'
                 plt.xlabel(hyperparam_name); plt.ylabel(f"Median {metric_col}")
@@ -240,18 +231,26 @@ def main_report_generation():
                 fig_path = os.path.join(report_figures_abs_dir, fig_filename)
                 plt.savefig(fig_path); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
-        
-        # (The rest of the script is now correct)
-        summary_table_agg = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs).reset_index()
-        summary_table_agg.columns = [f"{col[0]}_{col[1].__name__}" if isinstance(col[1], type(lambda:0)) else f"{col[0]}_{col[1]}" if isinstance(col, tuple) and col[1] != '' else col[0] for col in summary_table_agg.columns]
-        summary_table_agg.rename(columns={'Hyperparameter_Value': hyperparam_name}, inplace=True)
-        add_dataframe_as_latex_table_standalone(latex_content, summary_table_agg, f"Performance metrics for {method} ({strategy}).", clean_for_label(f"table_{method}_{strategy}"))
-
-        roc_median_col = 'ROC_AUC_median'
-        if roc_median_col in summary_table_agg.columns:
-            best_row = summary_table_agg.loc[summary_table_agg[roc_median_col].idxmax()]
-            all_best_configs_by_roc.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row[hyperparam_name]})
             
+            summary.rename(columns={'Hyperparameter_Value': hyperparam_name}, inplace=True)
+            add_dataframe_as_latex_table_standalone(latex_content, summary, f"Performance metrics for {method} ({strategy}).", clean_for_label(f"table_{method}_{strategy}"))
+            
+            if 'ROC_AUC_median' in summary.columns:
+                best_row = summary.loc[summary['ROC_AUC_median'].idxmax()]
+                all_best_configs_by_roc.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row[hyperparam_name]})
+        
+        else: # Handle non-swept methods like PCA
+            summary_table = df_exp[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs).transpose()
+            summary_table.columns = [func.__name__ if hasattr(func, '__name__') else str(func) for func in agg_funcs]
+            summary_table.reset_index(inplace=True)
+            summary_table.rename(columns={'index': 'Metric'}, inplace=True)
+            add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", clean_for_label(f"table_{method}_{strategy}"))
+            
+            if not summary_table.empty:
+                 # Find the ROC_AUC row to get its median value for the final summary
+                roc_auc_median_val = summary_table[summary_table['Metric'] == 'ROC_AUC']['median'].iloc[0]
+                all_best_configs_by_roc.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': 'N/A', 'Optimal_Value': 'N/A'})
+                
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method and strategy, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
 
