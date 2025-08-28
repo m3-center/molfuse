@@ -133,15 +133,12 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         metrics_pattern = os.path.join(rep_dir_path, target_id_name, "results", repr_type, "dim_*", "*", "*_ranking_metrics.csv")
         for metrics_file_path in glob.glob(metrics_pattern):
             try:
-                # --- START OF FIX: Robustly determine the strategy from the file path ---
                 strategy_dir_name = os.path.basename(os.path.dirname(metrics_file_path))
-                embedding_strategy = "Projection" # Default assumption
+                embedding_strategy = "Projection"
                 if "tsne" in dr_method_key:
                     embedding_strategy = "Co-embedding (Native)"
                 elif strategy_dir_name.endswith('_Coembed'):
                     embedding_strategy = "Co-embedding"
-                # --- END OF FIX ---
-                
                 df_m = pd.read_csv(metrics_file_path)
                 if df_m.empty: continue
                 metric_row = {'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
@@ -176,10 +173,27 @@ def main_report_generation():
     df_agg['Method'] = df_agg['DR_Method'] + ' (' + df_agg['Representation'] + ')'
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_hyperparam_metrics_aggregated.csv"), index=False)
     
+    # --- Pre-calculate consistent Y-axis limits for sweep plots ---
+    y_limits = {}
+    for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+        if metric in df_agg:
+            # Calculate limits based on 5th and 95th percentiles of the raw data
+            p05 = df_agg[metric].quantile(0.05)
+            p95 = df_agg[metric].quantile(0.95)
+            range = p95 - p05
+            if "AUC" in metric:
+                y_limits[metric] = (0.0, 1.0)
+            else: # For EF, give some padding
+                y_limits[metric] = (max(0.0, p05 - range * 0.2), p95 + range * 0.2)
+
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
-    all_best_configs = []
+    all_best_configs_by_roc = []
     unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
+    
+    p05 = lambda x: x.quantile(0.05)
+    p95 = lambda x: x.quantile(0.95)
+    agg_funcs = ['median', p05, p95]
 
     for method, strategy, hyperparam_name in unique_experiments:
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
@@ -188,39 +202,43 @@ def main_report_generation():
         
         if hyperparam_name != 'N/A':
             latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
-            for metric_col in ['ROC_AUC', 'EF_1Perc']:
+            
+            # --- Generate Plots with Median/CI and consistent axes ---
+            for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
                 plt.figure(figsize=(8, 6))
-                summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(['mean', 'std']).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
-                plt.plot(summary['Hyperparameter_Value'], summary['mean'], marker='o', linestyle='-')
-                plt.fill_between(summary['Hyperparameter_Value'], summary['mean'] - summary['std'], summary['mean'] + summary['std'], alpha=0.2, label=f"$\\pm$1 SD")
+                summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(agg_funcs).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
+                summary.columns = ['_'.join(col).strip() if col[1]!='' else col[0] for col in summary.columns]
+
+                plt.plot(summary['Hyperparameter_Value'], summary['median'], marker='o', linestyle='-')
+                plt.fill_between(summary['Hyperparameter_Value'], summary['p05'], summary['p95'], alpha=0.2, label="90% CI")
+                
                 title = f'{metric_col} vs. {hyperparam_name} for {method} ({strategy})'
-                plt.xlabel(hyperparam_name); plt.ylabel(f"Mean {metric_col}")
+                plt.xlabel(hyperparam_name); plt.ylabel(f"Median {metric_col}")
                 plt.title(title); plt.grid(True, linestyle=':'); plt.legend(); plt.tight_layout()
+                if metric_col in y_limits: plt.ylim(y_limits[metric_col])
+
                 fig_filename = f"fig_{clean_for_label(method)}_{clean_for_label(strategy)}_{hyperparam_name}_{metric_col}.png"
                 fig_path = os.path.join(report_figures_abs_dir, fig_filename)
                 plt.savefig(fig_path); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
         
-        summary_table = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
-        summary_table.columns = [col[0] if col[1] == '' else '_'.join(col) for col in summary_table.columns]
-        summary_table.rename(columns={'Hyperparameter_Value': hyperparam_name, 'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
+        summary_table = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs).reset_index()
+        summary_table.columns = ['_'.join(col).strip() if col[1]!='' else col[0] for col in summary_table.columns]
+        summary_table.rename(columns={'Hyperparameter_Value': hyperparam_name}, inplace=True)
         add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", clean_for_label(f"table_{method}_{strategy}"))
 
-        if 'ROC_AUC' in summary_table.columns:
-            best_row = summary_table.loc[summary_table['ROC_AUC'].idxmax()]
-            all_best_configs.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row[hyperparam_name]})
+        if 'ROC_AUC_median' in summary_table.columns:
+            best_row = summary_table.loc[summary_table['ROC_AUC_median'].idxmax()]
+            all_best_configs_by_roc.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row[hyperparam_name]})
 
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method and strategy, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
 
-    if all_best_configs:
-        best_configs_df = pd.DataFrame(all_best_configs)
+    if all_best_configs_by_roc:
+        best_configs_df = pd.DataFrame(all_best_configs_by_roc)
         performance_data_at_best_params = pd.merge(df_agg, best_configs_df, on=['Method', 'Embedding_Strategy', 'Hyperparameter'])
         performance_data_at_best_params = performance_data_at_best_params[performance_data_at_best_params['Hyperparameter_Value'] == performance_data_at_best_params['Optimal_Value']]
 
-        p05 = lambda x: x.quantile(0.05)
-        p95 = lambda x: x.quantile(0.95)
-        agg_funcs = ['median', p05, p95]
         final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs)
         final_summary_multi_level.columns = ['_'.join(col).strip() for col in final_summary_multi_level.columns.values]
         final_summary = final_summary_multi_level.reset_index()
@@ -242,18 +260,18 @@ def main_report_generation():
                 lower_err = row[median_col] - row[p05_col]
                 upper_err = row[p95_col] - row[median_col]
                 error_map[key] = (lower_err, upper_err)
-
-            # Iterate through the bars to apply the correct error bars
+            
+            # This is complex but robustly finds the bars and their corresponding data
             for bar in ax.patches:
-                # Find which group this bar belongs to
+                # Find the group (hue) for this bar
                 hue_level = ax.get_legend_handles_labels()[1][bar.get_label()]
-                # Find the y-tick label (the Method)
-                method_name = ax.get_yticklabels()[int(round(bar.get_y()))].get_text()
+                # Find the y-tick label (the Method) for the bar's y position
+                method_name = ax.get_yticklabels()[int(round(bar.get_y() + bar.get_height() / (2*len(ax.containers))))].get_text()
                 
                 key = (method_name, hue_level)
                 if key in error_map:
                     err = error_map[key]
-                    x_pos = bar.get_width()
+                    x_pos = bar.get_width() # The median value is the width of the bar
                     y_pos = bar.get_y() + bar.get_height() / 2
                     ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=5)
 
@@ -262,11 +280,9 @@ def main_report_generation():
             if "AUC" in metric: plt.xlim(0, max(1.0, plot_data[median_col].max() * 1.1))
             if "EF" in metric: 
                 plt.xscale('log')
-                # Add a reasonable limit if max is very high
-                if plot_data[median_col].max() > 100: plt.xlim(right=100)
+                if plot_data[median_col].max() > 200: plt.xlim(right=200) # Prevent extreme axes
 
             plt.grid(True, axis='x', linestyle='--'); plt.legend(title='Embedding Strategy'); plt.tight_layout()
-
             fig_filename = f"fig_peak_performance_{metric}_median_split.png"
             fig_path = os.path.join(report_figures_abs_dir, fig_filename)
             plt.savefig(fig_path); plt.close()
@@ -274,10 +290,23 @@ def main_report_generation():
             caption = f"Comparison of the best median {metric}. Error bars are the 90% CI (5th-95th percentile)."
             add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), caption, f"fig_peak_summary_{metric}_split")
             
-            table_data = plot_data[['Method', 'Embedding_Strategy', median_col, p05_col, p95_col]]
-            add_dataframe_as_latex_table_standalone(latex_content, table_data, f"Optimal performance ranked by median {metric}.", f"table_summary_{metric}_split")
+            # --- Modified to find best config based on the CURRENT metric ---
+            best_configs_for_this_metric = []
+            for method, strategy in plot_data[['Method', 'Embedding_Strategy']].values:
+                exp_data = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)]
+                best_param_row = exp_data.groupby('Hyperparameter_Value')[metric].agg('median').idxmax()
+                perf_at_best = exp_data[exp_data['Hyperparameter_Value'] == best_param_row]
+                best_configs_for_this_metric.append({
+                    'Method': method, 'Embedding_Strategy': strategy, 'Optimal_Value': best_param_row,
+                    'ROC_AUC_median': perf_at_best['ROC_AUC'].median(),
+                    'PR_AUC_median': perf_at_best['PR_AUC'].median(),
+                    'EF_1Perc_median': perf_at_best['EF_1Perc'].median()
+                })
+            table_data = pd.DataFrame(best_configs_for_this_metric).sort_values(by=f'{metric}_median', ascending=False)
+            add_dataframe_as_latex_table_standalone(latex_content, table_data, f"Optimal hyperparameters and performance profile, ranked by median {metric}.", f"table_summary_{metric}_split")
 
     latex_content.append(LATEX_DOCUMENT_END)
+    # Final LaTeX compilation logic
     report_tex_filename = "hyperparameter_analysis_report.tex"
     report_tex_path = os.path.join(report_output_abs_dir, report_tex_filename)
     with open(report_tex_path, "w", encoding='utf-8') as f: f.write("\n".join(latex_content))
