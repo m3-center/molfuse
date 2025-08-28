@@ -174,32 +174,46 @@ def main_report_generation():
     df_agg = collect_metrics_from_replicates(replicate_dirs)
     if df_agg.empty: logging.error("Aggregated metrics DataFrame is empty."); return
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_hyperparam_metrics_aggregated.csv"), index=False)
+    df_agg['Method'] = df_agg['DR_Method'] + ' (' + df_agg['Representation'] + ')'
     
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
     all_best_configs = []
     # --- MODIFIED: Group by strategy as well ---
-    unique_experiments = df_agg[['Representation', 'DR_Method', 'Embedding_Strategy']].drop_duplicates().to_records(index=False)
+    unique_experiments = df_agg[['Method', 'Embedding_Strategy']].drop_duplicates().to_records(index=False)
 
-    for repr_type, dr_method, strategy in unique_experiments:
-        df_exp = df_agg[(df_agg['Representation'] == repr_type) & (df_agg['DR_Method'] == dr_method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
+    for method, strategy in unique_experiments:
+        df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
         if df_exp.empty: continue
         hyperparam_name = df_exp['Hyperparameter_Name'].iloc[0]
         
-        latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {dr_method} ({repr_type}) - Strategy: {strategy}')}")
+        latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
         
-        # (The detailed analysis section for each sweep is largely unchanged, but now operates on a strategy-specific dataframe)
-        # ...
-        
-        # Find best config FOR THIS STRATEGY
+        # (The detailed analysis section for each sweep is largely unchanged)
+        if hyperparam_name != 'N/A':
+            latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
+            for metric_col in ['ROC_AUC', 'EF_1Perc']:
+                plt.figure(figsize=(8, 6))
+                summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(['mean', 'std']).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
+                plt.plot(summary['Hyperparameter_Value'], summary['mean'], marker='o', linestyle='-')
+                plt.fill_between(summary['Hyperparameter_Value'], summary['mean'] - summary['std'], summary['mean'] + summary['std'], alpha=0.2, label=f"$\\pm$1 SD")
+                title = f'{metric_col} vs. {hyperparam_name} for {method} ({strategy})'
+                plt.xlabel(hyperparam_name); plt.ylabel(f"Mean {metric_col}")
+                plt.title(title); plt.grid(True, linestyle=':'); plt.legend(); plt.tight_layout()
+                fig_filename = f"fig_{clean_for_label(method)}_{clean_for_label(strategy)}_{hyperparam_name}_{metric_col}.png"
+                fig_path = os.path.join(report_figures_abs_dir, fig_filename)
+                plt.savefig(fig_path); plt.close()
+                add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
+
         summary_table = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
         summary_table.columns = ['_'.join(col).strip() for col in summary_table.columns.values]
         summary_table.rename(columns={'Hyperparameter_Value_': hyperparam_name, 'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
+        add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", clean_for_label(f"table_{method}_{strategy}"))
 
         if 'ROC_AUC' in summary_table.columns:
-            best_row = summary_table.loc[summary_table['ROC_AUC'].idxmax()]
+            best_row = summary_table.loc[summary_table['EF_1Perc'].idxmax()]
             best_config_details = {
-                'Method': f"{dr_method} ({repr_type})",
+                'Method': method,
                 'Embedding_Strategy': strategy,
                 'Hyperparameter': hyperparam_name,
                 'Optimal_Value': best_row[hyperparam_name],
