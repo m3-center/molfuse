@@ -47,10 +47,12 @@ LATEX_DOCUMENT_PREAMBLE = r"""
 \title{UMMBAS Molecular Similarity Hyperparameter Evaluation Report\\ \large \textit{Report Generated: \texttt{<<RUN_ID_PLACEHOLDER>>}}}
 \author{UMMBAS Project Team} \date{\today}
 \begin{document} \maketitle \begin{abstract}
-This report presents a comprehensive analysis of hyperparameter tuning experiments for the UMMBAS similarity space generation pipeline. The study focuses on systematically evaluating the impact of key hyperparameters for PCA, UMAP (\texttt{n\_neighbors}), and t-SNE (\texttt{perplexity}) across different molecular representations (physicochemical features and ECFP4 fingerprints). Using a leave-one-target-out methodology, we assess virtual screening performance based on ROC-AUC, PR-AUC, and Enrichment Factors. The findings are used to identify optimal settings for these algorithms within the context of MF-guided chemical space exploration.
+This report presents a comprehensive analysis of hyperparameter tuning experiments for the UMMBAS similarity space generation pipeline. The study focuses on systematically evaluating the impact of key hyperparameters for PCA, UMAP (\texttt{n\_neighbors}), and t-SNE (\texttt{perplexity}) across different molecular representations (physicochemical features and ECFP4 fingerprints). Using a leave-one-target-out methodology, we assess virtual screening performance based on ROC-AUC, PR-AUC, and Enrichment Factors. The findings are synthesized to identify the optimal algorithm and settings by considering performance across all key metrics.
 \end{abstract} \clearpage \tableofcontents \clearpage \listoffigures \clearpage \listoftables \clearpage
 """
 LATEX_DOCUMENT_END = r"\end{document}"
+
+# ... (Helper functions like escape_latex_text_content, etc. are unchanged) ...
 
 
 def escape_latex_text_content(text_input):
@@ -100,7 +102,6 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
                                f"  \\label{{tab:{clean_label}}}"])
     df_latex = dataframe.copy()
     for col in df_latex.select_dtypes(include=np.number).columns:
-        # Special handling for integer-like columns (hyperparameters)
         if df_latex[col].dropna().apply(lambda x: x.is_integer()).all():
             df_latex[col] = df_latex[col].apply(
                 lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
@@ -116,7 +117,7 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
     latex_content_list.extend([r"\end{table}", "\n"])
 
 
-# --- Logging and Data Collection ---
+# --- Logging and Data Collection (Unchanged) ---
 agg_log_file_name = f"hyperparam_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s',
                     handlers=[logging.FileHandler(agg_log_file_name, mode='w'), logging.StreamHandler()])
@@ -124,9 +125,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - 
 
 def find_all_replicate_runs(base_experiment_dir):
     pattern = os.path.join(base_experiment_dir, "run_seed*_repr*_*_*")
-    replicate_dirs = [d for d in glob.glob(pattern) if os.path.isdir(d)]
-    logging.info(f"Found {len(replicate_dirs)} replicate run directories.")
-    return sorted(replicate_dirs)
+    return sorted([d for d in glob.glob(pattern) if os.path.isdir(d)])
 
 
 def collect_metrics_from_replicates(replicate_run_dirs):
@@ -140,8 +139,9 @@ def collect_metrics_from_replicates(replicate_run_dirs):
             with open(run_config_path, 'r') as f:
                 run_config = json.load(f)
         except json.JSONDecodeError as e:
-            logging.error(f"  CORRUPTED JSON in {run_config_path}. Skipping this replicate. Error: {e}")
-            continue # Skip to the next replicate directory    
+            logging.error(
+                f"  CORRUPTED JSON in {run_config_path}. Skipping. Error: {e}")
+            continue
         repr_type = run_config['representations'][0]
         dr_method_key = list(
             run_config['dimensionality_reduction_methods'].keys())[0]
@@ -164,12 +164,8 @@ def collect_metrics_from_replicates(replicate_run_dirs):
                     continue
                 metric_row = {'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
                               'Hyperparameter_Name': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
-                
-                column_map = {
-                    'roc_auc': 'ROC_AUC',
-                    'pr_auc': 'PR_AUC',
-                    'ef_1%': 'EF_1Perc' # This ensures the final column is named correctly
-                }
+                column_map = {'roc_auc': 'ROC_AUC',
+                              'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
                 for csv_col, df_col in column_map.items():
                     metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m else np.nan
                 all_metrics_data.append(metric_row)
@@ -180,8 +176,6 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         logging.error("No metric data was collected.")
         return pd.DataFrame()
     return pd.DataFrame(all_metrics_data)
-
-# --- Main Report Generation ---
 
 
 def main_report_generation():
@@ -209,37 +203,26 @@ def main_report_generation():
     if df_agg.empty:
         logging.error("Aggregated metrics DataFrame is empty. Aborting.")
         return
-    df_agg.to_csv(os.path.join(report_output_abs_dir,
-                  "DEBUG_hyperparam_metrics_aggregated.csv"), index=False)
 
+    # --- DETAILED ANALYSIS SECTION (Unchanged) ---
     latex_content.append(get_section_header_latex_standalone(
         1, 'Detailed Hyperparameter Sweep Analysis'))
-
-    # Store the best config from each sweep for the final summary
     all_best_configs = []
-
-    # Find all unique experiments (swept and non-swept)
     unique_experiments = df_agg[[
         'Representation', 'DR_Method']].drop_duplicates().to_records(index=False)
-
     for repr_type, dr_method in unique_experiments:
         df_exp = df_agg[(df_agg['Representation'] == repr_type)
                         & (df_agg['DR_Method'] == dr_method)].copy()
         hyperparam_name = df_exp['Hyperparameter_Name'].iloc[0]
-
         latex_content.append(
             f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {dr_method} ({repr_type})')}")
-
         if hyperparam_name != 'N/A':
             latex_content.append(get_section_header_latex_standalone(
                 3, f'Sweeping: {hyperparam_name}'))
-
-            # --- Generate Plots ---
             for metric_col in ['ROC_AUC', 'EF_1Perc']:
                 plt.figure(figsize=(8, 6))
                 summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(
-                    ['mean', 'std']).reset_index().fillna(0)
-                summary = summary.sort_values(by='Hyperparameter_Value')
+                    ['mean', 'std']).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
                 plt.plot(summary['Hyperparameter_Value'],
                          summary['mean'], marker='o', linestyle='-')
                 plt.fill_between(summary['Hyperparameter_Value'], summary['mean'] - summary['std'],
@@ -257,8 +240,6 @@ def main_report_generation():
                 plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join(
                     "figures", fig_filename), title, clean_for_label(fig_filename))
-
-        # --- Generate Summary Table & Find Best Config ---
         summary_table = df_exp.groupby('Hyperparameter_Value')[
             ['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean', 'std']).reset_index()
         summary_table.columns = ['_'.join(col).strip()
@@ -268,56 +249,55 @@ def main_report_generation():
         caption = f"Performance metrics for {dr_method} ({repr_type})."
         add_dataframe_as_latex_table_standalone(
             latex_content, summary_table, caption, clean_for_label(f"table_{repr_type}_{dr_method}"))
-
         if 'ROC_AUC_mean' in summary_table.columns:
             best_row = summary_table.loc[summary_table['ROC_AUC_mean'].idxmax(
             )]
-            best_config_details = {
-                'Method': f"{dr_method} ({repr_type})",
-                'Hyperparameter': hyperparam_name,
-                'Optimal_Value': best_row[hyperparam_name],
-                'ROC_AUC': best_row['ROC_AUC_mean'],
-                'PR_AUC': best_row['PR_AUC_mean'],
-                'EF_1Perc': best_row['EF_1Perc_mean']
-            }
-            all_best_configs.append(best_config_details)
+            all_best_configs.append({'Method': f"{dr_method} ({repr_type})", 'Hyperparameter': hyperparam_name,
+                                     'Optimal_Value': best_row[hyperparam_name], 'ROC_AUC': best_row['ROC_AUC_mean'],
+                                     'PR_AUC': best_row['PR_AUC_mean'], 'EF_1Perc': best_row['EF_1Perc_mean']})
 
-    # --- NEW: Add Overall Performance Summary Section ---
+    # --- NEW: FINAL COMPARATIVE ANALYSIS SECTION ---
     latex_content.append(
-        f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
+        f"\\clearpage\n{get_section_header_latex_standalone(1, 'Final Comparative Analysis and Synthesis')}")
     latex_content.append(
-        "This section synthesizes the results from the hyperparameter sweep to compare the peak performance of each method.")
+        "This section synthesizes the results to compare the peak performance of each method and identify the overall best-performing pipeline.")
 
     if all_best_configs:
-        df_best_summary = pd.DataFrame(all_best_configs).sort_values(
-            by='ROC_AUC', ascending=False)
+        df_summary = pd.DataFrame(all_best_configs)
 
-        # --- New Bar Chart for Peak Performance ---
-        plt.figure(figsize=(12, 7))
-        sns.barplot(x='ROC_AUC', y='Method',
-                    data=df_best_summary, palette='viridis')
-        plt.xlabel('Best Mean ROC-AUC Achieved')
-        plt.ylabel('Method (Representation)')
-        plt.title('Peak Performance of Each Method After Hyperparameter Tuning')
-        plt.xlim(0, 1.0)
-        plt.grid(True, axis='x', linestyle='--')
-        plt.tight_layout()
-        fig_filename_summary = "fig_overall_peak_performance.png"
-        fig_path_summary = os.path.join(
-            report_figures_abs_dir, fig_filename_summary)
-        plt.savefig(fig_path_summary)
-        plt.close()
-        caption_summary = "Comparison of the best mean ROC-AUC achieved by each DR method and representation combination after tuning its respective key hyperparameter."
-        add_figure_to_latex_standalone(latex_content, os.path.join(
-            "figures", fig_filename_summary), caption_summary, "fig_peak_summary")
+        # 1. Add Rank-Based Scoring
+        for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+            df_summary[f'{metric}_Rank'] = df_summary[metric].rank(
+                ascending=False, method='min')
+        df_summary['Total_Rank_Score'] = df_summary[[
+            c for c in df_summary.columns if '_Rank' in c]].sum(axis=1)
+        df_summary.sort_values(by='Total_Rank_Score',
+                               ascending=True, inplace=True)
 
-        # --- Enhanced Summary Table ---
-        caption_table = "Summary of the optimal hyperparameter value for each method and the full performance profile achieved at that setting, ranked by ROC-AUC."
+        caption_table = "Overall Performance Summary. Each row shows the performance of a method at its ROC-AUC-optimal hyperparameter value. Methods are ranked by the 'Total Rank Score' (lower is better), which is the sum of their ranks across the three key metrics."
         add_dataframe_as_latex_table_standalone(
-            latex_content, df_best_summary, caption_table, "table_best_hyperparams_summary", font_size=r"\scriptsize")
+            latex_content, df_summary, caption_table, "table_final_summary", font_size=r"\scriptsize")
+
+        # 2. Add Pareto Front Plot for visual trade-off analysis
+        plt.figure(figsize=(10, 8))
+        sns.scatterplot(data=df_summary, x='ROC_AUC', y='EF_1Perc',
+                        hue='Method', s=150, style='Hyperparameter', legend='brief')
+        plt.xlabel('Overall Ranking Performance (Mean ROC-AUC)')
+        plt.ylabel('Early Enrichment Performance (Mean EF@1%)')
+        plt.title('Performance Trade-off: ROC-AUC vs. EF@1%')
+        plt.grid(True, linestyle='--')
+        plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+        plt.tight_layout()
+        fig_filename_pareto = "fig_pareto_front_summary.png"
+        fig_path_pareto = os.path.join(
+            report_figures_abs_dir, fig_filename_pareto)
+        plt.savefig(fig_path_pareto)
+        plt.close()
+        caption_pareto = "Trade-off analysis between overall ranking performance (ROC-AUC) and early enrichment (EF@1%). Methods in the upper-right are generally superior, representing the Pareto front of optimal solutions."
+        add_figure_to_latex_standalone(latex_content, os.path.join(
+            "figures", fig_filename_pareto), caption_pareto, "fig_pareto_summary", figure_width="\\textwidth")
     else:
-        latex_content.append(
-            "Could not determine best hyperparameter summary.")
+        latex_content.append("Could not generate final summary.")
     # --- END NEW ---
 
     # --- Final Report Generation ---
@@ -328,7 +308,6 @@ def main_report_generation():
         f.write("\n".join(latex_content))
     logging.info(
         f"Hyperparameter analysis report structure generated: {report_tex_path}")
-
     try:
         for i in range(2):
             subprocess.run(["pdflatex", "-interaction=nonstopmode", "-output-directory",
@@ -338,8 +317,7 @@ def main_report_generation():
         if os.path.exists(pdf_path):
             logging.info(f"PDF report successfully generated: {pdf_path}")
         else:
-            logging.warning(
-                f"PDF report not found after compilation attempts.")
+            logging.warning(f"PDF report not found.")
     except Exception as e:
         logging.error(f"LaTeX compilation error: {e}", exc_info=True)
 
