@@ -24,17 +24,19 @@ FIXED_DIMS = {
 HYPERPARAM_PLAN = {
     "features": {
         # "pca": {"sweep": False},
-        # "umap_euclidean": {
-        #     "sweep": True,
-        #     "param_name": "n_neighbors",
-        #     "values": [30, 50, 100, 150]
-        # },
-        "tsne": {
+        "umap_euclidean": {
             "sweep": True,
-            "param_name": "perplexity", # Now sweeping perplexity for features
-            # "values": [15, 30, 50, 100, 150, 200, 250, 500]
-            "values": [750, 1000]
-        }
+            "param_name": "n_neighbors",
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250]
+        } 
+        # ,
+        # "tsne": {
+        #     "sweep": True,
+        #     "param_name": "perplexity", # Now sweeping perplexity for features
+        #     # "values": [15, 30, 50, 100, 150, 200, 250, 500]
+        #     "values": [750, 1000]
+        # }
     },
     "fingerprints": {
         # "pca": {"sweep": False},
