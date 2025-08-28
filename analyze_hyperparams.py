@@ -299,7 +299,7 @@ def main_report_generation():
         plt.xlabel('Best Mean EF 1% Achieved')
         plt.ylabel('Method (Representation)')
         plt.title('Peak Performance of Each Method After Hyperparameter Tuning')
-        plt.xlim(0, 50.0)
+        plt.xlim(0, 40.0)
         plt.grid(True, axis='x', linestyle='--')
         plt.tight_layout()
         fig_filename_summary = "fig_overall_peak_performance.png"
