@@ -179,24 +179,26 @@ def main_report_generation():
             grouped = df_agg.groupby(['Method', 'Embedding_Strategy', 'Hyperparameter_Value'])[metric]
             means = grouped.mean(); stds = grouped.std().fillna(0)
             min_val, max_val = (means - stds).min(), (means + stds).max()
-            padding = (max_val - min_val) * 0.1
+            padding = (max_val - min_val) * 0.1 if not np.isnan(max_val) else 0.1
             y_ranges[metric] = (min_val - padding, max_val + padding)
     
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
-    # --- START OF SIMPLIFIED LOGIC ---
-    # We will collect all replicate data at the optimal settings in this list
+    # --- START OF CORRECTED LOGIC ---
     optimal_replicate_dfs = []
     
     unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
+    logging.info(f"Found {len(unique_experiments)} unique experiments to analyze.")
 
     for method, strategy, hyperparam_name in unique_experiments:
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
         if df_exp.empty: continue
+        
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
         
         optimal_value = "N/A"
         if hyperparam_name != 'N/A':
+            # This section for detailed plots remains the same
             latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
             for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
                 plt.figure(figsize=(8, 6))
@@ -213,31 +215,35 @@ def main_report_generation():
                 plt.savefig(fig_path); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
             
-            # Find the optimal hyperparameter value based on mean ROC-AUC for this group
             mean_perf_table = df_exp.groupby('Hyperparameter_Value')['ROC_AUC'].mean().reset_index()
             optimal_value = mean_perf_table.loc[mean_perf_table['ROC_AUC'].idxmax()]['Hyperparameter_Value']
-        
+            logging.info(f"For '{method}' ({strategy}), optimal '{hyperparam_name}' is: {optimal_value}")
+
         # Select all replicate runs that used this optimal value
         if hyperparam_name != 'N/A':
             df_optimal_replicates = df_exp[df_exp['Hyperparameter_Value'] == optimal_value].copy()
         else: # For non-swept methods like PCA, all rows are "optimal"
             df_optimal_replicates = df_exp.copy()
+            logging.info(f"For non-swept method '{method}' ({strategy}), using all {len(df_optimal_replicates)} replicate rows.")
         
-        df_optimal_replicates['Optimal_Value'] = optimal_value
         optimal_replicate_dfs.append(df_optimal_replicates)
-    
+
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method and strategy, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
 
     if optimal_replicate_dfs:
         performance_data_at_best_params = pd.concat(optimal_replicate_dfs, ignore_index=True)
+        logging.info(f"Final summary will be generated from {len(performance_data_at_best_params)} total rows of optimal replicate data.")
 
         p05 = lambda x: x.quantile(0.05)
         p95 = lambda x: x.quantile(0.95)
-        final_summary = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy', 'Hyperparameter', 'Optimal_Value'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['median', p05, p95])
+        final_summary = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['median', p05, p95])
         final_summary.columns = ['_'.join(col).strip() for col in final_summary.columns.values]
         final_summary = final_summary.reset_index()
         
+        logging.info("Generated final summary statistics table:")
+        logging.info(final_summary.to_string())
+
         for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
             latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Peak Performance by Median {metric}')}")
             median_col, p05_col, p95_col = f'{metric}_median', f'{metric}_p05', f'{metric}_p95'
@@ -251,19 +257,26 @@ def main_report_generation():
             # A robust way to add error bars to grouped plots
             for i, method in enumerate(plot_data['Method'].unique()):
                 method_data = plot_data[plot_data['Method'] == method]
-                for j, strategy in enumerate(method_data['Embedding_Strategy']):
+                # Find the y-position of the center of the group of bars for this method
+                group_center_y = [p.get_y() + p.get_height() / 2.0 for p in ax.patches if ax.get_yticklabels()[int(round(p.get_y()))].get_text() == method]
+                if not group_center_y: continue
+                
+                for j, strategy in enumerate(ax.get_legend_handles_labels()[1]):
                     row = method_data[method_data['Embedding_Strategy'] == strategy]
                     if row.empty: continue
-                    median_val = row[median_col].iloc[0]
-                    lower_bound = row[p05_col].iloc[0]
-                    upper_bound = row[p95_col].iloc[0]
-                    error = [[median_val - lower_bound], [upper_bound - median_val]]
-                    # Find the correct bar to attach the error bar to
+                    
+                    # Find the specific bar for this method and strategy
                     for bar in ax.patches:
-                        if abs(bar.get_width() - median_val) < 1e-6 and ax.get_yticklabels()[int(round(bar.get_y()))].get_text() == method:
-                            bar_y_pos = bar.get_y() + bar.get_height() / 2.0
-                            plt.errorbar(x=[median_val], y=[bar_y_pos], xerr=error, fmt='none', c='black', capsize=4)
-                            break
+                        bar_method = ax.get_yticklabels()[int(round(bar.get_y()))].get_text()
+                        if bar_method == method:
+                            median_val = row[median_col].iloc[0]
+                            if abs(bar.get_width() - median_val) < 1e-6:
+                                y_pos = bar.get_y() + bar.get_height() / 2.0
+                                lower_bound = row[p05_col].iloc[0]
+                                upper_bound = row[p95_col].iloc[0]
+                                error = [[median_val - lower_bound], [upper_bound - median_val]]
+                                ax.errorbar(x=[median_val], y=[y_pos], xerr=error, fmt='none', c='black', capsize=4)
+                                break
             
             plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
             plt.title(f'Peak Performance After Tuning (by Median {metric})')
@@ -278,9 +291,13 @@ def main_report_generation():
             caption = f"Comparison of the best median {metric}. Error bars are the 90% CI (5th-95th percentile)."
             add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), caption, f"fig_peak_summary_{metric}_split")
             
-            table_data = plot_data[['Method', 'Embedding_Strategy', 'Optimal_Value', median_col, p05_col, p95_col]]
-            add_dataframe_as_latex_table_standalone(latex_content, table_data, f"Optimal performance ranked by median {metric}.", f"table_summary_{metric}_split")
+            table_data_final = final_summary[['Method', 'Embedding_Strategy', median_col, p05_col, p95_col]].sort_values(by=median_col, ascending=False)
+            add_dataframe_as_latex_table_standalone(latex_content, table_data_final, f"Optimal performance ranked by median {metric}.", f"table_summary_{metric}_split")
+    else:
+        logging.warning("The list of optimal configurations was empty. No final summary will be generated.")
 
+
+    # --- Final Report Generation ---
     latex_content.append(LATEX_DOCUMENT_END)
     report_tex_filename = "hyperparameter_analysis_report.tex"
     report_tex_path = os.path.join(report_output_abs_dir, report_tex_filename)
