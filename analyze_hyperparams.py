@@ -201,13 +201,21 @@ def main_report_generation():
                 plt.figure(figsize=(8, 6))
                 summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(agg_funcs).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
                 
-                # --- START OF FIX: Robust column name flattening ---
-                # This handles both the single 'Hyperparameter_Value' column and the MultiIndex columns
-                summary.columns = [col[0] if isinstance(col, tuple) and col[1] == '' else '_'.join(map(str, col)) if isinstance(col, tuple) else col for col in summary.columns]
-                # --- END OF FIX ---
+                summary.columns = ['_'.join(map(str, col)).strip() if '' not in col else col[0] for col in summary.columns.values]
 
-                plt.plot(summary['Hyperparameter_Value'], summary['median'], marker='o', linestyle='-')
-                plt.fill_between(summary['Hyperparameter_Value'], summary['p05'], summary['p95'], alpha=0.2, label="90% CI")
+                # Define the specific column names we will now use
+                median_col_name = f'{metric_col}_median'
+                p05_col_name = f'{metric_col}_<lambda_0>' # Pandas names lambda functions this way
+                p95_col_name = f'{metric_col}_<lambda_1>'
+                
+                # Ensure the columns exist before plotting
+                if not all(c in summary.columns for c in [median_col_name, p05_col_name, p95_col_name]):
+                    logging.error(f"Could not find required stat columns for plotting {metric_col}. Skipping plot.")
+                    plt.close()
+                    continue
+                
+                plt.plot(summary['Hyperparameter_Value'], summary[median_col_name], marker='o', linestyle='-')
+                plt.fill_between(summary['Hyperparameter_Value'], summary[p05_col_name], summary[p95_col_name], alpha=0.2, label="90% CI")
                 
                 title = f'Median {metric_col} vs. {hyperparam_name} for {method} ({strategy})'
                 plt.xlabel(hyperparam_name); plt.ylabel(f"Median {metric_col}")
