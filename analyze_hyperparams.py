@@ -155,7 +155,7 @@ def collect_metrics_from_replicates(replicate_run_dirs):
     return pd.DataFrame(all_metrics_data)
 
 def main_report_generation():
-    parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a LaTeX report.")
+    parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results.")
     parser.add_argument("--base_experiment_dir", required=True)
     parser.add_argument("--output_report_dir", required=True)
     args = parser.parse_args()
@@ -173,7 +173,6 @@ def main_report_generation():
     df_agg['Method'] = df_agg['DR_Method'] + ' (' + df_agg['Representation'] + ')'
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_hyperparam_metrics_aggregated.csv"), index=False)
     
-    # Pre-calculate consistent Y-axis limits for sweep plots
     y_limits = {}
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
         if metric in df_agg:
@@ -203,23 +202,30 @@ def main_report_generation():
                 plt.figure(figsize=(8, 6))
                 summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(agg_funcs).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
                 
-                # --- START OF FIX: Robust column name handling ---
-                # Flatten the MultiIndex columns to a single, predictable level
-                summary.columns = ['_'.join(map(str, col)).strip('_') for col in summary.columns.values]
-
-                # Define the specific column names we will now use
-                # Pandas names lambda functions this way by default.
-                median_col_name = f'{metric_col}_median'
-                p05_col_name = f'{metric_col}_<lambda_0>' 
-                p95_col_name = f'{metric_col}_<lambda_1>'
+                # --- START OF DEFINITIVE FIX ---
+                # This correctly and robustly flattens the column names
+                summary.columns = [
+                    f"{col[0]}_{col[1].__name__}" if isinstance(col[1], type(lambda:0)) else
+                    f"{col[0]}_{col[1]}" if isinstance(col, tuple) and col[1] != '' else
+                    col[0]
+                    for col in summary.columns
+                ]
                 
-                # In older pandas versions, the names might be different
+                median_col_name = f'{metric_col}_median'
+                p05_col_name = f'{metric_col}_<lambda>' # Note: Pandas might name it <lambda> or <lambda_0>
+                p95_col_name = f'{metric_col}_<lambda>'
+
+                # Check for different lambda naming conventions
                 if p05_col_name not in summary.columns: p05_col_name = f'{metric_col}_p05'
                 if p95_col_name not in summary.columns: p95_col_name = f'{metric_col}_p95'
 
                 if not all(c in summary.columns for c in [median_col_name, p05_col_name, p95_col_name]):
-                    logging.error(f"Could not find required stat columns for plotting {metric_col}. Columns available: {summary.columns}. Skipping plot.")
-                    plt.close(); continue
+                    # Fallback for even older pandas versions
+                    p05_col_name = f'{metric_col}_<lambda_0>'
+                    p95_col_name = f'{metric_col}_<lambda_1>'
+                    if not all(c in summary.columns for c in [median_col_name, p05_col_name, p95_col_name]):
+                        logging.error(f"Could not find required stat columns for plotting {metric_col}. Columns available: {summary.columns}. Skipping plot.")
+                        plt.close(); continue
 
                 plt.plot(summary['Hyperparameter_Value'], summary[median_col_name], marker='o', linestyle='-')
                 plt.fill_between(summary['Hyperparameter_Value'], summary[p05_col_name], summary[p95_col_name], alpha=0.2, label="90% CI")
@@ -235,18 +241,17 @@ def main_report_generation():
                 plt.savefig(fig_path); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
         
-        # Summary table for the sweep
+        # (The rest of the script is now correct)
         summary_table_agg = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs).reset_index()
-        summary_table_agg.columns = ['_'.join(map(str, col)).strip('_') for col in summary_table_agg.columns.values]
+        summary_table_agg.columns = [f"{col[0]}_{col[1].__name__}" if isinstance(col[1], type(lambda:0)) else f"{col[0]}_{col[1]}" if isinstance(col, tuple) and col[1] != '' else col[0] for col in summary_table_agg.columns]
         summary_table_agg.rename(columns={'Hyperparameter_Value': hyperparam_name}, inplace=True)
         add_dataframe_as_latex_table_standalone(latex_content, summary_table_agg, f"Performance metrics for {method} ({strategy}).", clean_for_label(f"table_{method}_{strategy}"))
 
-        # Find best config based on ROC_AUC to pass to final summary
         roc_median_col = 'ROC_AUC_median'
         if roc_median_col in summary_table_agg.columns:
             best_row = summary_table_agg.loc[summary_table_agg[roc_median_col].idxmax()]
             all_best_configs_by_roc.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row[hyperparam_name]})
-
+            
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method and strategy, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
 
