@@ -164,9 +164,14 @@ def collect_metrics_from_replicates(replicate_run_dirs):
                     continue
                 metric_row = {'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
                               'Hyperparameter_Name': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
-                for col in ['roc_auc', 'pr_auc', 'ef_1%']:
-                    metric_row[col.upper()
-                               ] = df_m[col].iloc[0] if col in df_m else np.nan
+                
+                column_map = {
+                    'roc_auc': 'ROC_AUC',
+                    'pr_auc': 'PR_AUC',
+                    'ef_1%': 'EF_1Perc' # This ensures the final column is named correctly
+                }
+                for csv_col, df_col in column_map.items():
+                    metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m else np.nan
                 all_metrics_data.append(metric_row)
             except Exception as e:
                 logging.error(
