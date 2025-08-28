@@ -164,7 +164,6 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         logging.error("No metric data was collected."); return pd.DataFrame()
     return pd.DataFrame(all_metrics_data)
 
-
 def main_report_generation():
     # ... (initial setup and detailed sweep analysis are unchanged) ...
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a LaTeX report.")
@@ -209,39 +208,43 @@ def main_report_generation():
         if 'ROC_AUC_mean' in summary_table.columns:
             best_row_by_roc = summary_table.loc[summary_table['ROC_AUC_mean'].idxmax()]
             all_best_configs.append({'Method': f"{dr_method} ({repr_type})", 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row_by_roc[hyperparam_name], 'ROC_AUC': best_row_by_roc['ROC_AUC_mean'], 'PR_AUC': best_row_by_roc['PR_AUC_mean'], 'EF_1Perc': best_row_by_roc['EF_1Perc_mean']})
-    
+
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
 
     if all_best_configs:
         best_configs_df = pd.DataFrame(all_best_configs)
         df_agg['Method'] = df_agg['DR_Method'] + ' (' + df_agg['Representation'] + ')'
-        
-        # --- START OF FIX ---
         performance_data_at_best_params = pd.merge(
-            df_agg,
-            best_configs_df[['Method', 'Hyperparameter', 'Optimal_Value']],
-            # Use left_on and right_on to specify the different column names
+            df_agg, best_configs_df[['Method', 'Hyperparameter', 'Optimal_Value']],
             left_on=['Method', 'Hyperparameter_Name'],
             right_on=['Method', 'Hyperparameter'],
             how='inner'
         )
-        # --- END OF FIX ---
-
         performance_data_at_best_params = performance_data_at_best_params[
             performance_data_at_best_params['Hyperparameter_Value'] == performance_data_at_best_params['Optimal_Value']
         ]
 
+        # --- START OF FIX ---
+        # Define named aggregation functions
         p05 = lambda x: x.quantile(0.05)
         p95 = lambda x: x.quantile(0.95)
-        agg_funcs = ['median', p05, p95]
         
-        final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs)
+        # Use a dictionary to explicitly name the output columns
+        agg_funcs_dict = {
+            'median': 'median',
+            'p05': p05,
+            'p95': p95
+        }
+        
+        final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs_dict)
+        # --- END OF FIX ---
+        
         final_summary_multi_level.columns = ['_'.join(col).strip() for col in final_summary_multi_level.columns.values]
         final_summary = final_summary_multi_level.reset_index()
         
-        # ... (The rest of the script, including the plotting loop, is unchanged and will now work correctly)
         for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+            # ... (the rest of the script is unchanged and will now work correctly)
             latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Peak Performance by Median {metric}')}")
             median_col = f'{metric}_median'; p05_col = f'{metric}_p05'; p95_col = f'{metric}_p95'
             if not all(c in final_summary.columns for c in [median_col, p05_col, p95_col]):
@@ -262,7 +265,12 @@ def main_report_generation():
             y_positions_ordered = []
             for method in unique_methods:
                 y_positions_ordered.extend(sorted(y_pos_dict[method]))
-            ax.errorbar(x=plot_data[median_col], y=y_positions_ordered, xerr=asymmetric_error, fmt='none', c='black', capsize=5)
+            # Reorder error data to match the new bar positions from seaborn
+            plot_data_reordered = plot_data.set_index('Method').loc[unique_methods].reset_index()
+            lower_error_reordered = plot_data_reordered[median_col] - plot_data_reordered[p05_col]
+            upper_error_reordered = plot_data_reordered[p95_col] - plot_data_reordered[median_col]
+            asymmetric_error_reordered = [lower_error_reordered.values, upper_error_reordered.values]
+            ax.errorbar(x=plot_data_reordered[median_col], y=y_positions_ordered, xerr=asymmetric_error_reordered, fmt='none', c='black', capsize=5)
             plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
             plt.title(f'Peak Performance of Each Method After Tuning (by Median {metric})')
             if "AUC" in metric: plt.xlim(0, max(1.0, plot_data[median_col].max() * 1.1))
