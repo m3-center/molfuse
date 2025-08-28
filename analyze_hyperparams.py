@@ -245,9 +245,12 @@ def main_report_generation():
         logging.info(final_summary.to_string())
 
         for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+            logging.info(f"Generating final summary plot for {metric}.")
             latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Peak Performance by Median {metric}')}")
             median_col, p05_col, p95_col = f'{metric}_median', f'{metric}_p05', f'{metric}_p95'
-            if not all(c in final_summary.columns for c in [median_col, p05_col, p95_col]): continue
+            if not all(c in final_summary.columns for c in [median_col, p05_col, p95_col]): 
+                logging.info(f"Skipping plot for {metric} due to missing columns.")
+                continue
 
             plot_data = final_summary.sort_values(by=median_col, ascending=False)
             
@@ -259,11 +262,15 @@ def main_report_generation():
                 method_data = plot_data[plot_data['Method'] == method]
                 # Find the y-position of the center of the group of bars for this method
                 group_center_y = [p.get_y() + p.get_height() / 2.0 for p in ax.patches if ax.get_yticklabels()[int(round(p.get_y()))].get_text() == method]
-                if not group_center_y: continue
+                if not group_center_y: 
+                    logging.info(f"Could not find y-position for method '{method}'. Skipping error bars.")
+                    continue
                 
                 for j, strategy in enumerate(ax.get_legend_handles_labels()[1]):
                     row = method_data[method_data['Embedding_Strategy'] == strategy]
-                    if row.empty: continue
+                    if row.empty: 
+                        logging.info(f"No data for method '{method}' with strategy '{strategy}'. Skipping error bars.")
+                        continue
                     
                     # Find the specific bar for this method and strategy
                     for bar in ax.patches:
