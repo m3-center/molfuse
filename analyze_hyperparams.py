@@ -155,17 +155,16 @@ def collect_metrics_from_replicates(replicate_run_dirs):
     return pd.DataFrame(all_metrics_data)
 
 def main_report_generation():
+    # ... (argument parsing and initial setup is unchanged) ...
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results.")
     parser.add_argument("--base_experiment_dir", required=True)
     parser.add_argument("--output_report_dir", required=True)
     args = parser.parse_args()
-
     logging.info(f"--- STARTING HYPERPARAMETER ANALYSIS REPORT GENERATION ---")
     report_run_id = f"hyperparam_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
     report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures"); os.makedirs(report_figures_abs_dir, exist_ok=True)
     latex_content = [LATEX_DOCUMENT_PREAMBLE.replace("<<RUN_ID_PLACEHOLDER>>", escape_latex_text_content(report_run_id))]
-    
     replicate_dirs = find_all_replicate_runs(args.base_experiment_dir)
     if not replicate_dirs: logging.error("No replicate directories found."); return
     df_agg = collect_metrics_from_replicates(replicate_dirs)
@@ -173,18 +172,13 @@ def main_report_generation():
     df_agg['Method'] = df_agg['DR_Method'] + ' (' + df_agg['Representation'] + ')'
     df_agg.to_csv(os.path.join(report_output_abs_dir, "DEBUG_hyperparam_metrics_aggregated.csv"), index=False)
     
-    # --- Pre-calculate consistent Y-axis limits for sweep plots ---
     y_limits = {}
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
         if metric in df_agg:
-            # Calculate limits based on 5th and 95th percentiles of the raw data
-            p05 = df_agg[metric].quantile(0.05)
-            p95 = df_agg[metric].quantile(0.95)
-            range = p95 - p05
-            if "AUC" in metric:
-                y_limits[metric] = (0.0, 1.0)
-            else: # For EF, give some padding
-                y_limits[metric] = (max(0.0, p05 - range * 0.2), p95 + range * 0.2)
+            p05 = df_agg[metric].quantile(0.05); p95 = df_agg[metric].quantile(0.95)
+            range_val = p95 - p05
+            if "AUC" in metric: y_limits[metric] = (0.0, 1.0)
+            else: y_limits[metric] = (max(0.0, p05 - range_val * 0.2), p95 + range_val * 0.2)
 
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
@@ -203,16 +197,19 @@ def main_report_generation():
         if hyperparam_name != 'N/A':
             latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
             
-            # --- Generate Plots with Median/CI and consistent axes ---
             for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
                 plt.figure(figsize=(8, 6))
                 summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(agg_funcs).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
-                summary.columns = ['_'.join(col).strip() if col[1]!='' else col[0] for col in summary.columns]
+                
+                # --- START OF FIX: Robust column name flattening ---
+                # This handles both the single 'Hyperparameter_Value' column and the MultiIndex columns
+                summary.columns = [col[0] if isinstance(col, tuple) and col[1] == '' else '_'.join(map(str, col)) if isinstance(col, tuple) else col for col in summary.columns]
+                # --- END OF FIX ---
 
                 plt.plot(summary['Hyperparameter_Value'], summary['median'], marker='o', linestyle='-')
                 plt.fill_between(summary['Hyperparameter_Value'], summary['p05'], summary['p95'], alpha=0.2, label="90% CI")
                 
-                title = f'{metric_col} vs. {hyperparam_name} for {method} ({strategy})'
+                title = f'Median {metric_col} vs. {hyperparam_name} for {method} ({strategy})'
                 plt.xlabel(hyperparam_name); plt.ylabel(f"Median {metric_col}")
                 plt.title(title); plt.grid(True, linestyle=':'); plt.legend(); plt.tight_layout()
                 if metric_col in y_limits: plt.ylim(y_limits[metric_col])
