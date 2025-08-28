@@ -177,7 +177,7 @@ def main_report_generation():
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
     all_best_configs = []
-    unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
+    unique_experiments = df_agg[['Method', 'Embedding_Strategy']].drop_duplicates().to_records(index=False)
 
     for method, strategy in unique_experiments:
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
