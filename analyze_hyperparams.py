@@ -235,9 +235,14 @@ def main_report_generation():
         performance_data_at_best_params = pd.concat(optimal_replicate_dfs, ignore_index=True)
         logging.info(f"Final summary will be generated from {len(performance_data_at_best_params)} total rows of optimal replicate data.")
 
-        p05 = lambda x: x.quantile(0.05)
-        p95 = lambda x: x.quantile(0.95)
-        final_summary = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['median', p05, p95])
+        def p05(x): return x.quantile(0.05)
+        def p95(x): return x.quantile(0.95)
+
+        agg_dict = {'median': pd.NamedAgg(column='median', aggfunc='median'),
+                    'p05': pd.NamedAgg(column='p05', aggfunc=p05),
+                    'p95': pd.NamedAgg(column='p95', aggfunc=p95)}
+
+        final_summary = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_dict)
         final_summary.columns = ['_'.join(col).strip() for col in final_summary.columns.values]
         final_summary = final_summary.reset_index()
         
