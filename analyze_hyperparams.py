@@ -13,7 +13,7 @@ import subprocess
 import re
 from datetime import datetime
 
-# --- LaTeX Preamble and Helper Functions ---
+# --- LaTeX Preamble and Helper Functions (Unchanged) ---
 LATEX_DOCUMENT_PREAMBLE = r"""
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
@@ -113,7 +113,6 @@ def find_all_replicate_runs(base_experiment_dir):
 def collect_metrics_from_replicates(replicate_run_dirs):
     all_metrics_data = []
     for rep_dir_path in replicate_run_dirs:
-        logging.info(f"Processing replicate: {os.path.basename(rep_dir_path)}")
         run_config_path = os.path.join(rep_dir_path, "run_config.json")
         if not os.path.exists(run_config_path): continue
         try:
@@ -134,12 +133,15 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         metrics_pattern = os.path.join(rep_dir_path, target_id_name, "results", repr_type, "dim_*", "*", "*_ranking_metrics.csv")
         for metrics_file_path in glob.glob(metrics_pattern):
             try:
+                # --- START OF FIX: Robustly determine the strategy from the file path ---
                 strategy_dir_name = os.path.basename(os.path.dirname(metrics_file_path))
-                embedding_strategy = "Projection"
+                embedding_strategy = "Projection" # Default assumption
                 if "tsne" in dr_method_key:
                     embedding_strategy = "Co-embedding (Native)"
-                elif "-Coembed" in strategy_dir_name:
+                elif strategy_dir_name.endswith('_Coembed'):
                     embedding_strategy = "Co-embedding"
+                # --- END OF FIX ---
+                
                 df_m = pd.read_csv(metrics_file_path)
                 if df_m.empty: continue
                 metric_row = {'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
@@ -183,6 +185,7 @@ def main_report_generation():
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
         if df_exp.empty: continue
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
+        
         if hyperparam_name != 'N/A':
             latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
             for metric_col in ['ROC_AUC', 'EF_1Perc']:
@@ -217,13 +220,13 @@ def main_report_generation():
 
         p05 = lambda x: x.quantile(0.05)
         p95 = lambda x: x.quantile(0.95)
-        final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['median', p05, p95])
+        agg_funcs = ['median', p05, p95]
+        final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs)
         final_summary_multi_level.columns = ['_'.join(col).strip() for col in final_summary_multi_level.columns.values]
         final_summary = final_summary_multi_level.reset_index()
         
         for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
             latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Peak Performance by Median {metric}')}")
-            
             median_col, p05_col, p95_col = f'{metric}_median', f'{metric}_p05', f'{metric}_p95'
             if not all(c in final_summary.columns for c in [median_col, p05_col, p95_col]): continue
 
@@ -232,27 +235,36 @@ def main_report_generation():
             plt.figure(figsize=(12, 8))
             ax = sns.barplot(data=plot_data, x=median_col, y='Method', hue='Embedding_Strategy', palette='viridis', dodge=True)
             
-            # Create error bars from the pre-calculated p05 and p95 columns
-            y_coords_map = {cat: p.get_y() + p.get_height() / 2. for cat, p in zip(ax.get_yticklabels(), ax.patches)}
-            # This is complex because seaborn changes the order and number of y-ticks
-            
-            # A more robust way to add error bars to grouped plots
-            for i, method in enumerate(plot_data['Method']):
-                strat_data = plot_data[plot_data['Method'] == method]
-                num_strats = len(strat_data)
-                # This logic assumes seaborn barplot positions are predictable, which they are
-                for j, (_, row) in enumerate(strat_data.iterrows()):
-                    bar_y_pos = i - 0.4 + (0.8 / num_strats) * (j + 0.5)
-                    median_val = row[median_col]
-                    lower_bound = row[p05_col]
-                    upper_bound = row[p95_col]
-                    error = [[median_val - lower_bound], [upper_bound - median_val]]
-                    plt.errorbar(x=[median_val], y=[bar_y_pos], xerr=error, fmt='none', c='black', capsize=5)
+            # Create a map for easy lookup of error values
+            error_map = {}
+            for i, row in plot_data.iterrows():
+                key = (row['Method'], row['Embedding_Strategy'])
+                lower_err = row[median_col] - row[p05_col]
+                upper_err = row[p95_col] - row[median_col]
+                error_map[key] = (lower_err, upper_err)
+
+            # Iterate through the bars to apply the correct error bars
+            for bar in ax.patches:
+                # Find which group this bar belongs to
+                hue_level = ax.get_legend_handles_labels()[1][bar.get_label()]
+                # Find the y-tick label (the Method)
+                method_name = ax.get_yticklabels()[int(round(bar.get_y()))].get_text()
+                
+                key = (method_name, hue_level)
+                if key in error_map:
+                    err = error_map[key]
+                    x_pos = bar.get_width()
+                    y_pos = bar.get_y() + bar.get_height() / 2
+                    ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=5)
 
             plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
             plt.title(f'Peak Performance After Tuning (by Median {metric})')
             if "AUC" in metric: plt.xlim(0, max(1.0, plot_data[median_col].max() * 1.1))
-            if "EF" in metric: plt.xscale('log')
+            if "EF" in metric: 
+                plt.xscale('log')
+                # Add a reasonable limit if max is very high
+                if plot_data[median_col].max() > 100: plt.xlim(right=100)
+
             plt.grid(True, axis='x', linestyle='--'); plt.legend(title='Embedding Strategy'); plt.tight_layout()
 
             fig_filename = f"fig_peak_performance_{metric}_median_split.png"
