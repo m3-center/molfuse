@@ -14,7 +14,7 @@ import subprocess
 import re
 from datetime import datetime
 
-# --- LaTeX Preamble and Helper Functions ---
+# --- MODIFIED: Updated Abstract ---
 LATEX_DOCUMENT_PREAMBLE = r"""
 \documentclass[10pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
@@ -43,14 +43,15 @@ LATEX_DOCUMENT_PREAMBLE = r"""
 }
 \renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
 \pagestyle{fancy} \fancyhf{} \fancyhead[L]{UMMBAS Affinity Cutoff Report} \fancyhead[R]{\today} \fancyfoot[C]{\thepage\ of \pageref{LastPage}}
-\title{UMMBAS Molecular Similarity Experiment\\ \large \textit{Affinity Cutoff Analysis Report}}
+\title{UMMBAS Molecular Similarity Experiment\\ \large \textit{Affinity Cutoff Analysis Report (Features, 2D)}}
 \author{UMMBAS Project Team} \date{\today}
 \begin{document} \maketitle \begin{abstract}
-This report analyzes the impact of applying a potency-based affinity cutoff to the Molecular Function (MF) cloud during the scoring phase of a leave-one-target-out virtual screening experiment. The original similarity spaces, which included all compounds regardless of potency, were used as a fixed foundation. The analysis was then repeated by defining the MF cloud using only compounds with a Standard Value (nM) at or below specific cutoffs (1000, 10000, and 100000 nM). The objective is to determine whether refining the MF cloud to include only higher-potency ligands improves the ability to correctly rank held-out active compounds against a large set of decoys. Performance is assessed using ROC-AUC, PR-AUC, and Enrichment Factor at 1\% (EF@1\%) and compared against the baseline (no cutoff). Results are aggregated over multiple replicate runs to ensure statistical robustness.
+This report analyzes the impact of applying a potency-based affinity cutoff to the held-out active ligands during the evaluation phase of a leave-one-target-out virtual screening experiment. This analysis is focused specifically on 2D similarity spaces generated from physicochemical features. The original similarity spaces and DR models were used as a fixed foundation. The analysis was then repeated, defining the "true active" set using only compounds with a Standard Value (nM) at or below specific cutoffs (100, 1000, and 10000 nM). The objective is to determine whether restricting the evaluation to higher-potency ligands improves the measured ability to correctly rank these compounds against a large set of decoys. Performance is assessed using ROC-AUC, PR-AUC, and Enrichment Factor at 1\% (EF@1\%).
 \end{abstract} \clearpage \tableofcontents \clearpage \listoffigures \clearpage \listoftables \clearpage
 """
 LATEX_DOCUMENT_END = r"\end{document}"
 
+# (All helper functions are unchanged)
 def escape_latex_text_content(text_input):
     if not isinstance(text_input, str): text_input = str(text_input)
     conv = {'&': r'\&', '%': r'\%', '$': r'\$', '#': r'\#', '_': r'\_',
@@ -58,44 +59,37 @@ def escape_latex_text_content(text_input):
             '<': r'\textless{}', '>': r'\textgreater{}'}
     for k, v in conv.items(): text_input = text_input.replace(k, v)
     return text_input
-
 def clean_for_label(text):
     if not isinstance(text, str): text = str(text)
     text = text.replace('_', '-').replace(' ', '-').replace('.', '-').replace('/', '-')
     text = re.sub(r'[^a-zA-Z0-9-]', '', text); text = re.sub(r'-+', '-', text)
     return text.strip('-')[:50]
-
 def get_section_header_latex(level, title_text):
     sec_cmd_map = {1: r"\section", 2: r"\subsection", 3: r"\subsubsection"}
     sec_cmd = sec_cmd_map.get(level, r"\subsubsection")
     return f"\n{sec_cmd}{{{escape_latex_text_content(title_text)}}}\n"
-
 def add_figure_to_latex(latex_content_list, fig_path, caption, label, figure_width="0.9\\textwidth"):
     rel_path = os.path.join("figures", os.path.basename(fig_path))
     latex_content_list.extend([f"\\begin{{figure}}[H]", r"  \centering",
                                f"  \\includegraphics[width={figure_width}]{{{rel_path}}}",
                                f"  \\caption{{{escape_latex_text_content(caption)}}}",
                                f"  \\label{{fig:{clean_for_label(label)}}}", r"\end{figure}", "\n"])
-
 def add_dataframe_as_latex_table(latex_content_list, dataframe, caption, label, font_size=r"\small"):
     if dataframe is None or dataframe.empty:
         latex_content_list.append(f"% Table '{escape_latex_text_content(label)}' is empty.\n")
         return
-
     latex_content_list.extend([r"\begin{table}[H]", r"  \centering", font_size,
                                f"  \\caption{{{escape_latex_text_content(caption)}}}",
                                f"  \\label{{tab:{clean_for_label(label)}}}"])
     df_latex = dataframe.copy()
-    # Pre-format numeric columns to a consistent string format
     for col in df_latex.select_dtypes(include=np.number).columns:
         df_latex[col] = df_latex[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
-
     df_latex.columns = [escape_latex_text_content(c.replace('_', ' ').title()) for c in df_latex.columns]
     col_format = 'l' * len(df_latex.columns)
-    latex_table_string = df_latex.to_latex(index=False, escape=False, column_format=col_format,
-                                           longtable=len(dataframe) > 20, na_rep="N/A")
+    latex_table_string = df_latex.to_latex(index=False, escape=False, column_format=col_format, longtable=len(dataframe) > 20, na_rep="N/A")
     latex_content_list.append(latex_table_string)
     latex_content_list.extend([r"\end{table}", "\n"])
+
 
 # --- Logging Setup ---
 log_file_name = f"cutoff_analysis_aggregation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
