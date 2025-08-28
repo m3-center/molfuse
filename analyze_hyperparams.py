@@ -179,9 +179,10 @@ def main_report_generation():
     all_best_configs = []
     unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
 
-    for method, strategy, hyperparam_name in unique_experiments:
+    for method, strategy in unique_experiments:
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
         if df_exp.empty: continue
+        hyperparam_name = df_exp['Hyperparameter'].iloc[0] # Using the corrected, consistent name
         
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
         
@@ -208,7 +209,19 @@ def main_report_generation():
         summary_table_median = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg('median').reset_index()
         if 'ROC_AUC' in summary_table_median.columns:
             best_row = summary_table_median.loc[summary_table_median['ROC_AUC'].idxmax()]
-            all_best_configs.append({'Method': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row[hyperparam_name]})
+            optimal_value = 'N/A'
+            if hyperparam_name != 'N/A':
+                optimal_value = best_row[hyperparam_name]
+            best_config_details = {
+                'Method': method,
+                'Embedding_Strategy': strategy,
+                'Hyperparameter': hyperparam_name,
+                'Optimal_Value': optimal_value, # Use the correctly determined value
+                'ROC_AUC': best_row['ROC_AUC'],
+                'PR_AUC': best_row['PR_AUC'],
+                'EF_1Perc': best_row['EF_1Perc']
+            }
+            all_best_configs.append(best_config_details)
 
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method and strategy, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
