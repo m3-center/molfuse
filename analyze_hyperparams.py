@@ -225,6 +225,7 @@ def main_report_generation():
             df_optimal_replicates = df_exp.copy()
             logging.info(f"For non-swept method '{method}' ({strategy}), using all {len(df_optimal_replicates)} replicate rows.")
         
+        df_optimal_replicates['Optimal_Value'] = optimal_value
         optimal_replicate_dfs.append(df_optimal_replicates)
 
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
