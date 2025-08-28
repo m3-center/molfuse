@@ -164,8 +164,8 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         logging.error("No metric data was collected."); return pd.DataFrame()
     return pd.DataFrame(all_metrics_data)
 
+
 def main_report_generation():
-    # ... (initial setup and detailed sweep analysis are unchanged) ...
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a LaTeX report.")
     parser.add_argument("--base_experiment_dir", required=True)
     parser.add_argument("--output_report_dir", required=True)
@@ -208,7 +208,7 @@ def main_report_generation():
         if 'ROC_AUC_mean' in summary_table.columns:
             best_row_by_roc = summary_table.loc[summary_table['ROC_AUC_mean'].idxmax()]
             all_best_configs.append({'Method': f"{dr_method} ({repr_type})", 'Hyperparameter': hyperparam_name, 'Optimal_Value': best_row_by_roc[hyperparam_name], 'ROC_AUC': best_row_by_roc['ROC_AUC_mean'], 'PR_AUC': best_row_by_roc['PR_AUC_mean'], 'EF_1Perc': best_row_by_roc['EF_1Perc_mean']})
-
+    
     latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
     latex_content.append("This section synthesizes the results to compare the peak performance of each method, using the median as the central tendency and the 5th-95th percentiles as a 90% confidence interval.")
 
@@ -226,18 +226,19 @@ def main_report_generation():
         ]
 
         # --- START OF FIX ---
-        # Define named aggregation functions
         p05 = lambda x: x.quantile(0.05)
         p95 = lambda x: x.quantile(0.95)
         
-        # Use a dictionary to explicitly name the output columns
-        agg_funcs_dict = {
-            'median': 'median',
-            'p05': p05,
-            'p95': p95
+        # Create an explicit aggregation specification dictionary
+        # This tells Pandas exactly which functions to apply to which columns
+        agg_spec = {
+            'ROC_AUC': ['median', p05, p95],
+            'PR_AUC': ['median', p05, p95],
+            'EF_1Perc': ['median', p05, p95]
         }
         
-        final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_funcs_dict)
+        # Perform the aggregation using the new specification
+        final_summary_multi_level = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy']).agg(agg_spec)
         # --- END OF FIX ---
         
         final_summary_multi_level.columns = ['_'.join(col).strip() for col in final_summary_multi_level.columns.values]
@@ -265,7 +266,6 @@ def main_report_generation():
             y_positions_ordered = []
             for method in unique_methods:
                 y_positions_ordered.extend(sorted(y_pos_dict[method]))
-            # Reorder error data to match the new bar positions from seaborn
             plot_data_reordered = plot_data.set_index('Method').loc[unique_methods].reset_index()
             lower_error_reordered = plot_data_reordered[median_col] - plot_data_reordered[p05_col]
             upper_error_reordered = plot_data_reordered[p95_col] - plot_data_reordered[median_col]
