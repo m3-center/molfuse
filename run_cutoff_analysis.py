@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--original_workspace", default="experiment_workspace_hyperparam_sweep/", help="Directory containing the hyperparameter sweep runs.")
     parser.add_argument("--output_workspace", default="experiment_workspace_cutoff_analysis/", help="Directory to save the new cutoff analysis results.")
     parser.add_argument("--config_path", default="experiment_config.json", help="Path to the main experiment config file for context.")
-    parser.add_argument("--cutoffs", default="100,1000,10000", help="Comma-separated list of affinity cutoffs in nM.")
+    parser.add_argument("--cutoffs", default="100,1000,10000,100000", help="Comma-separated list of affinity cutoffs in nM.")
     args = parser.parse_args()
 
     logging.info("--- STARTING FOCUSED AFFINITY CUTOFF RE-ANALYSIS (FEATURES, 2D) ---")
