@@ -184,7 +184,6 @@ def main_report_generation():
     
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
-    # --- START OF CORRECTED LOGIC ---
     optimal_replicate_dfs = []
     
     unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
@@ -238,11 +237,14 @@ def main_report_generation():
         def p05(x): return x.quantile(0.05)
         def p95(x): return x.quantile(0.95)
 
-        agg_dict = {'median': pd.NamedAgg(column='median', aggfunc='median'),
-                    'p05': pd.NamedAgg(column='p05', aggfunc=p05),
-                    'p95': pd.NamedAgg(column='p95', aggfunc=p95)}
+        agg_dict = {
+            'ROC_AUC': ['median', p05, p95],
+            'PR_AUC': ['median', p05, p95],
+            'EF_1Perc': ['median', p05, p95]
+        }
 
-        final_summary = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy'])[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(agg_dict)
+        
+        final_summary = performance_data_at_best_params.groupby(['Method', 'Embedding_Strategy']).agg(agg_dict)
         final_summary.columns = ['_'.join(col).strip() for col in final_summary.columns.values]
         final_summary = final_summary.reset_index()
         
@@ -303,8 +305,15 @@ def main_report_generation():
             caption = f"Comparison of the best median {metric}. Error bars are the 90% CI (5th-95th percentile)."
             add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), caption, f"fig_peak_summary_{metric}_split")
             
-            table_data_final = final_summary[['Method', 'Embedding_Strategy', median_col, p05_col, p95_col]].sort_values(by=median_col, ascending=False)
+
+            final_table_data = pd.merge(
+                final_summary,
+                performance_data_at_best_params[['Method', 'Embedding_Strategy', 'Hyperparameter', 'Optimal_Value']].drop_duplicates(),
+                on=['Method', 'Embedding_Strategy']
+            )
+            table_data_final = final_table_data[['Method', 'Embedding_Strategy', 'Optimal_Value', median_col, p05_col, p95_col]].sort_values(by=median_col, ascending=False)
             add_dataframe_as_latex_table_standalone(latex_content, table_data_final, f"Optimal performance ranked by median {metric}.", f"table_summary_{metric}_split")
+            
     else:
         logging.warning("The list of optimal configurations was empty. No final summary will be generated.")
 
