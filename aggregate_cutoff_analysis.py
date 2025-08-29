@@ -150,8 +150,8 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
 
 def main():
     parser = argparse.ArgumentParser(description="Aggregate results from affinity cutoff experiment.")
-    parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis_features/", help="Base directory of the cutoff experiment results.")
-    parser.add_argument("--output_report_dir", default="final_report_cutoff_analysis_features/", help="Directory to save the final LaTeX report.")
+    parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis/", help="Base directory of the cutoff experiment results.")
+    parser.add_argument("--output_report_dir", default="final_report_cutoff_analysis/", help="Directory to save the final LaTeX report.")
     args = parser.parse_args()
 
     logging.info("--- STARTING AFFINITY CUTOFF ANALYSIS AGGREGATION ---")
