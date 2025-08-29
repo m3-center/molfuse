@@ -96,7 +96,7 @@ def add_dataframe_as_latex_table(latex_content_list, dataframe, caption, label, 
     latex_content_list.append(latex_table_string)
     latex_content_list.extend([r"\end{table}", "\n"])
 
-# --- Logging and Data Collection ---
+# --- Logging and Data Collection (Unchanged) ---
 log_file_name = f"cutoff_analysis_aggregation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s',
                     handlers=[logging.FileHandler(log_file_name, mode='w'), logging.StreamHandler()])
@@ -131,21 +131,16 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
             metric_row = {'Seed': seed, 'Affinity_Cutoff': cutoff_val, 'Representation': repr_type.capitalize(),
                           'DR_Method': dr_params['short_name'], 'Embedding_Strategy': embedding_strategy,
                           'Hyperparameter': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
-            
-            # --- START OF FIX: Use an explicit dictionary map for consistent naming ---
             column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
             for csv_col, df_col in column_map.items():
                 metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m and pd.notna(df_m[csv_col].iloc[0]) else np.nan
-            # --- END OF FIX ---
-            
             all_metrics.append(metric_row)
         except Exception as e:
             logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}", exc_info=True)
     return pd.DataFrame(all_metrics)
 
-# (The rest of the script is now correct and does not need to be changed)
-# ...
-def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figures_dir):
+# --- MODIFIED: Plotting function now accepts a y_range ---
+def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figures_dir, y_range=None):
     if df.empty or metric not in df.columns:
         logging.warning(f"Data is empty or missing '{metric}' for plot '{title}'."); return None, None
     g = sns.relplot(data=df, x='Affinity_Cutoff', y=metric, hue='Embedding_Strategy',
@@ -154,6 +149,8 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
     g.fig.suptitle(title, y=1.03, fontsize=16)
     g.set_axis_labels("Affinity Cutoff (nM)", f"Mean {metric}")
     g.set(xscale="log")
+    if y_range is not None:
+        g.set(ylim=y_range)
     g.set_titles("{col_name}")
     g.tight_layout(rect=[0, 0, 1, 0.97])
     fig_path = os.path.join(report_figures_dir, filename)
@@ -180,6 +177,17 @@ def main():
     
     df_agg['Method_Repr'] = df_agg['DR_Method'] + " (" + df_agg['Representation'] + ")"
 
+    # --- MODIFIED: Pre-calculate global y-axis ranges ---
+    y_ranges = {}
+    for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+        if metric in df_agg.columns:
+            grouped = df_agg.groupby(['Method_Repr', 'Embedding_Strategy', 'Affinity_Cutoff'])[metric]
+            means = grouped.mean(); stds = grouped.std().fillna(0)
+            min_val, max_val = (means - stds).min(), (means + stds).max()
+            padding = (max_val - min_val) * 0.1 if not np.isnan(max_val) else 0.1
+            y_ranges[metric] = (min_val - padding, max_val + padding)
+    # --- END MODIFICATION ---
+
     # --- SECTION 1: Overall Average Performance (All Hyperparameters) ---
     latex_content.append(get_section_header_latex(1, "Overall Performance vs. Affinity Cutoff (Averaged Over All Hyperparameters)"))
     latex_content.append("The following plots visualize the impact of the affinity cutoff, averaged across all tested hyperparameter configurations for each method.")
@@ -187,7 +195,8 @@ def main():
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
         fig_path, caption = create_performance_vs_cutoff_plot(df_agg, metric,
             f"Overall Mean {metric} vs. Affinity Cutoff",
-            f"perf_vs_cutoff_{metric.lower()}_overall_avg.png", report_figures_abs_dir)
+            f"perf_vs_cutoff_{metric.lower()}_overall_avg.png", report_figures_abs_dir,
+            y_range=y_ranges.get(metric)) # Pass the calculated range
         if fig_path:
             add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-overall", figure_width="\\textwidth")
 
@@ -234,7 +243,8 @@ def main():
         for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
             fig_path, caption = create_performance_vs_cutoff_plot(df_filtered_for_trends, metric,
                 f"Optimal {metric} Performance vs. Affinity Cutoff",
-                f"perf_vs_cutoff_{metric.lower()}_best_params.png", report_figures_abs_dir)
+                f"perf_vs_cutoff_{metric.lower()}_best_params.png", report_figures_abs_dir,
+                y_range=y_ranges.get(metric)) # Pass the SAME calculated range
             if fig_path:
                 add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-optimal", figure_width="\\textwidth")
     else:
@@ -247,6 +257,7 @@ def main():
     with open(report_tex_path, "w", encoding='utf-8') as f: f.write("\n".join(latex_content))
     logging.info(f"Cutoff analysis LaTeX report generated: {report_tex_path}")
 
+    # (Compilation logic is unchanged)
     try:
         for i in range(2):
             subprocess.run(["pdflatex", "-interaction=nonstopmode", "-output-directory", report_output_abs_dir, report_tex_path], capture_output=True, text=True, check=False)
