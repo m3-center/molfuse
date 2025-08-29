@@ -50,6 +50,7 @@ This report analyzes the impact of applying a potency-based affinity cutoff to t
 \end{abstract} \clearpage \tableofcontents \clearpage \listoffigures \clearpage \listoftables \clearpage
 """
 LATEX_DOCUMENT_END = r"\end{document}"
+
 def escape_latex_text_content(text_input):
     if not isinstance(text_input, str): text_input = str(text_input)
     conv = {'&': r'\&', '%': r'\%', '$': r'\$', '#': r'\#', '_': r'\_',
@@ -57,21 +58,25 @@ def escape_latex_text_content(text_input):
             '<': r'\textless{}', '>': r'\textgreater{}'}
     for k, v in conv.items(): text_input = text_input.replace(k, v)
     return text_input
+
 def clean_for_label(text):
     if not isinstance(text, str): text = str(text)
     text = text.replace('_', '-').replace(' ', '-').replace('.', '-').replace('/', '-')
     text = re.sub(r'[^a-zA-Z0-9-]', '', text); text = re.sub(r'-+', '-', text)
     return text.strip('-')[:50]
+
 def get_section_header_latex(level, title_text):
     sec_cmd_map = {1: r"\section", 2: r"\subsection", 3: r"\subsubsection"}
     sec_cmd = sec_cmd_map.get(level, r"\subsubsection")
     return f"\n{sec_cmd}{{{escape_latex_text_content(title_text)}}}\n"
+
 def add_figure_to_latex(latex_content_list, fig_path, caption, label, figure_width="0.9\\textwidth"):
     rel_path = os.path.join("figures", os.path.basename(fig_path))
     latex_content_list.extend([f"\\begin{{figure}}[H]", r"  \centering",
                                f"  \\includegraphics[width={figure_width}]{{{rel_path}}}",
                                f"  \\caption{{{escape_latex_text_content(caption)}}}",
                                f"  \\label{{fig:{clean_for_label(label)}}}", r"\end{figure}", "\n"])
+
 def add_dataframe_as_latex_table(latex_content_list, dataframe, caption, label, font_size=r"\small"):
     if dataframe is None or dataframe.empty:
         latex_content_list.append(f"% Table '{escape_latex_text_content(label)}' is empty.\n")
@@ -97,7 +102,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - 
                     handlers=[logging.FileHandler(log_file_name, mode='w'), logging.StreamHandler()])
 
 def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_dir):
-    # (This function is unchanged and correct)
     all_metrics = []
     pattern = os.path.join(cutoff_results_dir, "run_seed*", "results_cutoff_*", "*", "results", "*", "dim_*", "*", "*_ranking_metrics.csv")
     for metrics_file_path in glob.glob(pattern):
@@ -127,15 +131,21 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
             metric_row = {'Seed': seed, 'Affinity_Cutoff': cutoff_val, 'Representation': repr_type.capitalize(),
                           'DR_Method': dr_params['short_name'], 'Embedding_Strategy': embedding_strategy,
                           'Hyperparameter': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
-            for col in ['roc_auc', 'pr_auc', 'ef_1%']:
-                metric_row[col.upper()] = df_m[col].iloc[0] if col in df_m and pd.notna(df_m[col].iloc[0]) else np.nan
+            
+            # --- START OF FIX: Use an explicit dictionary map for consistent naming ---
+            column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
+            for csv_col, df_col in column_map.items():
+                metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m and pd.notna(df_m[csv_col].iloc[0]) else np.nan
+            # --- END OF FIX ---
+            
             all_metrics.append(metric_row)
         except Exception as e:
             logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}", exc_info=True)
     return pd.DataFrame(all_metrics)
 
+# (The rest of the script is now correct and does not need to be changed)
+# ...
 def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figures_dir):
-    # (This function is unchanged and correct)
     if df.empty or metric not in df.columns:
         logging.warning(f"Data is empty or missing '{metric}' for plot '{title}'."); return None, None
     g = sns.relplot(data=df, x='Affinity_Cutoff', y=metric, hue='Embedding_Strategy',
@@ -153,9 +163,9 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
 
 def main():
     parser = argparse.ArgumentParser(description="Aggregate results from affinity cutoff experiment.")
-    parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis_features/", help="Base directory of the cutoff experiment results.")
+    parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis/", help="Base directory of the cutoff experiment results.")
     parser.add_argument("--original_workspace", default="experiment_workspace_hyperparam_sweep/", help="Directory containing the original hyperparameter sweep runs with their configs.")
-    parser.add_argument("--output_report_dir", default="final_report_cutoff_analysis_features/", help="Directory to save the final LaTeX report.")
+    parser.add_argument("--output_report_dir", default="final_report_cutoff_analysis/", help="Directory to save the final LaTeX report.")
     args = parser.parse_args()
 
     logging.info("--- STARTING AFFINITY CUTOFF ANALYSIS AGGREGATION ---")
@@ -181,7 +191,6 @@ def main():
         if fig_path:
             add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-overall", figure_width="\\textwidth")
 
-    # --- START OF CORRECTED LOGIC ---
     # --- SECTION 2: Identify and Report Best Hyperparameters ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex(1, 'Optimal Hyperparameter Selection')}")
     latex_content.append("The single best hyperparameter value for each method and strategy was determined by identifying the setting that produced the highest mean ROC-AUC at the 100,000 nM affinity cutoff baseline. These optimal settings are used for all subsequent trend analysis.")
@@ -204,7 +213,6 @@ def main():
         
         df_best_hyperparams_list.append({'Method_Repr': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': optimal_value})
         
-        # Select all rows from the FULL dataset that match this best configuration
         df_optimal_replicates = df_agg[
             (df_agg['Method_Repr'] == method) &
             (df_agg['Embedding_Strategy'] == strategy) &
@@ -231,7 +239,6 @@ def main():
                 add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-optimal", figure_width="\\textwidth")
     else:
         latex_content.append("Could not generate optimal performance plots because best hyperparameters were not identified.")
-    # --- END OF CORRECTED LOGIC ---
 
     # --- Final LaTeX Generation ---
     latex_content.append(LATEX_DOCUMENT_END)
@@ -240,7 +247,6 @@ def main():
     with open(report_tex_path, "w", encoding='utf-8') as f: f.write("\n".join(latex_content))
     logging.info(f"Cutoff analysis LaTeX report generated: {report_tex_path}")
 
-    # (Compilation logic is unchanged)
     try:
         for i in range(2):
             subprocess.run(["pdflatex", "-interaction=nonstopmode", "-output-directory", report_output_abs_dir, report_tex_path], capture_output=True, text=True, check=False)
