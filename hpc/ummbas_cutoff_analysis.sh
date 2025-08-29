@@ -3,7 +3,7 @@
 #SBATCH --nodes=1                # number of nodes
 #SBATCH --ntasks-per-node=32      # number of tasks per node (8 is often a good number for data loading/Python overhead for a single GPU job)
 #SBATCH --mem=240G               # memory per node
-#SBATCH --time=0-08:00:00        # total runtime of job allocation 
+#SBATCH --time=3-00:00:00        # total runtime of job allocation 
 
 JOB_NAME="UMMBAS_Cutoff_Analysis"
 
