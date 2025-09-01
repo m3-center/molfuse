@@ -64,6 +64,11 @@ def main():
         run_basename = os.path.basename(original_run_dir)
         logging.info(f"\n===== Processing Original Run: {run_basename} =====")
         
+        output_run_dir = os.path.join(args.output_workspace, run_basename)
+        if os.path.exists(output_run_dir):
+            logging.info(f"  --> Output directory '{output_run_dir}' already exists. Skipping this run.")
+            continue
+        
         run_config_path = os.path.join(original_run_dir, "run_config.json")
         if not os.path.exists(run_config_path):
             logging.warning(f"run_config.json not found in {original_run_dir}, skipping.")
