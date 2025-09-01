@@ -180,13 +180,28 @@ def main():
     # --- MODIFIED: Pre-calculate global y-axis ranges ---
     y_ranges = {}
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
-        if metric in df_agg.columns:
+        if metric in df_agg.columns and not df_agg[metric].dropna().empty:
+            # Calculate the mean and std dev for each point that will be plotted
             grouped = df_agg.groupby(['Method_Repr', 'Embedding_Strategy', 'Affinity_Cutoff'])[metric]
-            means = grouped.mean(); stds = grouped.std().fillna(0)
-            min_val, max_val = (means - stds).min(), (means + stds).max()
-            padding = (max_val - min_val) * 0.2 if not np.isnan(max_val) else 0.2
-            y_ranges[metric] = (min_val - padding, max_val + padding)
-    # --- END MODIFICATION ---
+            means = grouped.mean()
+            stds = grouped.std().fillna(0)
+
+            # Determine the absolute min and max across all error bars
+            min_val = (means - stds).min()
+            max_val = (means + stds).max()
+
+            # Add a 5% padding to the top and bottom of the range
+            padding = (max_val - min_val) * 0.05
+            
+            # For metrics bounded by 0 and 1, ensure the range respects these bounds
+            if metric in ['ROC_AUC', 'PR_AUC']:
+                final_min = max(0, min_val - padding)
+                final_max = min(1, max_val + padding)
+            else: # For EF, which is not bounded at the top
+                final_min = max(0, min_val - padding) # EF cannot be negative
+                final_max = max_val + padding
+            
+            y_ranges[metric] = (final_min, final_max)
 
     # --- SECTION 1: Overall Average Performance (All Hyperparameters) ---
     latex_content.append(get_section_header_latex(1, "Overall Performance vs. Affinity Cutoff (Averaged Over All Hyperparameters)"))
