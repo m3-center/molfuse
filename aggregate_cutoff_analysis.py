@@ -184,7 +184,7 @@ def main():
             grouped = df_agg.groupby(['Method_Repr', 'Embedding_Strategy', 'Affinity_Cutoff'])[metric]
             means = grouped.mean(); stds = grouped.std().fillna(0)
             min_val, max_val = (means - stds).min(), (means + stds).max()
-            padding = (max_val - min_val) * 0.1 if not np.isnan(max_val) else 0.1
+            padding = (max_val - min_val) * 0.2 if not np.isnan(max_val) else 0.2
             y_ranges[metric] = (min_val - padding, max_val + padding)
     # --- END MODIFICATION ---
 
