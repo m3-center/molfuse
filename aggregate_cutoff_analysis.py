@@ -152,6 +152,7 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
     if y_range is not None:
         g.set(ylim=y_range)
     g.set_titles("{col_name}")
+    g.fig.subplots_adjust(top=0.92)
     g.tight_layout(rect=[0, 0, 1, 0.97])
     fig_path = os.path.join(report_figures_dir, filename)
     plt.savefig(fig_path, dpi=200); plt.close()
@@ -180,28 +181,27 @@ def main():
     # --- MODIFIED: Pre-calculate global y-axis ranges ---
     y_ranges = {}
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
-        if metric in df_agg.columns and not df_agg[metric].dropna().empty:
-            # Calculate the mean and std dev for each point that will be plotted
-            grouped = df_agg.groupby(['Method_Repr', 'Embedding_Strategy', 'Affinity_Cutoff'])[metric]
-            means = grouped.mean()
-            stds = grouped.std().fillna(0)
-
-            # Determine the absolute min and max across all error bars
-            min_val = (means - stds).min()
-            max_val = (means + stds).max()
-
-            # Add a 5% padding to the top and bottom of the range
-            padding = (max_val - min_val) * 0.05
+        if metric in df_agg.columns:
+            # Base the range on the absolute min/max of the data points themselves
+            min_val = df_agg[metric].min()
+            max_val = df_agg[metric].max()
             
-            # For metrics bounded by 0 and 1, ensure the range respects these bounds
-            if metric in ['ROC_AUC', 'PR_AUC']:
-                final_min = max(0, min_val - padding)
-                final_max = min(1, max_val + padding)
-            else: # For EF, which is not bounded at the top
-                final_min = max(0, min_val - padding) # EF cannot be negative
-                final_max = max_val + padding
+            # Handle case where all values might be NaN
+            if pd.isna(min_val) or pd.isna(max_val):
+                logging.warning(f"Could not determine range for metric {metric} due to NaN values.")
+                continue
+
+            # Add padding
+            padding = (max_val - min_val) * 0.1
             
-            y_ranges[metric] = (final_min, final_max)
+            # Special handling for log scale to avoid zero or negative limits
+            if metric == 'EF_1Perc':
+                final_min = max(0.01, min_val - padding) # Ensure min is not zero for log scale
+            else:
+                final_min = min_val - padding
+
+            y_ranges[metric] = (final_min, max_val + padding)
+            logging.info(f"Calculated Y-axis range for {metric}: {y_ranges[metric]}")
 
     # --- SECTION 1: Overall Average Performance (All Hyperparameters) ---
     latex_content.append(get_section_header_latex(1, "Overall Performance vs. Affinity Cutoff (Averaged Over All Hyperparameters)"))
