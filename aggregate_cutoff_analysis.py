@@ -217,7 +217,7 @@ def main():
 
     # --- SECTION 2: Identify and Report Best Hyperparameters ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex(1, 'Optimal Hyperparameter Selection')}")
-    latex_content.append("The single best hyperparameter value for each method and strategy was determined by identifying the setting that produced the highest mean ROC-AUC at the 100,000 nM affinity cutoff baseline. These optimal settings are used for all subsequent trend analysis.")
+    latex_content.append("The single best hyperparameter value for each method and strategy was determined by identifying the setting that produced the highest mean EF@1% at the 100,000 nM affinity cutoff baseline. These optimal settings are used for all subsequent trend analysis.")
     
     df_baseline = df_agg[df_agg['Affinity_Cutoff'] == 100000].copy()
     optimal_replicate_dfs = []
@@ -231,9 +231,9 @@ def main():
         
         optimal_value = "N/A"
         if hyperparam_name != 'N/A':
-            mean_perf_table = df_exp.groupby('Hyperparameter_Value')['ROC_AUC'].mean().reset_index()
+            mean_perf_table = df_exp.groupby('Hyperparameter_Value')['EF_1Perc'].mean().reset_index()
             if not mean_perf_table.empty:
-                optimal_value = mean_perf_table.loc[mean_perf_table['ROC_AUC'].idxmax()]['Hyperparameter_Value']
+                optimal_value = mean_perf_table.loc[mean_perf_table['EF_1Perc'].idxmax()]['Hyperparameter_Value']
         
         df_best_hyperparams_list.append({'Method_Repr': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': optimal_value})
         
@@ -245,7 +245,7 @@ def main():
         optimal_replicate_dfs.append(df_optimal_replicates)
 
     df_best_hyperparams_table = pd.DataFrame(df_best_hyperparams_list)
-    add_dataframe_as_latex_table(latex_content, df_best_hyperparams_table, "Selected Optimal Hyperparameters (by Mean ROC-AUC at 100,000 nM cutoff)", "tab-best-hyperparams", font_size=r"\normalsize")
+    add_dataframe_as_latex_table(latex_content, df_best_hyperparams_table, "Selected Optimal Hyperparameters (by Mean EF@1% at 100,000 nM cutoff)", "tab-best-hyperparams", font_size=r"\normalsize")
     
     # --- SECTION 3: Performance Trends for Optimal Hyperparameters ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex(1, 'Performance vs. Affinity Cutoff (Optimal Hyperparameters Only)')}")
