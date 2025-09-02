@@ -36,6 +36,27 @@ LATEX_DOCUMENT_PREAMBLE = r"""
 \usepackage{tocloft} 
 \usepackage{enumitem}
 \usepackage{rotating} 
+\usepackage{pgfplotstable} % <-- Required package for reading CSVs
+
+% PGFPlotstable configuration for booktabs-style tables
+\pgfplotsset{compat=1.17}
+\pgfplotstableset{
+    mystyle/.style={
+        col sep=comma,
+        string type, % Treat all columns as strings, as formatting is done in Python
+        header=true,
+        every head row/.style={
+            before row=\toprule,
+            after row=\midrule
+        },
+        every last row/.style={
+            after row=\bottomrule
+        },
+        display columns/0/.style={string type, column type={l}},
+        fixed,
+        read comma as period,
+    }
+}
 
 \hypersetup{
     colorlinks=true, linkcolor=blue, filecolor=magenta, urlcolor=cyan,
@@ -84,29 +105,40 @@ def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, capti
     if dataframe is None or dataframe.empty:
         latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty.\n")
         return
+
+    # Create a copy for formatting and saving, keeping original data intact
+    df_to_save = dataframe.copy()
+
+    # Format numeric columns into strings for consistent CSV output
+    for col in df_to_save.select_dtypes(include=np.number).columns:
+        if df_to_save[col].dropna().apply(lambda x: x.is_integer()).all():
+            df_to_save[col] = df_to_save[col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
+        else:
+            df_to_save[col] = df_to_save[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
+
+    # Clean up column headers for the CSV
+    df_to_save.columns = [c.replace('_', ' ').title() for c in df_to_save.columns]
     
-    # Save the raw data to CSV first
+    # Save the formatted data to CSV
     try:
-        dataframe.to_csv(csv_save_path, index=False)
+        csv_rel_path = os.path.join("tables", os.path.basename(csv_save_path))
+        df_to_save.to_csv(csv_save_path, index=False)
         logging.info(f"Saved table data to: {csv_save_path}")
     except Exception as e:
         logging.error(f"Failed to save table data to {csv_save_path}: {e}")
+        return
 
-    # Proceed with LaTeX generation
-    latex_content_list.extend([f"\\begin{{table}}{placement}", r"  \centering", font_size,
-                               f"  \\caption{{{escape_latex_text_content(caption_text)}}}",
-                               f"  \\label{{tab:{clean_label}}}"])
-    df_latex = dataframe.copy()
-    for col in df_latex.select_dtypes(include=np.number).columns:
-        if df_latex[col].dropna().apply(lambda x: x.is_integer()).all():
-            df_latex[col] = df_latex[col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
-        else:
-            df_latex[col] = df_latex[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
-    df_latex.columns = [escape_latex_text_content(c.replace('_', ' ').title()) for c in df_latex.columns]
-    col_format = 'l' * len(df_latex.columns)
-    latex_table_string = df_latex.to_latex(index=False, escape=False, column_format=col_format)
-    latex_content_list.append(latex_table_string)
-    latex_content_list.extend([r"\end{table}", "\n"])
+    # Generate the LaTeX stub that will read the CSV
+    latex_content_list.extend([
+        f"\\begin{{table}}{placement}",
+        r"  \centering",
+        font_size,
+        f"  \\caption{{{escape_latex_text_content(caption_text)}}}",
+        f"  \\label{{tab:{clean_label}}}",
+        f"  \\pgfplotstabletypeset[mystyle]{{{csv_rel_path.replace(os.sep, '/')}}}",
+        r"\end{table}",
+        "\n"
+    ])
 
 # --- Logging and Data Collection ---
 agg_log_file_name = f"hyperparam_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"

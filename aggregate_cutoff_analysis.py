@@ -35,6 +35,27 @@ LATEX_DOCUMENT_PREAMBLE = r"""
 \usepackage{lastpage}
 \usepackage{tocloft}
 \usepackage{enumitem}
+\usepackage{pgfplotstable} % <-- Required package for reading CSVs
+
+% PGFPlotstable configuration for booktabs-style tables
+\pgfplotsset{compat=1.17}
+\pgfplotstableset{
+    mystyle/.style={
+        col sep=comma,
+        string type,
+        header=true,
+        every head row/.style={
+            before row=\toprule,
+            after row=\midrule
+        },
+        every last row/.style={
+            after row=\bottomrule
+        },
+        display columns/0/.style={string type, column type={l}},
+        fixed,
+        read comma as period,
+    }
+}
 
 \hypersetup{
     colorlinks=true, linkcolor=blue, filecolor=magenta, urlcolor=cyan,
@@ -77,24 +98,34 @@ def add_figure_to_latex(latex_content_list, fig_path, caption, label, figure_wid
                                f"  \\caption{{{escape_latex_text_content(caption)}}}",
                                f"  \\label{{fig:{clean_for_label(label)}}}", r"\end{figure}", "\n"])
 
-def add_dataframe_as_latex_table(latex_content_list, dataframe, caption, label, font_size=r"\small"):
+def add_dataframe_as_latex_table(latex_content_list, dataframe, caption, label, csv_save_path, font_size=r"\small"):
     if dataframe is None or dataframe.empty:
         latex_content_list.append(f"% Table '{escape_latex_text_content(label)}' is empty.\n")
         return
-    latex_content_list.extend([r"\begin{table}[H]", r"  \centering", font_size,
-                               f"  \\caption{{{escape_latex_text_content(caption)}}}",
-                               f"  \\label{{tab:{clean_for_label(label)}}}"])
-    df_latex = dataframe.copy()
-    for col in df_latex.select_dtypes(include=np.number).columns:
-        if df_latex[col].dropna().apply(lambda x: x.is_integer()).all():
-            df_latex[col] = df_latex[col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
+
+    df_to_save = dataframe.copy()
+    for col in df_to_save.select_dtypes(include=np.number).columns:
+        if df_to_save[col].dropna().apply(lambda x: x.is_integer()).all():
+            df_to_save[col] = df_to_save[col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
         else:
-            df_latex[col] = df_latex[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
-    df_latex.columns = [escape_latex_text_content(c.replace('_', ' ').title()) for c in df_latex.columns]
-    col_format = 'l' * len(df_latex.columns)
-    latex_table_string = df_latex.to_latex(index=False, escape=False, column_format=col_format, longtable=len(dataframe) > 20, na_rep="N/A")
-    latex_content_list.append(latex_table_string)
-    latex_content_list.extend([r"\end{table}", "\n"])
+            df_to_save[col] = df_to_save[col].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "N/A")
+    df_to_save.columns = [c.replace('_', ' ').title() for c in df_to_save.columns]
+    
+    try:
+        csv_rel_path = os.path.join("tables", os.path.basename(csv_save_path))
+        df_to_save.to_csv(csv_save_path, index=False)
+        logging.info(f"Saved table data to: {csv_save_path}")
+    except Exception as e:
+        logging.error(f"Failed to save table data to {csv_save_path}: {e}")
+        return
+
+    latex_content_list.extend([
+        r"\begin{table}[H]", r"  \centering", font_size,
+        f"  \\caption{{{escape_latex_text_content(caption)}}}",
+        f"  \\label{{tab:{clean_for_label(label)}}}",
+        f"  \\pgfplotstabletypeset[mystyle]{{{csv_rel_path.replace(os.sep, '/')}}}",
+        r"\end{table}", "\n"
+    ])
 
 # --- Logging and Data Collection (Unchanged) ---
 log_file_name = f"cutoff_analysis_aggregation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -170,6 +201,7 @@ def main():
     report_run_id = f"cutoff_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
     report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures"); os.makedirs(report_figures_abs_dir, exist_ok=True)
+    report_tables_abs_dir = os.path.join(report_output_abs_dir, "tables"); os.makedirs(report_tables_abs_dir, exist_ok=True)
     latex_content = [LATEX_DOCUMENT_PREAMBLE]
 
     df_agg = collect_cutoff_experiment_metrics(args.base_experiment_dir, args.original_workspace)
@@ -245,7 +277,10 @@ def main():
         optimal_replicate_dfs.append(df_optimal_replicates)
 
     df_best_hyperparams_table = pd.DataFrame(df_best_hyperparams_list)
-    add_dataframe_as_latex_table(latex_content, df_best_hyperparams_table, "Selected Optimal Hyperparameters (by Mean EF@1% at 100,000 nM cutoff)", "tab-best-hyperparams", font_size=r"\normalsize")
+    
+    table_label = "tab-best-hyperparams"
+    csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
+    add_dataframe_as_latex_table(latex_content, df_best_hyperparams_table, "Selected Optimal Hyperparameters (by Mean EF@1% at 100,000 nM cutoff)", table_label, csv_path, font_size=r"\normalsize")
     
     # --- SECTION 3: Performance Trends for Optimal Hyperparameters ---
     latex_content.append(f"\\clearpage\n{get_section_header_latex(1, 'Performance vs. Affinity Cutoff (Optimal Hyperparameters Only)')}")
@@ -292,6 +327,18 @@ def main():
             "tab-peak-performance-summary", font_size=r"\scriptsize")
     else:
         latex_content.append("Could not generate peak performance summary because the set of optimal hyperparameter runs was empty.")
+
+    # --- SECTION 4: New Final Summary Table ---
+    if 'df_filtered_for_trends' in locals() and not df_filtered_for_trends.empty:
+        # ... (logic to create df_peak_summary is unchanged)
+        
+        # --- MODIFIED: Add csv_save_path to the table call ---
+        table_label = "tab-peak-performance-summary"
+        csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
+        add_dataframe_as_latex_table(latex_content, df_peak_summary,
+            "Peak performance for each method and strategy after optimizing for affinity cutoff. The optimal cutoff is determined independently for each metric.",
+            table_label, csv_path, font_size=r"\scriptsize")
+
 
     # --- Final LaTeX Generation ---
     latex_content.append(LATEX_DOCUMENT_END)
