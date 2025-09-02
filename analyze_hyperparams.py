@@ -268,6 +268,7 @@ def main_report_generation():
         optimal_replicate_dfs_for_metric = []
         logging.info(f"--- Identifying optimal hyperparameters based on MEAN {metric} ---")
         
+        unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
         for method, strategy, hyperparam_name in unique_experiments:
             df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
             if df_exp.empty: continue
@@ -277,7 +278,6 @@ def main_report_generation():
                 mean_perf_table = df_exp.groupby('Hyperparameter_Value')[metric].mean().reset_index()
                 if not mean_perf_table.empty and not mean_perf_table[metric].isnull().all():
                     optimal_value = mean_perf_table.loc[mean_perf_table[metric].idxmax()]['Hyperparameter_Value']
-                logging.info(f"For '{method}' ({strategy}), optimal '{hyperparam_name}' by {metric} is: {optimal_value}")
                 df_optimal_replicates = df_exp[df_exp['Hyperparameter_Value'] == optimal_value].copy()
             else:
                 df_optimal_replicates = df_exp.copy()
@@ -302,9 +302,6 @@ def main_report_generation():
         optimal_values_df = performance_data_at_best_params[['Method', 'Embedding_Strategy', 'Optimal_Value']].drop_duplicates()
         final_summary = pd.merge(final_summary, optimal_values_df, on=['Method', 'Embedding_Strategy'])
         
-        logging.info(f"Generated final summary statistics for {metric}:")
-        logging.info(final_summary.to_string())
-
         median_col, p05_col, p95_col = f'{metric}_median', f'{metric}_p05', f'{metric}_p95'
         if not all(c in final_summary.columns for c in [median_col, p05_col, p95_col]): continue
 
@@ -316,19 +313,25 @@ def main_report_generation():
         # --- START OF DEFINITIVE FIX for Error Bars ---
         error_map = { (row['Method'], row['Embedding_Strategy']): (row[median_col] - row[p05_col], row[p95_col] - row[median_col]) for _, row in plot_data.iterrows() }
         
+        # Get the handles and labels for the legend
         handles, labels = ax.get_legend_handles_labels()
         
+        # Iterate over the bar containers
         for i, container in enumerate(ax.containers):
+            # Get the strategy name from the legend labels
             strategy_name = labels[i]
+            
+            # Iterate over the individual bars in this container
             for bar in container.patches:
+                # Get the method name from the y-tick label
                 method_name = ax.get_yticklabels()[int(round(bar.get_y() + bar.get_height() / 2.0))].get_text()
+                
                 key = (method_name, strategy_name)
                 if key in error_map:
                     err = error_map[key]
                     x_pos = bar.get_x() + bar.get_width()
                     y_pos = bar.get_y() + bar.get_height() / 2.0
                     ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=4)
-        # --- END OF DEFINITIVE FIX ---
 
         plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
         plt.title(f'Peak Performance After Tuning (Optimized for {metric})')
