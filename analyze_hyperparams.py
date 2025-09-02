@@ -313,17 +313,14 @@ def main_report_generation():
         # --- START OF DEFINITIVE FIX for Error Bars ---
         error_map = { (row['Method'], row['Embedding_Strategy']): (row[median_col] - row[p05_col], row[p95_col] - row[median_col]) for _, row in plot_data.iterrows() }
         
-        # Get the handles and labels for the legend
-        handles, labels = ax.get_legend_handles_labels()
-        
-        # Iterate over the bar containers
-        for i, container in enumerate(ax.containers):
-            # Get the strategy name from the legend labels
-            strategy_name = labels[i]
+        # This new logic iterates through the bars and their containers robustly
+        for container in ax.containers:
+            # Each container holds all bars for a single strategy (e.g., all "Projection" bars)
+            strategy_name = container.get_label()
             
             # Iterate over the individual bars in this container
             for bar in container.patches:
-                # Get the method name from the y-tick label
+                # Get the method name from the y-tick label that corresponds to the bar's position
                 method_name = ax.get_yticklabels()[int(round(bar.get_y() + bar.get_height() / 2.0))].get_text()
                 
                 key = (method_name, strategy_name)
@@ -332,6 +329,7 @@ def main_report_generation():
                     x_pos = bar.get_x() + bar.get_width()
                     y_pos = bar.get_y() + bar.get_height() / 2.0
                     ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=4)
+        # --- END OF DEFINITIVE FIX ---
 
         plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
         plt.title(f'Peak Performance After Tuning (Optimized for {metric})')
