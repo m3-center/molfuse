@@ -79,11 +79,20 @@ def add_figure_to_latex_standalone(latex_content_list, relative_fig_path_in_tex,
                                f"  \\caption{{{escape_latex_text_content(caption_text)}}}",
                                f"  \\label{{fig:{clean_label}}}", r"\end{figure}", "\n"])
 
-def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, caption_text, label_text, placement="[H]", font_size=r"\small"):
+def add_dataframe_as_latex_table_standalone(latex_content_list, dataframe, caption_text, label_text, csv_save_path, placement="[H]", font_size=r"\small"):
     clean_label = clean_for_label(label_text)
     if dataframe is None or dataframe.empty:
         latex_content_list.append(f"% Table '{escape_latex_text_content(label_text)}' is empty.\n")
         return
+    
+    # Save the raw data to CSV first
+    try:
+        dataframe.to_csv(csv_save_path, index=False)
+        logging.info(f"Saved table data to: {csv_save_path}")
+    except Exception as e:
+        logging.error(f"Failed to save table data to {csv_save_path}: {e}")
+
+    # Proceed with LaTeX generation
     latex_content_list.extend([f"\\begin{{table}}{placement}", r"  \centering", font_size,
                                f"  \\caption{{{escape_latex_text_content(caption_text)}}}",
                                f"  \\label{{tab:{clean_label}}}"])
@@ -164,6 +173,7 @@ def main_report_generation():
     report_run_id = f"hyperparam_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
     report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures"); os.makedirs(report_figures_abs_dir, exist_ok=True)
+    report_tables_abs_dir = os.path.join(report_output_abs_dir, "tables"); os.makedirs(report_tables_abs_dir, exist_ok=True)
     latex_content = [LATEX_DOCUMENT_PREAMBLE.replace("<<RUN_ID_PLACEHOLDER>>", escape_latex_text_content(report_run_id))]
     
     replicate_dirs = find_all_replicate_runs(args.base_experiment_dir)
@@ -193,8 +203,27 @@ def main_report_generation():
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
         if df_exp.empty: continue
         
-        latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
+        summary_table = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
+        summary_table.columns = [col[0] if col[1] == '' else '_'.join(col) for col in summary_table.columns]
+        summary_table.rename(columns={'Hyperparameter_Value': hyperparam_name, 'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
         
+        # --- MODIFIED: Add csv_save_path to the table call ---
+        table_label = f"table_{method}_{strategy}"
+        csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
+        add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", table_label, csv_path)
+        
+        optimal_value = "N/A"
+        if hyperparam_name != 'N/A':
+            mean_perf_table = df_exp.groupby('Hyperparameter_Value')['ROC_AUC'].mean().reset_index()
+            if not mean_perf_table.empty:
+                optimal_value = mean_perf_table.loc[mean_perf_table['ROC_AUC'].idxmax()]['Hyperparameter_Value']
+        
+        df_optimal_replicates = df_exp[df_exp['Hyperparameter_Value'] == optimal_value].copy() if hyperparam_name != 'N/A' else df_exp.copy()
+        df_optimal_replicates['Optimal_Value'] = optimal_value
+        optimal_replicate_dfs.append(df_optimal_replicates)
+
+        latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(1, 'Overall Performance Summary')}")
+    
         optimal_value = "N/A"
         if hyperparam_name != 'N/A':
             # This section for detailed plots remains the same
@@ -259,7 +288,7 @@ def main_report_generation():
             if not all(c in final_summary.columns for c in [median_col, p05_col, p95_col]): 
                 logging.info(f"Skipping plot for {metric} due to missing columns.")
                 continue
-
+            
             plot_data = final_summary.sort_values(by=median_col, ascending=False)
             
             plt.figure(figsize=(12, 8))
@@ -307,13 +336,14 @@ def main_report_generation():
             add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), caption, f"fig_peak_summary_{metric}_split")
             
 
-            final_table_data = pd.merge(
-                final_summary,
-                performance_data_at_best_params[['Method', 'Embedding_Strategy', 'Hyperparameter', 'Optimal_Value']].drop_duplicates(),
-                on=['Method', 'Embedding_Strategy']
-            )
+            final_table_data = pd.merge(final_summary, performance_data_at_best_params[['Method', 'Embedding_Strategy', 'Hyperparameter', 'Optimal_Value']].drop_duplicates(), on=['Method', 'Embedding_Strategy'])
+            median_col, p05_col, p95_col = f'{metric}_median', f'{metric}_p05', f'{metric}_p95'
             table_data_final = final_table_data[['Method', 'Embedding_Strategy', 'Optimal_Value', median_col, p05_col, p95_col]].sort_values(by=median_col, ascending=False)
-            add_dataframe_as_latex_table_standalone(latex_content, table_data_final, f"Optimal performance ranked by median {metric}.", f"table_summary_{metric}_split")
+            
+            # --- MODIFIED: Add csv_save_path to the summary table calls ---
+            table_label = f"table_summary_{metric}_split"
+            csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
+            add_dataframe_as_latex_table_standalone(latex_content, table_data_final, f"Optimal performance ranked by median {metric}.", table_label, csv_path)
             
     else:
         logging.warning("The list of optimal configurations was empty. No final summary will be generated.")
