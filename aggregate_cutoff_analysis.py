@@ -146,7 +146,7 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
     g = sns.relplot(data=df, x='Affinity_Cutoff', y=metric, hue='Embedding_Strategy',
                     col='Method_Repr', col_wrap=3, kind='line', marker='o', errorbar='sd',
                     height=4, aspect=1.2, facet_kws={'sharey': False, 'sharex': True})
-    g.fig.suptitle(title, y=1.03, fontsize=16)
+    g.fig.suptitle(title, y=0.0, fontsize=16)
     g.set_axis_labels("Affinity Cutoff (nM)", f"Mean {metric}")
     g.set(xscale="log")
     if y_range is not None:
@@ -264,6 +264,34 @@ def main():
                 add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-optimal", figure_width="\\textwidth")
     else:
         latex_content.append("Could not generate optimal performance plots because best hyperparameters were not identified.")
+
+
+    latex_content.append(f"\\clearpage\n{get_section_header_latex(1, 'Peak Performance Summary After Cutoff Optimization')}")
+    latex_content.append("This section identifies the optimal affinity cutoff for each method and reports the peak performance achieved.")
+    
+    if 'df_filtered_for_trends' in locals() and not df_filtered_for_trends.empty:
+        summary_rows = []
+        for (method_repr, strategy), group_df in df_filtered_for_trends.groupby(['Method_Repr', 'Embedding_Strategy']):
+            summary_row = {'Method_Repr': method_repr, 'Embedding_Strategy': strategy}
+            
+            for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+                if metric in group_df.columns:
+                    mean_perf_by_cutoff = group_df.groupby('Affinity_Cutoff')[metric].mean()
+                    if not mean_perf_by_cutoff.empty:
+                        optimal_cutoff = mean_perf_by_cutoff.idxmax()
+                        peak_performance = mean_perf_by_cutoff.max()
+                        summary_row[f'Optimal_Cutoff_{metric}'] = optimal_cutoff
+                        summary_row[f'Peak_Mean_{metric}'] = peak_performance
+            
+            summary_rows.append(summary_row)
+        
+        df_peak_summary = pd.DataFrame(summary_rows)
+        
+        add_dataframe_as_latex_table(latex_content, df_peak_summary,
+            "Peak performance for each method and strategy after optimizing for affinity cutoff. The optimal cutoff is determined independently for each metric.",
+            "tab-peak-performance-summary", font_size=r"\scriptsize")
+    else:
+        latex_content.append("Could not generate peak performance summary because the set of optimal hyperparameter runs was empty.")
 
     # --- Final LaTeX Generation ---
     latex_content.append(LATEX_DOCUMENT_END)
