@@ -281,7 +281,6 @@ def main_report_generation():
                 df_optimal_replicates = df_exp[df_exp['Hyperparameter_Value'] == optimal_value].copy()
             else:
                 df_optimal_replicates = df_exp.copy()
-                logging.info(f"For non-swept method '{method}' ({strategy}), using all {len(df_optimal_replicates)} replicate rows.")
             
             df_optimal_replicates['Optimal_Value'] = optimal_value
             optimal_replicate_dfs_for_metric.append(df_optimal_replicates)
@@ -314,16 +313,22 @@ def main_report_generation():
         plt.figure(figsize=(12, 8))
         ax = sns.barplot(data=plot_data, x=median_col, y='Method', hue='Embedding_Strategy', palette='viridis', dodge=True)
         
+        # --- START OF DEFINITIVE FIX for Error Bars ---
         error_map = { (row['Method'], row['Embedding_Strategy']): (row[median_col] - row[p05_col], row[p95_col] - row[median_col]) for _, row in plot_data.iterrows() }
-        for bar in ax.patches:
-            hue_level = ax.get_legend_handles_labels()[1][bar.get_label()]
-            method_name = ax.get_yticklabels()[int(round(bar.get_y() / ax.get_yticklabels()[1].get_size()))].get_text() # More robust y-tick matching
-            key = (method_name, hue_level)
-            if key in error_map:
-                err = error_map[key]
-                x_pos = bar.get_width()
-                y_pos = bar.get_y() + bar.get_height() / 2.0
-                ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=4)
+        
+        handles, labels = ax.get_legend_handles_labels()
+        
+        for i, container in enumerate(ax.containers):
+            strategy_name = labels[i]
+            for bar in container.patches:
+                method_name = ax.get_yticklabels()[int(round(bar.get_y() + bar.get_height() / 2.0))].get_text()
+                key = (method_name, strategy_name)
+                if key in error_map:
+                    err = error_map[key]
+                    x_pos = bar.get_x() + bar.get_width()
+                    y_pos = bar.get_y() + bar.get_height() / 2.0
+                    ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=4)
+        # --- END OF DEFINITIVE FIX ---
 
         plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
         plt.title(f'Peak Performance After Tuning (Optimized for {metric})')
