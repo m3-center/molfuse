@@ -63,7 +63,8 @@
       "Vabc",
       "MW"
     ],
-    "run_coembedding_for_pca_umap": true
+    "run_coembedding_for_pca_umap": true,
+    "fingerprint_pca_components": 50
   },
   "targets": [
     {
@@ -76,12 +77,12 @@
     }
   ],
   "representations": [
-    "features"
+    "fingerprints"
   ],
   "dimensionality_reduction_methods": {
     "tsne": {
       "short_name": "t-SNE",
-      "perplexity": 2000,
+      "perplexity": 750,
       "allow_coembedding": true
     }
   }

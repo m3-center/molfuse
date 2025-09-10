@@ -22,44 +22,46 @@ FIXED_DIMS = {
 }
 
 HYPERPARAM_PLAN = {
-    "features": {
+    # "features": {
+    #     "pca": {"sweep": False},
+    #     "umap_euclidean": {
+    #         "sweep": True,
+    #         "param_name": "n_neighbors",
+    #         "values": [30, 50, 100, 150, 200, 250, 500]
+    #     } 
+    #     ,
+    #     "tsne": {
+    #         "sweep": True,
+    #         "param_name": "perplexity", # Now sweeping perplexity for features
+    #         "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+    #     }
+    # },
+    "fingerprints": {
         # "pca": {"sweep": False},
         "umap_euclidean": {
             "sweep": True,
             "param_name": "n_neighbors",
-            # "values": [30, 50, 100, 150, 200, 250]
-            "values": [500]
-        } 
-        ,
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250, 500]
+        },
+        "umap_jaccard": {
+            "sweep": True,
+            "param_name": "n_neighbors",
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250, 500]
+        },
+        "umap_hamming": {
+            "sweep": True,
+            "param_name": "n_neighbors",
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250, 500]
+        },
         "tsne": {
             "sweep": True,
-            "param_name": "perplexity", # Now sweeping perplexity for features
-            # "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000]
-            "values": [1250, 1500, 2000, 5000]
+            "param_name": "perplexity", # Now sweeping perplexity for fingerprints
+            # "values": [15, 30, 50, 100, 150, 200, 250, 500]
+            "values": [750, 1000, 1250, 1500]
         }
-    },
-    "fingerprints": {
-        # "pca": {"sweep": False},
-        # "umap_euclidean": {
-        #     "sweep": True,
-        #     "param_name": "n_neighbors",
-        #     "values": [30, 50, 100, 150]
-        # },
-        # "umap_jaccard": {
-        #     "sweep": True,
-        #     "param_name": "n_neighbors",
-        #     "values": [30, 50, 100, 150]
-        # },
-        # "umap_hamming": {
-        #     "sweep": True,
-        #     "param_name": "n_neighbors",
-        #     "values": [30, 50, 100, 150]
-        # },
-        # "tsne": {
-        #     "sweep": True,
-        #     "param_name": "perplexity", # Now sweeping perplexity for fingerprints
-        #     "values": [15, 30, 50, 100, 150, 200, 250, 500]
-        # }
     }
 }
 
