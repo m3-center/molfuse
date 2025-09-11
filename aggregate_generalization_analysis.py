@@ -94,14 +94,23 @@ log_file_name = f"cutoff_analysis_aggregation_{datetime.now().strftime('%Y%m%d_%
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - %(filename)-25s - %(funcName)-25s - %(lineno)-4d - %(message)s',
                     handlers=[logging.FileHandler(log_file_name, mode='w'), logging.StreamHandler()])
 
-def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_dir):
+def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_dir, main_config):
     all_metrics = []
+    # --- FIX: Create a lookup map for target display names ---
+    target_name_map = {t['id_name']: t.get('display_name', t['id_name']) for t in main_config.get('targets', [])}
+    
     pattern = os.path.join(cutoff_results_dir, "run_seed*", "results_cutoff_*", "*", "results", "*", "dim_*", "*", "*_ranking_metrics.csv")
     for metrics_file_path in glob.glob(pattern):
         try:
             path_parts = metrics_file_path.split(os.sep)
             run_dir_name = next(p for p in path_parts if p.startswith("run_seed"))
             cutoff_dir_name = next(p for p in path_parts if p.startswith("results_cutoff_"))
+            target_id_name = path_parts[path_parts.index(cutoff_dir_name) + 1]
+            
+            # --- FIX: Add Target_Name to the collected data ---
+            target_display_name = target_name_map.get(target_id_name, target_id_name)
+            
+            # (The rest of the parsing is correct)
             repr_type = path_parts[path_parts.index("results") + 1]
             strategy_dir = path_parts[path_parts.index(next(p for p in path_parts if p.startswith("dim_"))) + 1]
             seed = int(re.search(r"run_seed(\d+)", run_dir_name).group(1))
@@ -111,25 +120,24 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
             with open(run_config_path, 'r') as f: run_config = json.load(f)
             dr_method_key = list(run_config['dimensionality_reduction_methods'].keys())[0]
             dr_params = run_config['dimensionality_reduction_methods'][dr_method_key]
-            hyperparam_name, hyperparam_value = "N/A", "N/A"
-            if 'n_neighbors' in dr_params:
-                hyperparam_name = 'n_neighbors'; hyperparam_value = dr_params['n_neighbors']
-            elif 'perplexity' in dr_params:
-                hyperparam_name = 'perplexity'; hyperparam_value = dr_params['perplexity']
             embedding_strategy = "Projection"
             if "tsne" in dr_method_key: embedding_strategy = "Co-embedding (Native)"
             elif strategy_dir.endswith('_Coembed'): embedding_strategy = "Co-embedding"
+            
             df_m = pd.read_csv(metrics_file_path)
             if df_m.empty: continue
-            metric_row = {'Seed': seed, 'Affinity_Cutoff': cutoff_val, 'Representation': repr_type.capitalize(),
-                          'DR_Method': dr_params['short_name'], 'Embedding_Strategy': embedding_strategy,
-                          'Hyperparameter': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
-            column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
-            for csv_col, df_col in column_map.items():
-                metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m and pd.notna(df_m[csv_col].iloc[0]) else np.nan
+
+            metric_row = {
+                'Seed': seed, 'Affinity_Cutoff': cutoff_val,
+                'Target_Name': target_display_name, # <-- ADDED
+                'Representation': repr_type.capitalize(), 'DR_Method': dr_params['short_name'],
+                'Embedding_Strategy': embedding_strategy
+            }
+            for col in ['roc_auc', 'pr_auc', 'ef_1%']:
+                metric_row[col.upper()] = df_m[col].iloc[0] if col in df_m else np.nan
             all_metrics.append(metric_row)
         except Exception as e:
-            logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}", exc_info=True)
+            logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}")
     return pd.DataFrame(all_metrics)
 
 def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figures_dir, y_range=None):
@@ -153,17 +161,24 @@ def main():
     parser = argparse.ArgumentParser(description="Aggregate and analyze hyperparameter generalization results.")
     parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis_generalization/", help="Base directory of the generalization cutoff experiment results.")
     parser.add_argument("--original_workspace", default="experiment_workspace_generalization/", help="Directory containing the original generalization runs with their configs.")
+    parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment config file.")
     parser.add_argument("--output_report_dir", default="final_report_generalization/", help="Directory to save the final LaTeX report.")
     args = parser.parse_args()
 
     logging.info("--- STARTING HYPERPARAMETER GENERALIZATION ANALYSIS ---")
+    try:
+        with open(args.main_config_path, 'r') as f: main_config = json.load(f)
+    except Exception as e:
+        logging.error(f"Could not load main config file '{args.main_config_path}'. Aborting. Error: {e}")
+        return
+        
     report_run_id = f"generalization_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_output_abs_dir = os.path.join(args.output_report_dir, report_run_id)
     report_figures_abs_dir = os.path.join(report_output_abs_dir, "figures"); os.makedirs(report_figures_abs_dir, exist_ok=True)
     report_tables_abs_dir = os.path.join(report_output_abs_dir, "tables"); os.makedirs(report_tables_abs_dir, exist_ok=True)
     latex_content = [LATEX_DOCUMENT_PREAMBLE]
 
-    df_agg = collect_cutoff_experiment_metrics(args.base_experiment_dir, args.original_workspace) # This function is reusable
+    df_agg = collect_cutoff_experiment_metrics(args.base_experiment_dir, args.original_workspace, main_config)
     if df_agg.empty:
         logging.error("Failed to collect any metrics. Aborting."); return
     df_agg.to_csv(os.path.join(report_tables_abs_dir, "master_generalization_metrics_aggregated.csv"), index=False)
