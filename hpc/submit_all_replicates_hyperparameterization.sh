@@ -3,14 +3,14 @@
 # --- Configuration ---
 # Directory where the hyperparameter sweep config files are located.
 # This script will submit a job for every .json file in this directory.
-CONFIG_DIR="hyperparam_configs"
+CONFIG_DIR="generalization_configs" # "hyperparam_configs"
 
 # Define your 5 random seeds for the replicates.
-RANDOM_SEEDS=(42 43 44 45 46) # 43 44 45 46) 
+RANDOM_SEEDS=(42 43 44 45 46)
 
 # The name of your SLURM script template.
-# SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization.sh"
-SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization_cpu.sh"
+# SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization.sh" # GPU version
+SLURM_SCRIPT_TEMPLATE="hpc/ummbas_hyperparameterization_cpu.sh" # CPU version for larger memory
 
 # --- Pre-submission Checks ---
 
