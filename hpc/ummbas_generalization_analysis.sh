@@ -41,9 +41,9 @@ if [ ! -f "${ORCHESTRATOR_SCRIPT}" ]; then
 fi
 
 # --- Run the Orchestrator ---
-echo "Starting run_cutoff_analysis.py..."
+echo "Starting run_cutoff_analysis.py for generalization_analysis..."
 
-mkdir -p experiment_workspace_cutoff_analysis
+mkdir -p generalization_analysis
 
 python -u "${ORCHESTRATOR_SCRIPT}" --original_workspace experiment_workspace_generalization --output_workspace generalization_analysis/
 
