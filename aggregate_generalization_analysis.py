@@ -133,8 +133,9 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
                 'Representation': repr_type.capitalize(), 'DR_Method': dr_params['short_name'],
                 'Embedding_Strategy': embedding_strategy
             }
-            for col in ['roc_auc', 'pr_auc', 'ef_1%']:
-                metric_row[col.upper()] = df_m[col].iloc[0] if col in df_m else np.nan
+            column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
+            for csv_col, df_col in column_map.items():
+                metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m else np.nan
             all_metrics.append(metric_row)
         except Exception as e:
             logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}")
