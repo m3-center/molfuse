@@ -159,7 +159,7 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
 
 def main():
     parser = argparse.ArgumentParser(description="Aggregate and analyze hyperparameter generalization results.")
-    parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis_generalization/", help="Base directory of the generalization cutoff experiment results.")
+    parser.add_argument("--base_experiment_dir", default="generalization_analysis/", help="Base directory of the generalization cutoff experiment results.")
     parser.add_argument("--original_workspace", default="experiment_workspace_generalization/", help="Directory containing the original generalization runs with their configs.")
     parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment config file.")
     parser.add_argument("--output_report_dir", default="final_report_generalization/", help="Directory to save the final LaTeX report.")
