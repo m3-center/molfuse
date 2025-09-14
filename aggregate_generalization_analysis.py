@@ -154,7 +154,7 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
     g.set_titles("{col_name}")
     g.fig.subplots_adjust(top=0.92)
     fig_path = os.path.join(report_figures_dir, filename)
-    plt.savefig(fig_path, dpi=200); plt.close()
+    plt.savefig(fig_path, dpi=300); plt.close()
     caption = f"{title}. Lines show mean metric value over replicates, shaded areas are ±1 SD."
     return fig_path, caption
 
@@ -226,9 +226,9 @@ def main():
             plt.legend(title="Target")
             plt.tight_layout()
 
-            fig_filename = f"fig_generalization_{dr_method}_{strategy}_{metric}.png"
+            fig_filename = f"fig_generalization_{dr_method}_{strategy}_{metric}.pdf"
             fig_path = os.path.join(report_figures_abs_dir, fig_filename)
-            plt.savefig(fig_path, dpi=200); plt.close()
+            plt.savefig(fig_path, dpi=300); plt.close()
             
             caption = f"Performance trend for {dr_method} ({strategy}) across three targets. The hyperparameters used were optimized on ABL1 Kinase."
             add_figure_to_latex(latex_content, fig_path, caption, f"fig-gen-{dr_method}-{strategy}-{metric}")
