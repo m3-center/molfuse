@@ -184,6 +184,17 @@ def main():
         logging.error("Failed to collect any metrics. Aborting."); return
     df_agg.to_csv(os.path.join(report_tables_abs_dir, "master_generalization_metrics_aggregated.csv"), index=False)
     
+    y_ranges = {}
+    for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+        if metric in df_agg.columns and not df_agg[metric].isnull().all():
+            min_val = df_agg[metric].min()
+            max_val = df_agg[metric].max()
+            if pd.isna(min_val) or pd.isna(max_val): continue
+            padding = (max_val - min_val) * 0.1
+            final_min = max(0.01, min_val - padding) if metric == 'EF_1Perc' else min_val - padding
+            y_ranges[metric] = (final_min, max_val + padding)
+            logging.info(f"Calculated Y-axis range for {metric}: {y_ranges[metric]}")
+    
     # --- ANALYSIS SECTION ---
     latex_content.append(get_section_header_latex(1, "Analysis of Hyperparameter Generalization"))
     latex_content.append("The following plots compare the performance trends of models using hyperparameters optimized on ABL1 Kinase when applied to the original target and two new targets (PKM2, IDH1). Successful generalization is indicated if the performance curves for the new targets are similar to the ABL1 curve.")
@@ -207,6 +218,10 @@ def main():
             plt.ylabel(f"Mean {metric}")
             plt.xscale('log')
             if "EF" in metric: plt.yscale('log')
+            
+            if metric in y_ranges:
+                plt.ylim(y_ranges[metric])
+                
             plt.grid(True, linestyle='--')
             plt.legend(title="Target")
             plt.tight_layout()
