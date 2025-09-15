@@ -6,7 +6,6 @@ import logging
 import json
 import glob
 import matplotlib
-matplotlib.rcParams['text.usetex'] = True
 matplotlib.use('Agg') # Use non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -192,7 +191,7 @@ def main():
             max_val = df_agg[metric].max()
             if pd.isna(min_val) or pd.isna(max_val): continue
             padding = (max_val - min_val) * 0.1
-            final_min = max(0.01, min_val - padding) if metric == 'EF_1Perc' else min_val - padding
+            final_min = 1.0 if metric == 'EF_1Perc' else min_val - padding
             y_ranges[metric] = (final_min, max_val + padding)
             logging.info(f"Calculated Y-axis range for {metric}: {y_ranges[metric]}")
     
@@ -218,7 +217,7 @@ def main():
             plt.xlabel("Affinity Cutoff (nM)")
             plt.ylabel(f"Mean {metric}")
             plt.xscale('log')
-            if "EF" in metric: plt.yscale('log')
+            #if "EF" in metric: plt.yscale('log')
             
             if metric in y_ranges:
                 plt.ylim(y_ranges[metric])
