@@ -7,8 +7,8 @@ import copy
 BASE_CONFIG_FILE = "experiment_config.json"
 OUTPUT_DIR = "hyperparam_configs"
 SWEEP_WORKSPACE_DIR = "experiment_workspace_hyperparam_sweep/"
-SWEEP_REPORT_DIR = "final_report_hyperparam_sweep_pyruvate/"
-TARGET_FOR_SWEEP = "PyruvateKinaseM2_P14618" # "TyrosineProteinKinaseABL1_P00519"
+SWEEP_REPORT_DIR = "final_report_hyperparam_sweep_isocitrate/"
+TARGET_FOR_SWEEP = "IsocitrateDehydrogenaseNADP_O75874" # "PyruvateKinaseM2_P14618" # "TyrosineProteinKinaseABL1_P00519"
 
 # Static, fixed number of PCA components for pre-processing fingerprints
 # This is now a fixed part of the pipeline, not a hyperparameter to be swept.
