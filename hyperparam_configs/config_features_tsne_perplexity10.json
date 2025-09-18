@@ -81,7 +81,7 @@
   "dimensionality_reduction_methods": {
     "tsne": {
       "short_name": "t-SNE",
-      "perplexity": 250,
+      "perplexity": 10,
       "allow_coembedding": true
     }
   }

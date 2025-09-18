@@ -79,10 +79,11 @@
     "features"
   ],
   "dimensionality_reduction_methods": {
-    "tsne": {
-      "short_name": "t-SNE",
-      "perplexity": 500,
-      "allow_coembedding": true
+    "umap_euclidean": {
+      "short_name": "UMAP-Euclidean",
+      "metric": "euclidean",
+      "allow_coembedding": true,
+      "n_neighbors": 10
     }
   }
 }

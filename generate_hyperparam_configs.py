@@ -21,17 +21,18 @@ FIXED_DIMS = {
 
 HYPERPARAM_PLAN = {
     "features": {
-        "pca": {"sweep": False},
+        # "pca": {"sweep": False},
         "umap_euclidean": {
             "sweep": True,
             "param_name": "n_neighbors",
-            "values": [30, 50, 100, 150, 200, 250, 500]
+            "values": [5, 10, 20]
         } 
         ,
         "tsne": {
             "sweep": True,
             "param_name": "perplexity", # Now sweeping perplexity for features
-            "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+            # "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+            "values": [5, 10]
         }
     }
 }
