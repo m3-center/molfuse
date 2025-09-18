@@ -2,7 +2,7 @@
 #SBATCH --partition=any          # partition / wait queue
 #SBATCH --nodes=1                # number of nodes
 #SBATCH --ntasks-per-node=32      # number of tasks per node (8 is often a good number for data loading/Python overhead for a single GPU job)
-#SBATCH --mem=400G               # memory per node
+#SBATCH --mem=350G               # memory per node
 #SBATCH --time=0-08:00:00        # total runtime of job allocation 
 #SBATCH --exclude=wr43
 

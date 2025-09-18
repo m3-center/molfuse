@@ -183,7 +183,7 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
     g.set_titles("{col_name}")
     g.fig.subplots_adjust(top=0.92)
     fig_path = os.path.join(report_figures_dir, filename)
-    plt.savefig(fig_path, dpi=200); plt.close()
+    plt.savefig(fig_path, dpi=300); plt.close()
     caption = f"{title}. Lines show mean metric value over replicates, shaded areas are ±1 SD."
     return fig_path, caption
 
@@ -228,7 +228,7 @@ def main():
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
         fig_path, caption = create_performance_vs_cutoff_plot(df_agg, metric,
             f"Overall Mean {metric} vs. Affinity Cutoff",
-            f"perf_vs_cutoff_{metric.lower()}_overall_avg.png", report_figures_abs_dir,
+            f"perf_vs_cutoff_{metric.lower()}_overall_avg.pdf", report_figures_abs_dir,
             y_range=y_ranges.get(metric))
         if fig_path:
             add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-overall", figure_width="\\textwidth")
@@ -279,7 +279,7 @@ def main():
         for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
             fig_path, caption = create_performance_vs_cutoff_plot(df_filtered_for_trends, metric,
                 f"Optimal {metric} Performance vs. Affinity Cutoff",
-                f"perf_vs_cutoff_{metric.lower()}_best_params.png", report_figures_abs_dir,
+                f"perf_vs_cutoff_{metric.lower()}_best_params.pdf", report_figures_abs_dir,
                 y_range=y_ranges.get(metric))
             if fig_path:
                 add_figure_to_latex(latex_content, fig_path, caption, f"fig-{metric.lower()}-vs-cutoff-optimal", figure_width="\\textwidth")
