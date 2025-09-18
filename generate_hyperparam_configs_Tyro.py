@@ -7,8 +7,10 @@ import copy
 BASE_CONFIG_FILE = "experiment_config.json"
 OUTPUT_DIR = "hyperparam_configs"
 SWEEP_WORKSPACE_DIR = "experiment_workspace_hyperparam_sweep/"
-SWEEP_REPORT_DIR = "final_report_hyperparam_sweep_isocitrate/"
-TARGET_FOR_SWEEP = "IsocitrateDehydrogenaseNADP_O75874" # "PyruvateKinaseM2_P14618" # "TyrosineProteinKinaseABL1_P00519"
+SWEEP_REPORT_DIR = "final_report_hyperparam_sweep/"
+TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
+
+# --- NEW, CORRECTED HYPERPARAMETER PLAN ---
 
 # Static, fixed number of PCA components for pre-processing fingerprints
 # This is now a fixed part of the pipeline, not a hyperparameter to be swept.
@@ -20,18 +22,45 @@ FIXED_DIMS = {
 }
 
 HYPERPARAM_PLAN = {
-    "features": {
-        "pca": {"sweep": False},
+    # "features": {
+    #     "pca": {"sweep": False},
+    #     "umap_euclidean": {
+    #         "sweep": True,
+    #         "param_name": "n_neighbors",
+    #         "values": [30, 50, 100, 150, 200, 250, 500]
+    #     } 
+    #     ,
+    #     "tsne": {
+    #         "sweep": True,
+    #         "param_name": "perplexity", # Now sweeping perplexity for features
+    #         "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+    #     }
+    # },
+    "fingerprints": {
+        # "pca": {"sweep": False},
         "umap_euclidean": {
             "sweep": True,
             "param_name": "n_neighbors",
-            "values": [30, 50, 100, 150, 200, 250, 500]
-        } 
-        ,
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250, 500]
+        },
+        "umap_jaccard": {
+            "sweep": True,
+            "param_name": "n_neighbors",
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250, 500]
+        },
+        "umap_hamming": {
+            "sweep": True,
+            "param_name": "n_neighbors",
+            # "values": [30, 50, 100, 150]
+            "values": [200, 250, 500]
+        },
         "tsne": {
             "sweep": True,
-            "param_name": "perplexity", # Now sweeping perplexity for features
-            "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+            "param_name": "perplexity", # Now sweeping perplexity for fingerprints
+            # "values": [15, 30, 50, 100, 150, 200, 250, 500]
+            "values": [750, 1000, 1250, 1500]
         }
     }
 }

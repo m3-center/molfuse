@@ -3,7 +3,8 @@
 # --- Configuration ---
 # Directory where the hyperparameter sweep config files are located.
 # This script will submit a job for every .json file in this directory.
-CONFIG_DIR="generalization_configs" # "hyperparam_configs"
+CONFIG_DIR="hyperparam_configs"
+# "generalization_configs" # "hyperparam_configs"
 
 # Define your 5 random seeds for the replicates.
 RANDOM_SEEDS=(42 43 44 45 46)

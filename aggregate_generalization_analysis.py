@@ -133,8 +133,9 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
                 'Representation': repr_type.capitalize(), 'DR_Method': dr_params['short_name'],
                 'Embedding_Strategy': embedding_strategy
             }
-            for col in ['roc_auc', 'pr_auc', 'ef_1%']:
-                metric_row[col.upper()] = df_m[col].iloc[0] if col in df_m else np.nan
+            column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
+            for csv_col, df_col in column_map.items():
+                metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m else np.nan
             all_metrics.append(metric_row)
         except Exception as e:
             logging.warning(f"Failed to process metrics file {metrics_file_path}: {e}")
@@ -153,13 +154,13 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
     g.set_titles("{col_name}")
     g.fig.subplots_adjust(top=0.92)
     fig_path = os.path.join(report_figures_dir, filename)
-    plt.savefig(fig_path, dpi=200); plt.close()
+    plt.savefig(fig_path, dpi=300); plt.close()
     caption = f"{title}. Lines show mean metric value over replicates, shaded areas are ±1 SD."
     return fig_path, caption
 
 def main():
     parser = argparse.ArgumentParser(description="Aggregate and analyze hyperparameter generalization results.")
-    parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis_generalization/", help="Base directory of the generalization cutoff experiment results.")
+    parser.add_argument("--base_experiment_dir", default="generalization_analysis/", help="Base directory of the generalization cutoff experiment results.")
     parser.add_argument("--original_workspace", default="experiment_workspace_generalization/", help="Directory containing the original generalization runs with their configs.")
     parser.add_argument("--main_config_path", default="experiment_config.json", help="Path to the main experiment config file.")
     parser.add_argument("--output_report_dir", default="final_report_generalization/", help="Directory to save the final LaTeX report.")
@@ -183,6 +184,17 @@ def main():
         logging.error("Failed to collect any metrics. Aborting."); return
     df_agg.to_csv(os.path.join(report_tables_abs_dir, "master_generalization_metrics_aggregated.csv"), index=False)
     
+    y_ranges = {}
+    for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+        if metric in df_agg.columns and not df_agg[metric].isnull().all():
+            min_val = df_agg[metric].min()
+            max_val = df_agg[metric].max()
+            if pd.isna(min_val) or pd.isna(max_val): continue
+            padding = (max_val - min_val) * 0.1
+            final_min = 1.0 if metric == 'EF_1Perc' else min_val - padding
+            y_ranges[metric] = (final_min, max_val + padding)
+            logging.info(f"Calculated Y-axis range for {metric}: {y_ranges[metric]}")
+    
     # --- ANALYSIS SECTION ---
     latex_content.append(get_section_header_latex(1, "Analysis of Hyperparameter Generalization"))
     latex_content.append("The following plots compare the performance trends of models using hyperparameters optimized on ABL1 Kinase when applied to the original target and two new targets (PKM2, IDH1). Successful generalization is indicated if the performance curves for the new targets are similar to the ABL1 curve.")
@@ -205,14 +217,18 @@ def main():
             plt.xlabel("Affinity Cutoff (nM)")
             plt.ylabel(f"Mean {metric}")
             plt.xscale('log')
-            if "EF" in metric: plt.yscale('log')
+            #if "EF" in metric: plt.yscale('log')
+            
+            if metric in y_ranges:
+                plt.ylim(y_ranges[metric])
+                
             plt.grid(True, linestyle='--')
             plt.legend(title="Target")
             plt.tight_layout()
 
-            fig_filename = f"fig_generalization_{dr_method}_{strategy}_{metric}.png"
+            fig_filename = f"fig_generalization_{dr_method}_{strategy}_{metric}.pdf"
             fig_path = os.path.join(report_figures_abs_dir, fig_filename)
-            plt.savefig(fig_path, dpi=200); plt.close()
+            plt.savefig(fig_path, dpi=300); plt.close()
             
             caption = f"Performance trend for {dr_method} ({strategy}) across three targets. The hyperparameters used were optimized on ABL1 Kinase."
             add_figure_to_latex(latex_content, fig_path, caption, f"fig-gen-{dr_method}-{strategy}-{metric}")

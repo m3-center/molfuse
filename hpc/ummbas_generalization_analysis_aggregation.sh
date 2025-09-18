@@ -3,9 +3,9 @@
 #SBATCH --nodes=1                # number of nodes
 #SBATCH --ntasks-per-node=32      # number of tasks per node (8 is often a good number for data loading/Python overhead for a single GPU job)
 #SBATCH --mem=240G               # memory per node
-#SBATCH --time=3-00:00:00        # total runtime of job allocation 
+#SBATCH --time=0-08:00:00        # total runtime of job allocation 
 
-JOB_NAME="UMMBAS_Generalization_Analysis"
+JOB_NAME="UMMBAS_Generalization_Cutoff_Analysis"
 
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --output=slurm_logs/%x_%j.out    # %x is SLURM_JOB_NAME, %j is SLURM_JOB_ID
@@ -32,20 +32,20 @@ source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 # Assumes this template is in the project root with the other scripts.
 # Adjust SCRIPT_DIR if your project structure is different.
 SCRIPT_DIR=$(pwd) 
-ORCHESTRATOR_SCRIPT="${SCRIPT_DIR}/run_cutoff_analysis.py"
+ORCHESTRATOR_SCRIPT="${SCRIPT_DIR}/aggregate_generalization_analysis.py"
 
 # Check that required files exist
 if [ ! -f "${ORCHESTRATOR_SCRIPT}" ]; then
-    echo "ERROR: run_cutoff_analysis script not found at ${ORCHESTRATOR_SCRIPT}"
+    echo "ERROR: aggregate_generalization_analysis script not found at ${ORCHESTRATOR_SCRIPT}"
     exit 1
 fi
 
 # --- Run the Orchestrator ---
-echo "Starting run_cutoff_analysis.py for generalization_analysis..."
+echo "Starting aggregate_generalization_analysis.py..."
 
-mkdir -p generalization_analysis
+mkdir -p final_report_generalization
 
-python -u "${ORCHESTRATOR_SCRIPT}" --original_workspace experiment_workspace_generalization --output_workspace generalization_analysis/
+python -u "${ORCHESTRATOR_SCRIPT}"
 
 EXIT_CODE=$?
 echo "========================================================================"
