@@ -11,11 +11,10 @@ import argparse
 log_file_name = "orchestrator_uninitialized.log" 
 log_file_name_base = f"orchestrator_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-
-def setup_logging(log_base_name, seed, repr_mode):
-    """Sets up logging with seed and representation mode in filename."""
+def setup_logging(log_base_name, seed, config_name):
+    """Sets up logging with seed and config name in filename."""
     global log_file_name 
-    log_file_name = f"{log_base_name}_seed{seed}_repr{repr_mode}.log"
+    log_file_name = f"{log_base_name}_seed{seed}_{config_name}.log"
     
     root_logger = logging.getLogger()
     if root_logger.hasHandlers():
@@ -32,7 +31,6 @@ def setup_logging(log_base_name, seed, repr_mode):
         ]
     )
     logging.info(f"Logging setup complete. Log file: {log_file_name}")
-
 
 def run_command(command_list, step_name="Command", cwd=None):
     """Runs a command, logs its output in real-time, and checks for errors."""
@@ -99,12 +97,12 @@ def get_mf_keyword_id_from_keywords_csv(mf_keywords_csv_path, canonical_mf_name)
         logging.error(f"Error reading or searching {mf_keywords_csv_path} for {canonical_mf_name}: {e}")
     return None
 
-
-def main(config_path, representation_mode, random_seed_value):
-    setup_logging(log_file_name_base, random_seed_value, representation_mode)
+def main(config_path, random_seed_value):
+    config_basename = os.path.basename(config_path).replace('.json', '')
+    setup_logging(log_file_name_base, random_seed_value, config_basename)
 
     logging.info(f"========== STARTING UMMBAS SIMILARITY EXPERIMENT REPLICATE RUN ==========")
-    logging.info(f"Config: {config_path}, Representation Mode: {representation_mode}, Random Seed: {random_seed_value}")
+    logging.info(f"Config: {config_path}, Random Seed: {random_seed_value}")
     
     try:
         with open(config_path, 'r') as f:
@@ -117,10 +115,16 @@ def main(config_path, representation_mode, random_seed_value):
         return
 
     gs = config['global_settings']
-    affinity_cutoff = gs.get("affinity_cutoff_nM") # Can be None if not in config
+    affinity_cutoff = gs.get("affinity_cutoff_nM")
     workspace_base_dir = gs['workspace_base_dir']
     
-    run_specific_name = f"run_seed{random_seed_value}_repr{representation_mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # Determine representation mode directly from the config file
+    representation_mode = config.get("representations", [None])[0]
+    if not representation_mode:
+        logging.error("Representation mode not specified in the 'representations' list in the config file. Aborting.")
+        return
+    
+    run_specific_name = f"run_seed{random_seed_value}_{config_basename}"
     current_replicate_run_dir = os.path.join(workspace_base_dir, run_specific_name)
     try:
         os.makedirs(current_replicate_run_dir, exist_ok=True)
@@ -140,17 +144,9 @@ def main(config_path, representation_mode, random_seed_value):
     rdkit_features_list_target_json_str = json.dumps(gs.get('rdkit_features_list_target', []))
     run_coembedding_pca_umap_flag = gs.get('run_coembedding_for_pca_umap', False)
     dr_method_configs_json_str = json.dumps(config.get('dimensionality_reduction_methods', {}))
-
-    representations_to_process = []
-    if representation_mode == "features":
-        if "features" in config['representations']: representations_to_process.append("features")
-        else: logging.error("'features' not in config['representations']."); return
-    elif representation_mode == "fingerprints":
-        if "fingerprints" in config['representations']: representations_to_process.append("fingerprints")
-        else: logging.error("'fingerprints' not in config['representations']."); return
-    else: logging.error(f"Invalid representation_mode: {representation_mode}"); return
     
-    logging.info(f"This run will process representation(s): {representations_to_process}")
+    representations_to_process = [representation_mode]
+    logging.info(f"This run will process representation: {representations_to_process[0]}")
 
     for target_info in config['targets']:
         target_id_name = target_info['id_name']
@@ -232,8 +228,9 @@ def main(config_path, representation_mode, random_seed_value):
                 cmd_calc_simspace.append(f"--dr_method_tsne={str('tsne' in active_dr_methods_cfg)}")
                 if 'tsne' in active_dr_methods_cfg:
                     cmd_calc_simspace.extend([f"--tsne_perplexity={str(active_dr_methods_cfg['tsne']['perplexity'])}", 
-                                              f"--tsne_pca_components={str(gs['tsne_pca_components'])}"])
-                    if 'tsne_n_neighbors' in gs: cmd_calc_simspace.append(f"--n_neighbors={str(gs['tsne_n_neighbors'])}")
+                                              f"--tsne_pca_components={str(gs.get('tsne_pca_components', 50))}"]) # Use default if not present
+                if 'fingerprint_pca_components' in gs:
+                    cmd_calc_simspace.append(f"--fingerprint_pca_components={str(gs['fingerprint_pca_components'])}")
 
                 if not run_command(cmd_calc_simspace, f"Calc SimSpace ({repr_type}, dim{simspace_dim_val}) for {target_id_name}"):
                     logging.error(f"SimSpace calc failed. Skipping further analysis for this dim."); continue
@@ -248,15 +245,14 @@ def main(config_path, representation_mode, random_seed_value):
 
                     # --- PROJECTION STRATEGY RUN (PCA / UMAP Only) ---
                     for dr_key, dr_params_cfg in active_dr_methods_cfg.items():
-                        if dr_key == "tsne":
-                            continue # t-SNE is handled in the co-embedding block below
+                        if dr_key == "tsne": continue # t-SNE is handled separately
+                        if run_coembedding_pca_umap_flag: continue # This is a projection-only block
 
                         base_dr_short_name = dr_params_cfg["short_name"]
-                        proj_strat_label = "Projection"
-                        proj_output_leaf_name = base_dr_short_name
-                        logging.info(f"          --- ({proj_strat_label}) Analyzing DR: {proj_output_leaf_name} ---")
+                        proj_output_leaf_name = base_dr_short_name.replace('-', '_')
+                        logging.info(f"          --- (Projection) Analyzing DR: {base_dr_short_name} ---")
 
-                        results_out_dir_proj = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", proj_output_leaf_name.replace('-', '_'))
+                        results_out_dir_proj = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", proj_output_leaf_name)
                         os.makedirs(results_out_dir_proj, exist_ok=True)
                         
                         cmd_pa_proj = [ "python", "experimental_pipeline/project_and_analyze.py",
@@ -267,26 +263,24 @@ def main(config_path, representation_mode, random_seed_value):
                             "--target_id_name", target_id_name, "--representation_type", repr_type,
                             "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
                         
-                        if affinity_cutoff is not None:
-                            cmd_pa_proj.append(f"--affinity_cutoff={affinity_cutoff}")
+                        if affinity_cutoff is not None: cmd_pa_proj.append(f"--affinity_cutoff={affinity_cutoff}")
 
                         model_root_name = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}"
                         cmd_pa_proj.extend([f"--target_ligands_repr_path={os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else 'None')}",
                                             f"--model_dir_for_projection={os.path.abspath(models_output_dir_dim)}",
                                             f"--model_name_root_for_projection={model_root_name}"])
 
-                        if not run_command(cmd_pa_proj, f"Analyze ({proj_output_leaf_name}, {repr_type}, dim{simspace_dim_val})"):
-                            logging.error(f"Analysis failed for {proj_output_leaf_name}.")
+                        if not run_command(cmd_pa_proj, f"Analyze ({base_dr_short_name}, {repr_type}, dim{simspace_dim_val})"):
+                            logging.error(f"Analysis failed for {base_dr_short_name}.")
 
                     # --- CO-EMBEDDING STRATEGY RUN (for PCA/UMAP) ---
                     if run_coembedding_pca_umap_flag:
                         for dr_key, dr_params_cfg in active_dr_methods_cfg.items():
-                            if not (dr_params_cfg.get("allow_coembedding", False) and (dr_key.startswith("pca") or dr_key.startswith("umap"))):
-                                continue
+                            if not (dr_params_cfg.get("allow_coembedding", False) and (dr_key.startswith("pca") or dr_key.startswith("umap"))): continue
                             
                             base_dr_short_name = dr_params_cfg["short_name"]
-                            coembed_output_leaf_name = f"{base_dr_short_name}-Coembed"
-                            logging.info(f"          --- (CoEmbedding) Analyzing DR: {coembed_output_leaf_name} ---")
+                            coembed_output_leaf_name = f"{base_dr_short_name.replace('-', '_')}_Coembed"
+                            logging.info(f"          --- (CoEmbedding) Analyzing DR: {base_dr_short_name} ---")
 
                             metric = dr_params_cfg.get("metric", "")
                             coembed_space_filename = f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_{base_dr_short_name.replace('-', '_')}_similarity_space_COEMBED.csv"
@@ -295,11 +289,9 @@ def main(config_path, representation_mode, random_seed_value):
                             
                             simspace_csv_for_coembed_analysis = os.path.join(simspaces_output_dir_dim, coembed_space_filename)
 
-                            if not os.path.exists(simspace_csv_for_coembed_analysis):
-                                logging.warning(f"Co-embedded simspace file not found: {simspace_csv_for_coembed_analysis}. Skipping analysis.")
-                                continue
+                            if not os.path.exists(simspace_csv_for_coembed_analysis): continue
 
-                            results_out_dir_coembed = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", coembed_output_leaf_name.replace('-', '_'))
+                            results_out_dir_coembed = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", coembed_output_leaf_name)
                             os.makedirs(results_out_dir_coembed, exist_ok=True)
                             
                             cmd_pa_coembed = [ "python", "experimental_pipeline/project_and_analyze.py",
@@ -310,28 +302,20 @@ def main(config_path, representation_mode, random_seed_value):
                                 "--target_id_name", target_id_name, "--representation_type", repr_type,
                                 "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
                             
-                            if not run_command(cmd_pa_coembed, f"Analyze ({coembed_output_leaf_name}, {repr_type}, dim{simspace_dim_val})"):
-                                logging.error(f"Analysis failed for {coembed_output_leaf_name}.")
+                            if not run_command(cmd_pa_coembed, f"Analyze ({base_dr_short_name}-Coembed, {repr_type}, dim{simspace_dim_val})"):
+                                logging.error(f"Analysis failed for {base_dr_short_name}-Coembed.")
 
                     # --- DEDICATED T-SNE BLOCK (Always Co-Embedded) ---
                     if 'tsne' in active_dr_methods_cfg:
                         dr_key = 'tsne'
                         dr_params_cfg = active_dr_methods_cfg[dr_key]
                         base_dr_short_name = dr_params_cfg["short_name"]
-                        
-                        if simspace_dim_val != 2:
-                            logging.info("Skipping t-SNE analysis because similarity space dimension is not 2.")
-                        else:
+                        if simspace_dim_val == 2:
                             logging.info(f"          --- (CoEmbedding - Native) Analyzing DR: t-SNE ---")
-                            
                             simspace_csv_for_tsne = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_tSNE_similarity_space_COEMBED.csv")
-                            
-                            if not os.path.exists(simspace_csv_for_tsne):
-                                logging.error(f"t-SNE co-embedded simspace file not found: {simspace_csv_for_tsne}. Skipping analysis.")
-                            else:
+                            if os.path.exists(simspace_csv_for_tsne):
                                 results_out_dir_tsne = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", base_dr_short_name.replace('-', '_'))
                                 os.makedirs(results_out_dir_tsne, exist_ok=True)
-                                
                                 cmd_pa_tsne = [ "python", "experimental_pipeline/project_and_analyze.py",
                                     "--simspace_csv_path", os.path.abspath(simspace_csv_for_tsne),
                                     "--dr_method_key", dr_key, "--dr_short_name", base_dr_short_name,
@@ -339,7 +323,6 @@ def main(config_path, representation_mode, random_seed_value):
                                     "--output_dir", os.path.abspath(results_out_dir_tsne),
                                     "--target_id_name", target_id_name, "--representation_type", repr_type,
                                     "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
-
                                 if not run_command(cmd_pa_tsne, f"Analyze (t-SNE, {repr_type}, dim{simspace_dim_val})"):
                                     logging.error(f"Analysis failed for t-SNE.")
                     
@@ -357,13 +340,12 @@ def main(config_path, representation_mode, random_seed_value):
                         if not run_command(cmd_rz, f"Rank ZINC ({dr_short_name_rank}, {repr_type}, dim{simspace_dim_val})"):
                            logging.error(f"ZINC Ranking failed for {dr_short_name_rank}.")
     
-    logging.info(f"========== UMMBAS SIMILARITY EXPERIMENT REPLICATE RUN FINISHED (Seed: {random_seed_value}, Repr: {representation_mode}) ==========")
+    logging.info(f"========== UMMBAS SIMILARITY EXPERIMENT REPLICATE RUN FINISHED ==========")
     logging.info(f"Log file for this replicate run: {log_file_name}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Main orchestrator for a single replicate of UMMBAS experiments.")
-    parser.add_argument("--config", default="experiment_config.json", help="Path to experiment config JSON.")
-    parser.add_argument("--representation_mode", required=True, choices=["features", "fingerprints"], help="Process 'features' or 'fingerprints'.")
+    parser.add_argument("--config", required=True, help="Path to experiment config JSON.")
     parser.add_argument("--random_seed", required=True, type=int, help="Random seed for this replicate.")
     args = parser.parse_args()
-    main(config_path=args.config, representation_mode=args.representation_mode, random_seed_value=args.random_seed)
+    main(config_path=args.config, random_seed_value=args.random_seed)

@@ -139,7 +139,7 @@ def find_all_replicate_runs(base_experiment_dir):
     return sorted(replicate_dirs)
 
 def collect_metrics_from_replicates(replicate_run_dirs):
-    all_metrics_data = []
+    all_metrics = []
     for rep_dir_path in replicate_run_dirs:
         run_config_path = os.path.join(rep_dir_path, "run_config.json")
         if not os.path.exists(run_config_path): continue
@@ -152,11 +152,19 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         dr_method_key = list(run_config['dimensionality_reduction_methods'].keys())[0]
         dr_params = run_config['dimensionality_reduction_methods'][dr_method_key]
         dr_short_name = dr_params['short_name']
-        hyperparam_name, hyperparam_value = "N/A", "N/A"
+
+        hyperparam_name = "N/A"
+        n_neighbors_val, min_dist_val, perplexity_val = "N/A", "N/A", "N/A"
+        
         if 'n_neighbors' in dr_params:
-            hyperparam_name = 'n_neighbors'; hyperparam_value = dr_params['n_neighbors']
+            hyperparam_name = 'n_neighbors_vs_min_dist'
+            n_neighbors_val = dr_params.get('n_neighbors')
+            min_dist_val = dr_params.get('min_dist')
         elif 'perplexity' in dr_params:
-            hyperparam_name = 'perplexity'; hyperparam_value = dr_params['perplexity']
+            hyperparam_name = 'perplexity'
+            perplexity_val = dr_params.get('perplexity')
+
+
         target_id_name = run_config['targets'][0]['id_name']
         metrics_pattern = os.path.join(rep_dir_path, target_id_name, "results", repr_type, "dim_*", "*", "*_ranking_metrics.csv")
         for metrics_file_path in glob.glob(metrics_pattern):
@@ -169,18 +177,23 @@ def collect_metrics_from_replicates(replicate_run_dirs):
                     embedding_strategy = "Co-embedding"
                 df_m = pd.read_csv(metrics_file_path)
                 if df_m.empty: continue
-                metric_row = {'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
-                              'Embedding_Strategy': embedding_strategy,
-                              'Hyperparameter': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
+                metric_row = {
+                    'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
+                    'Embedding_Strategy': embedding_strategy,
+                    'Hyperparameter_Swept': hyperparam_name,
+                    'n_neighbors': n_neighbors_val,
+                    'min_dist': min_dist_val,
+                    'perplexity': perplexity_val
+                }
                 column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
                 for csv_col, df_col in column_map.items():
                     metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m else np.nan
-                all_metrics_data.append(metric_row)
+                all_metrics.append(metric_row)
             except Exception as e:
                 logging.error(f"Error reading metrics from {metrics_file_path}: {e}")
-    if not all_metrics_data:
+    if not all_metrics:
         logging.error("No metric data was collected."); return pd.DataFrame()
-    return pd.DataFrame(all_metrics_data)
+    return pd.DataFrame(all_metrics)
 
 def main_report_generation():
     parser = argparse.ArgumentParser(description="Analyze hyperparameter sweep results and generate a LaTeX report.")
@@ -224,16 +237,16 @@ def main_report_generation():
     # --- SECTION 1: DETAILED SWEEP ANALYSIS ---
     latex_content.append(get_section_header_latex_standalone(1, 'Detailed Hyperparameter Sweep Analysis'))
     
-    unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
+    unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter_Swept']].drop_duplicates().to_records(index=False)
 
-    for method, strategy, hyperparam_name in unique_experiments:
+    for method, strategy, hyperparam_swept in unique_experiments:
         df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
         if df_exp.empty: continue
         
         latex_content.append(f"\\clearpage\n{get_section_header_latex_standalone(2, f'Analysis for {method} - Strategy: {strategy}')}")
         
-        if hyperparam_name != 'N/A':
-            latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_name}'))
+        if hyperparam_swept == 'perplexity':
+            latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_swept}'))
             for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
                 if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
                 plt.figure(figsize=(8, 6))
@@ -248,6 +261,25 @@ def main_report_generation():
                 fig_filename = f"fig_{clean_for_label(method)}_{clean_for_label(strategy)}_{hyperparam_name}_{metric_col}.png"
                 fig_path = os.path.join(report_figures_abs_dir, fig_filename)
                 plt.savefig(fig_path); plt.close()
+                add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
+            
+        elif hyperparam_swept == 'n_neighbors_vs_min_dist': # Handle UMAP heatmaps
+            latex_content.append(get_section_header_latex_standalone(3, 'Sweeping: n_neighbors and min_dist'))
+            for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+                if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
+                
+                pivot_table = df_exp.groupby(['n_neighbors', 'min_dist'])[metric_col].mean().reset_index()
+                pivot_table = pivot_table.pivot(index='min_dist', columns='n_neighbors', values=metric_col)
+                
+                plt.figure(figsize=(10, 6))
+                sns.heatmap(pivot_table, annot=True, fmt=".3f", cmap="viridis", linewidths=.5)
+                
+                title = f'Mean {metric_col} for {method} ({strategy})'
+                plt.title(title); plt.xlabel("n_neighbors"); plt.ylabel("min_dist"); plt.tight_layout()
+
+                fig_filename = f"fig_heatmap_{clean_for_label(method)}_{clean_for_label(strategy)}_{metric_col}.png"
+                fig_path = os.path.join(report_figures_abs_dir, fig_filename)
+                plt.savefig(fig_path, dpi=200); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
         
         summary_table = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()

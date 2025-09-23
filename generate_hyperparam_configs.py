@@ -21,7 +21,7 @@ UMAP_MIN_DIST_VALUES = [0.1, 0.25, 0.5]
 def generate_configs():
     """
     Generates JSON configuration files for a comprehensive hyperparameter sweep,
-    including a grid search for UMAP.
+    including a grid search for UMAP. Now controls strategy via a flag in the config.
     """
     print("--- Starting NEW Hyperparameter Config Generation ---")
     
@@ -42,7 +42,7 @@ def generate_configs():
     for repr_type in ["features", "fingerprints"]:
         print(f"\n--- Generating configs for '{repr_type}' representation ---")
 
-        # --- Generate PCA Configs (one for each strategy) ---
+        # --- Generate PCA Configs ---
         for strategy in ["projection", "coembedding"]:
             new_config = copy.deepcopy(base_config)
             new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
@@ -54,7 +54,6 @@ def generate_configs():
             if repr_type == "fingerprints":
                 new_config["global_settings"]["fingerprint_pca_components"] = FIXED_FINGERPRINT_PCA_COMPONENTS
             
-            # Use run_coembedding flag to control the strategy
             new_config["global_settings"]["run_coembedding_for_pca_umap"] = (strategy == "coembedding")
 
             filename = f"config_{repr_type}_pca_{strategy}.json"
@@ -83,8 +82,7 @@ def generate_configs():
             
         # --- Generate UMAP Configs (Grid Search) ---
         umap_methods = ["umap_euclidean"]
-        if repr_type == "fingerprints":
-            umap_methods.extend(["umap_jaccard", "umap_hamming"])
+        if repr_type == "fingerprints": umap_methods.extend(["umap_jaccard", "umap_hamming"])
 
         for umap_key in umap_methods:
             for n_neighbors in UMAP_N_NEIGHBORS_VALUES:
