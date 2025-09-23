@@ -25,15 +25,16 @@ HYPERPARAM_PLAN = {
         "umap_euclidean": {
             "sweep": True,
             "param_name": "n_neighbors",
-            "values": [5, 10, 20]
+            "values": [2, 3, 4]
+            # "values": [5, 10, 20]
         } 
-        ,
-        "tsne": {
-            "sweep": True,
-            "param_name": "perplexity", # Now sweeping perplexity for features
-            # "values": [15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
-            "values": [5, 10]
-        }
+        # ,
+        # "tsne": {
+        #     "sweep": True,
+        #     "param_name": "perplexity", # Now sweeping perplexity for features
+        #     # "values": [5, 10, 15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+        #     "values": [5, 10]
+        # }
     }
 }
 
