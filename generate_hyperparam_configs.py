@@ -2,44 +2,28 @@ import json
 import os
 import copy
 
-# --- Configuration for the Sweep ---
+# --- Configuration for the NEW Hyperparameter Sweep ---
 
 BASE_CONFIG_FILE = "experiment_config.json"
 OUTPUT_DIR = "hyperparam_configs"
-SWEEP_WORKSPACE_DIR = "experiment_workspace_hyperparam_sweep/"
-SWEEP_REPORT_DIR = "final_report_hyperparam_sweep_isocitrate/"
-TARGET_FOR_SWEEP = "IsocitrateDehydrogenaseNADP_O75874" # "PyruvateKinaseM2_P14618" # "TyrosineProteinKinaseABL1_P00519"
+SWEEP_WORKSPACE_DIR = "experiment_workspace_rerun_hyperparam_sweep/"
+SWEEP_REPORT_DIR = "final_report_rerun_hyperparam_sweep/"
+TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 
-# Static, fixed number of PCA components for pre-processing fingerprints
-# This is now a fixed part of the pipeline, not a hyperparameter to be swept.
-FIXED_FINGERPRINT_PCA_COMPONENTS = 50
+# --- NEW, COMPREHENSIVE HYPERPARAMETER DEFINITIONS ---
+FIXED_SIMSPACE_DIM = 2
+FIXED_FINGERPRINT_PCA_COMPONENTS = 325
 
-FIXED_DIMS = {
-    "features": [2],
-    "fingerprints": [2]
-}
-
-HYPERPARAM_PLAN = {
-    "features": {
-        # "pca": {"sweep": False},
-        "umap_euclidean": {
-            "sweep": True,
-            "param_name": "n_neighbors",
-            "values": [2, 3, 4]
-            # "values": [5, 10, 20]
-        } 
-        # ,
-        # "tsne": {
-        #     "sweep": True,
-        #     "param_name": "perplexity", # Now sweeping perplexity for features
-        #     # "values": [5, 10, 15, 30, 50, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
-        #     "values": [5, 10]
-        # }
-    }
-}
+TSNE_PERPLEXITY_VALUES = [15, 30, 50, 100, 500, 1000]
+UMAP_N_NEIGHBORS_VALUES = [10, 50, 100, 500]
+UMAP_MIN_DIST_VALUES = [0.1, 0.25, 0.5]
 
 def generate_configs():
-    print("--- Starting Hyperparameter Config Generation ---")
+    """
+    Generates JSON configuration files for a comprehensive hyperparameter sweep,
+    including a grid search for UMAP.
+    """
+    print("--- Starting NEW Hyperparameter Config Generation ---")
     
     try:
         with open(BASE_CONFIG_FILE, 'r') as f:
@@ -49,54 +33,84 @@ def generate_configs():
         return
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
     target_config = next((t for t in base_config.get("targets", []) if t.get("id_name") == TARGET_FOR_SWEEP), None)
     if not target_config:
         print(f"ERROR: Target '{TARGET_FOR_SWEEP}' not found. Aborting.")
         return
 
-    for repr_type, methods in HYPERPARAM_PLAN.items():
+    for repr_type in ["features", "fingerprints"]:
         print(f"\n--- Generating configs for '{repr_type}' representation ---")
-        
-        for dr_method_key, plan in methods.items():
-            values_to_iterate = plan.get("values", [None]) if plan["sweep"] else [None]
-            param_name = plan.get("param_name")
 
-            for value in values_to_iterate:
-                new_config = copy.deepcopy(base_config)
+        # --- Generate PCA Configs (one for each strategy) ---
+        for strategy in ["projection", "coembedding"]:
+            new_config = copy.deepcopy(base_config)
+            new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
+            new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+            new_config["global_settings"]["simspace_dims_to_test"] = [FIXED_SIMSPACE_DIM]
+            new_config["representations"] = [repr_type]
+            new_config["targets"] = [target_config]
+            new_config["dimensionality_reduction_methods"] = {"pca": base_config["dimensionality_reduction_methods"]["pca"]}
+            if repr_type == "fingerprints":
+                new_config["global_settings"]["fingerprint_pca_components"] = FIXED_FINGERPRINT_PCA_COMPONENTS
+            
+            # Use run_coembedding flag to control the strategy
+            new_config["global_settings"]["run_coembedding_for_pca_umap"] = (strategy == "coembedding")
 
-                # Set Global, Representation, and Target settings
-                new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
-                new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
-                new_config["global_settings"]["simspace_dims_to_test"] = FIXED_DIMS[repr_type]
-                new_config["representations"] = [repr_type]
-                new_config["targets"] = [target_config]
-                
-                # If it's a fingerprint run, add the fixed PCA components setting
-                if repr_type == "fingerprints":
-                    new_config["global_settings"]["fingerprint_pca_components"] = FIXED_FINGERPRINT_PCA_COMPONENTS
+            filename = f"config_{repr_type}_pca_{strategy}.json"
+            filepath = os.path.join(OUTPUT_DIR, filename)
+            with open(filepath, 'w') as f: json.dump(new_config, f, indent=2)
+            print(f"  -> Saved {strategy} config to {filepath}")
 
-                # Configure the specific DR method
-                original_dr_method = copy.deepcopy(base_config["dimensionality_reduction_methods"][dr_method_key])
-                new_config["dimensionality_reduction_methods"] = { dr_method_key: original_dr_method }
-                
-                filename_suffix = ""
-                if plan["sweep"]:
-                    print(f"  Creating config for: {dr_method_key}, {param_name}={value}")
-                    filename_suffix = f"_{param_name.replace('_', '')}{value}"
-                    
-                    # Apply the hyperparameter being swept to the correct location
-                    if param_name in ["n_neighbors", "perplexity"]:
-                        new_config["dimensionality_reduction_methods"][dr_method_key][param_name] = value
-                else:
-                    print(f"  Creating single config for: {dr_method_key}")
+        # --- Generate t-SNE Configs ---
+        for perplexity in TSNE_PERPLEXITY_VALUES:
+            new_config = copy.deepcopy(base_config)
+            new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
+            new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+            new_config["global_settings"]["simspace_dims_to_test"] = [FIXED_SIMSPACE_DIM]
+            new_config["representations"] = [repr_type]
+            new_config["targets"] = [target_config]
+            tsne_cfg = copy.deepcopy(base_config["dimensionality_reduction_methods"]["tsne"])
+            tsne_cfg["perplexity"] = perplexity
+            new_config["dimensionality_reduction_methods"] = {"tsne": tsne_cfg}
+            if repr_type == "fingerprints":
+                new_config["global_settings"]["fingerprint_pca_components"] = FIXED_FINGERPRINT_PCA_COMPONENTS
 
-                filename = f"config_{repr_type}_{dr_method_key}{filename_suffix}.json"
-                filepath = os.path.join(OUTPUT_DIR, filename)
-                with open(filepath, 'w') as f:
-                    json.dump(new_config, f, indent=2)
-                print(f"    -> Saved to {filepath}")
+            filename = f"config_{repr_type}_tsne_perplexity{perplexity}.json"
+            filepath = os.path.join(OUTPUT_DIR, filename)
+            with open(filepath, 'w') as f: json.dump(new_config, f, indent=2)
+            print(f"  -> Saved config to {filepath}")
+            
+        # --- Generate UMAP Configs (Grid Search) ---
+        umap_methods = ["umap_euclidean"]
+        if repr_type == "fingerprints":
+            umap_methods.extend(["umap_jaccard", "umap_hamming"])
 
-    print("\n--- Hyperparameter configuration generation complete! ---")
+        for umap_key in umap_methods:
+            for n_neighbors in UMAP_N_NEIGHBORS_VALUES:
+                for min_dist in UMAP_MIN_DIST_VALUES:
+                    for strategy in ["projection", "coembedding"]:
+                        new_config = copy.deepcopy(base_config)
+                        new_config["global_settings"]["workspace_base_dir"] = SWEEP_WORKSPACE_DIR
+                        new_config["global_settings"]["final_report_dir"] = SWEEP_REPORT_DIR
+                        new_config["global_settings"]["simspace_dims_to_test"] = [FIXED_SIMSPACE_DIM]
+                        new_config["representations"] = [repr_type]
+                        new_config["targets"] = [target_config]
+                        umap_cfg = copy.deepcopy(base_config["dimensionality_reduction_methods"][umap_key])
+                        umap_cfg["n_neighbors"] = n_neighbors
+                        umap_cfg["min_dist"] = min_dist
+                        new_config["dimensionality_reduction_methods"] = {umap_key: umap_cfg}
+                        if repr_type == "fingerprints":
+                            new_config["global_settings"]["fingerprint_pca_components"] = FIXED_FINGERPRINT_PCA_COMPONENTS
+                        
+                        new_config["global_settings"]["run_coembedding_for_pca_umap"] = (strategy == "coembedding")
+
+                        filename = f"config_{repr_type}_{umap_key}_{strategy}_nn{n_neighbors}_md{min_dist}.json"
+                        filepath = os.path.join(OUTPUT_DIR, filename)
+                        with open(filepath, 'w') as f: json.dump(new_config, f, indent=2)
+                        print(f"  -> Saved {strategy} config to {filepath}")
+
+    print("\n--- RERUN Hyperparameter configuration generation complete! ---")
 
 if __name__ == "__main__":
     generate_configs()

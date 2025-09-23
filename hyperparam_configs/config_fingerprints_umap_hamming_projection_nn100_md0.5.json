@@ -1,0 +1,91 @@
+{
+  "global_settings": {
+    "chembl_db_path": "datasets/chembl/chembl_35.db",
+    "chembl_affinity_full_csv_path": "datasets/chembl/chembl_35_affinity_data.csv",
+    "chembl_target_mapping_csv_path": "datasets/chembl/chembl_35_target_mapping.csv",
+    "zinc_full_csv_path": "datasets/zinc_data.csv",
+    "molecular_function_keywords_csv_path": "datasets/protein_collection/molecular_function_keywords.csv",
+    "precalculated_chembl_mf_features_base_dir": "datasets/molecular_function_features_fingerprints/",
+    "precalculated_chembl_mf_fingerprints_base_dir": "datasets/molecular_function_features_fingerprints/",
+    "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
+    "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
+    "simspace_dims_to_test": [
+      2
+    ],
+    "k_for_knn_distance": [
+      3,
+      5
+    ],
+    "tsne_pca_components": 50,
+    "affinity_cutoff_nM": 100000,
+    "workspace_base_dir": "experiment_workspace_rerun_hyperparam_sweep/",
+    "final_report_dir": "final_report_rerun_hyperparam_sweep/",
+    "n_jobs_molcalcs": -1,
+    "rdkit_features_list_target": [
+      "DipoleMoment",
+      "ABC",
+      "nAcid",
+      "nBase",
+      "nAromAtom",
+      "nAtom",
+      "nH",
+      "nC",
+      "nN",
+      "nO",
+      "nS",
+      "nP",
+      "nX",
+      "nBonds",
+      "nBondsO",
+      "nBondsS",
+      "nBondsD",
+      "nBondsT",
+      "nBondsA",
+      "nBondsM",
+      "nBondsKS",
+      "nBondsKD",
+      "EState_VSA7",
+      "nHBAcc",
+      "nHBDon",
+      "Lipinski",
+      "apol",
+      "bpol",
+      "nRing",
+      "n3Ring",
+      "n4Ring",
+      "n5Ring",
+      "n6Ring",
+      "n7Ring",
+      "n8Ring",
+      "nRot",
+      "Diameter",
+      "TopoShapeIndex",
+      "Vabc",
+      "MW"
+    ],
+    "run_coembedding_for_pca_umap": false,
+    "fingerprint_pca_components": 325
+  },
+  "targets": [
+    {
+      "id_name": "TyrosineProteinKinaseABL1_P00519",
+      "display_name": "Tyrosine-protein Kinase ABL1",
+      "uniprot_id": "P00519",
+      "molecular_function_canonical_name": "Protein kinase inhibitor",
+      "molecular_function_filename_segment": "Protein_kinase_inhibitor",
+      "molecular_function_display_name": "Protein kinase inhibitor"
+    }
+  ],
+  "representations": [
+    "fingerprints"
+  ],
+  "dimensionality_reduction_methods": {
+    "umap_hamming": {
+      "short_name": "UMAP-Hamming",
+      "metric": "hamming",
+      "allow_coembedding": true,
+      "n_neighbors": 100,
+      "min_dist": 0.5
+    }
+  }
+}
