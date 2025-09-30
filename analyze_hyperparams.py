@@ -233,7 +233,7 @@ def main_report_generation():
     y_ranges = {}
     for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
         if metric in df_agg.columns and not df_agg[metric].isnull().all():
-            grouped = df_agg.groupby(['Method', 'Embedding_Strategy', 'Hyperparameter_Value'])[metric]
+            grouped = df_agg.groupby(['Method', 'Embedding_Strategy', 'Hyperparameter_Swept'])[metric]
             means = grouped.mean()
             stds = grouped.std().fillna(0)
             min_val = (means - stds).min()
@@ -318,13 +318,13 @@ def main_report_generation():
         optimal_replicate_dfs_for_metric = []
         logging.info(f"--- Identifying optimal hyperparameters based on MEAN {metric} ---")
         
-        unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter']].drop_duplicates().to_records(index=False)
-        for method, strategy, hyperparam_name in unique_experiments:
+        unique_experiments = df_agg[['Method', 'Embedding_Strategy', 'Hyperparameter_Swept']].drop_duplicates().to_records(index=False)
+        for method, strategy, hyperparam_swept in unique_experiments:
             df_exp = df_agg[(df_agg['Method'] == method) & (df_agg['Embedding_Strategy'] == strategy)].copy()
             if df_exp.empty: continue
             
             optimal_value = "N/A"
-            if hyperparam_name != 'N/A':
+            if hyperparam_swept != 'N/A':
                 mean_perf_table = df_exp.groupby('Hyperparameter_Value')[metric].mean().reset_index()
                 if not mean_perf_table.empty and not mean_perf_table[metric].isnull().all():
                     optimal_value = mean_perf_table.loc[mean_perf_table[metric].idxmax()]['Hyperparameter_Value']
@@ -360,7 +360,6 @@ def main_report_generation():
         plt.figure(figsize=(12, 8))
         ax = sns.barplot(data=plot_data, x=median_col, y='Method', hue='Embedding_Strategy', palette='viridis', dodge=True)
         
-        # --- START OF DEFINITIVE FIX for Error Bars ---
         error_map = { (row['Method'], row['Embedding_Strategy']): (row[median_col] - row[p05_col], row[p95_col] - row[median_col]) for _, row in plot_data.iterrows() }
         
         # This new logic iterates through the bars and their containers robustly
@@ -379,7 +378,6 @@ def main_report_generation():
                     x_pos = bar.get_x() + bar.get_width()
                     y_pos = bar.get_y() + bar.get_height() / 2.0
                     ax.errorbar(x=[x_pos], y=[y_pos], xerr=[[err[0]], [err[1]]], fmt='none', c='black', capsize=4)
-        # --- END OF DEFINITIVE FIX ---
 
         plt.xlabel(f'Median {metric} (90% CI)'); plt.ylabel('Method (Representation)')
         plt.title(f'Peak Performance After Tuning (Optimized for {metric})')
