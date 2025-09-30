@@ -242,7 +242,7 @@ def run_tsne(X_pre_reduced, df_info, X_target_pre_reduced, df_target_info, confi
 
 
 def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_paths, use_gpu):
-    logger.info(f"--- Running UMAP for metric: {metric} ---")
+    logger.info(f"--- Running UMAP for metric: {metric} with configuration: {config} ---")
     if config['repr_type'] == "features":
         logger.info(f"UMAP ({metric}) on features: using SCALED data.")
         X_main, X_target = X_dict['scaled'], X_dict['target_scaled']
@@ -423,10 +423,19 @@ def main():
         for metric in active_metrics:
             umap_params = dr_configs.get(f"umap_{metric}", {})
             n_neighbors = umap_params.get('n_neighbors', 15)
-            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {'n_components': args.simspace_dim, 'metric': metric,
-                                                                                                                                        'random_state': args.random_state, 'n_neighbors': n_neighbors}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors}}
+            min_dist = umap_params.get('min_dist', 0.1) # Get min_dist, with a default
+            logger.info(f"Preparing UMAP run for metric '{metric}' with n_neighbors={n_neighbors} and min_dist={min_dist}")
+
+            sklearn_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist}
+            cuml_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'metric': metric}
+
+            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap,
+                           'cuml_params': cuml_params, 'sklearn_params': sklearn_params}
+
+
             out_paths = {'dr_cols': [f'UMAP-{metric.capitalize()}-{i+1}' for i in range(args.simspace_dim)], 'projection_model': os.path.join(args.output_model_dir,
                                                                                                                                               f"{base_name}_{metric}_UMAP_model.lzma"), 'coembed_space': os.path.join(args.output_simspace_dir, f"{base_name}_{metric}_UMAP_similarity_space_COEMBED.csv")}
+            
             umap_coords = run_umap_for_metric(
                 metric, X_data_dict, df_info, df_target, umap_config, out_paths, GPU_ENABLED)
             df_results = df_results.join(umap_coords)
