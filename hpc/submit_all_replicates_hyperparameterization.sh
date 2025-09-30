@@ -55,7 +55,7 @@ for config_file in "${CONFIG_DIR}"/*.json; do
             echo "ERROR: Failed to submit job for Config=${config_file}, Seed=${seed}"
         fi
         
-        sleep 1
+        # sleep 1
     done
 done
 

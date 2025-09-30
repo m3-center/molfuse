@@ -45,7 +45,7 @@ fi
 # --- Run the Orchestrator ---
 echo "Starting analyze_pca_variance.py..."
 
-python -u "${ORCHESTRATOR_SCRIPT}" --chembl_mf_data_path /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace_hyperparam_sweep/tyro/run_seed42_reprfingerprints_20250826_131440/TyrosineProteinKinaseABL1_P00519/temp_data/TyrosineProteinKinaseABL1_P00519_chembl_mf_excluded_fingerprints.csv   --zinc_data_path /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace_hyperparam_sweep/tyro/run_seed42_reprfingerprints_20250826_131440/TyrosineProteinKinaseABL1_P00519/temp_data/TyrosineProteinKinaseABL1_P00519_zinc_excluded_fingerprints.csv --output_plot_path explained_variance_fingerprints.png --max_components 250
+python -u "${ORCHESTRATOR_SCRIPT}" --chembl_mf_data_path /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace_hyperparam_sweep/tyro/run_seed42_reprfingerprints_20250826_131440/TyrosineProteinKinaseABL1_P00519/temp_data/TyrosineProteinKinaseABL1_P00519_chembl_mf_excluded_fingerprints.csv   --zinc_data_path /home/ahagg2s/UMMBAS_screening_experiments/experiment_workspace_hyperparam_sweep/tyro/run_seed42_reprfingerprints_20250826_131440/TyrosineProteinKinaseABL1_P00519/temp_data/TyrosineProteinKinaseABL1_P00519_zinc_excluded_fingerprints.csv --output_plot_path explained_variance_fingerprints.png --max_components 1000
 
 
 EXIT_CODE=$?
