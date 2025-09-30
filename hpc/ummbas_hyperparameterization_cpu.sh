@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=any
+#SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
 #SBATCH --mem=180G
