@@ -257,15 +257,16 @@ def main_report_generation():
             for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
                 if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
                 plt.figure(figsize=(8, 6))
-                summary = df_exp.groupby('Hyperparameter_Value')[metric_col].agg(['mean', 'std']).reset_index().fillna(0).sort_values(by='Hyperparameter_Value')
-                plt.plot(summary['Hyperparameter_Value'], summary['mean'], marker='o', linestyle='-')
-                plt.fill_between(summary['Hyperparameter_Value'], summary['mean'] - summary['std'], summary['mean'] + summary['std'], alpha=0.2, label=f"$\\pm$1 SD")
-                title = f'{metric_col} vs. {hyperparam_name} for {method} ({strategy})'
-                plt.xlabel(hyperparam_name); plt.ylabel(f"Mean {metric_col}")
+                summary = df_exp.groupby('perplexity')[metric_col].agg(['mean', 'std']).reset_index().fillna(0).sort_values(by='perplexity')
+                plt.plot(summary['perplexity'], summary['mean'], marker='o', linestyle='-')
+                plt.fill_between(summary['perplexity'], summary['mean'] - summary['std'], summary['mean'] + summary['std'], alpha=0.2, label=f"$\\pm$1 SD")
+                
+                title = f'{metric_col} vs. {hyperparam_swept} for {method} ({strategy})' # Use hyperparam_swept
+                plt.xlabel(hyperparam_swept); plt.ylabel(f"Mean {metric_col}")
                 plt.title(title); plt.grid(True, linestyle=':'); plt.legend()
                 if y_ranges.get(metric_col): plt.ylim(y_ranges[metric_col])
                 plt.tight_layout()
-                fig_filename = f"fig_{clean_for_label(method)}_{clean_for_label(strategy)}_{hyperparam_name}_{metric_col}.png"
+                fig_filename = f"fig_{clean_for_label(method)}_{clean_for_label(strategy)}_{hyperparam_swept}_{metric_col}.png"
                 fig_path = os.path.join(report_figures_abs_dir, fig_filename)
                 plt.savefig(fig_path); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
@@ -289,16 +290,20 @@ def main_report_generation():
                 plt.savefig(fig_path, dpi=200); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
         
-        grouping_col = 'perplexity' if hyperparam_swept == 'perplexity' else ['n_neighbors', 'min_dist']
-        if hyperparam_swept == 'N/A':
-             # For non-swept methods like PCA, there's nothing to group by for the table
-             summary_table = df_exp[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index(drop=True)
-        else:
-             summary_table = df_exp.groupby(grouping_col)[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
+        grouping_cols = []
+        if hyperparam_swept == 'perplexity':
+            grouping_cols = ['perplexity']
+        elif hyperparam_swept == 'n_neighbors_vs_min_dist':
+            grouping_cols = ['n_neighbors', 'min_dist']
         
+        if grouping_cols:
+            summary_table = df_exp.groupby(grouping_cols)[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
+        else: # For non-swept methods
+            summary_table = df_exp[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index(drop=True)
+            
         summary_table.columns = ['_'.join(col).strip() if isinstance(col, tuple) and col[1] != '' else col[0] if isinstance(col, tuple) else col for col in summary_table.columns.values]
         summary_table.rename(columns={'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
-
+        
         table_label = f"table_{method}_{strategy}"
         csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
         add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", table_label, csv_path)
