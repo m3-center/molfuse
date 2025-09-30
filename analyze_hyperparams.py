@@ -153,15 +153,15 @@ def collect_metrics_from_replicates(replicate_run_dirs):
         dr_params = run_config['dimensionality_reduction_methods'][dr_method_key]
         dr_short_name = dr_params['short_name']
 
-        hyperparam_name = "N/A"
+        hyperparam_swept = "N/A"
         n_neighbors_val, min_dist_val, perplexity_val = "N/A", "N/A", "N/A"
         
         if 'n_neighbors' in dr_params:
-            hyperparam_name = 'n_neighbors_vs_min_dist'
+            hyperparam_swept = 'n_neighbors_vs_min_dist'
             n_neighbors_val = dr_params.get('n_neighbors')
             min_dist_val = dr_params.get('min_dist')
         elif 'perplexity' in dr_params:
-            hyperparam_name = 'perplexity'
+            hyperparam_swept = 'perplexity'
             perplexity_val = dr_params.get('perplexity')
 
 
@@ -177,13 +177,20 @@ def collect_metrics_from_replicates(replicate_run_dirs):
                     embedding_strategy = "Co-embedding"
                 df_m = pd.read_csv(metrics_file_path)
                 if df_m.empty: continue
+                hyperparam_value_generic = "N/A"
+                if hyperparam_swept == 'perplexity':
+                    hyperparam_value_generic = perplexity_val
+                # For UMAP, we create a tuple string to represent the 2D hyperparameter space
+                elif hyperparam_swept == 'n_neighbors_vs_min_dist':
+                    hyperparam_value_generic = f"({n_neighbors_val}, {min_dist_val})"
                 metric_row = {
                     'Representation': repr_type.capitalize(), 'DR_Method': dr_short_name,
                     'Embedding_Strategy': embedding_strategy,
-                    'Hyperparameter_Swept': hyperparam_name,
+                    'Hyperparameter_Swept': hyperparam_swept,
                     'n_neighbors': n_neighbors_val,
                     'min_dist': min_dist_val,
-                    'perplexity': perplexity_val
+                    'perplexity': perplexity_val,
+                    'Hyperparameter_Value': hyperparam_value_generic
                 }
                 column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
                 for csv_col, df_col in column_map.items():
