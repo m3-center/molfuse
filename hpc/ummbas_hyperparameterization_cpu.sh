@@ -2,7 +2,7 @@
 #SBATCH --partition=any
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=32
-#SBATCH --mem=350G
+#SBATCH --mem=180G
 #SBATCH --time=0-08:00:00
 #SBATCH --exclude=wr43
 

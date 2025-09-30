@@ -15,7 +15,7 @@ FIXED_SIMSPACE_DIM = 2
 FIXED_FINGERPRINT_PCA_COMPONENTS = 325
 
 TSNE_PERPLEXITY_VALUES = [15, 30, 50, 100, 500, 1000]
-UMAP_N_NEIGHBORS_VALUES = [10, 50, 100, 500]
+UMAP_N_NEIGHBORS_VALUES = [10, 100, 500]
 UMAP_MIN_DIST_VALUES = [0.1, 0.25, 0.5]
 
 def generate_configs():
@@ -82,7 +82,8 @@ def generate_configs():
             
         # --- Generate UMAP Configs (Grid Search) ---
         umap_methods = ["umap_euclidean"]
-        if repr_type == "fingerprints": umap_methods.extend(["umap_jaccard", "umap_hamming"])
+        # if repr_type == "fingerprints": umap_methods.extend(["umap_jaccard", "umap_hamming"])
+        if repr_type == "fingerprints": umap_methods.extend(["umap_jaccard"])
 
         for umap_key in umap_methods:
             for n_neighbors in UMAP_N_NEIGHBORS_VALUES:
