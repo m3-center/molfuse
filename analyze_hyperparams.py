@@ -133,9 +133,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)-8s - 
                     handlers=[ logging.FileHandler(agg_log_file_name, mode='w'), logging.StreamHandler() ])
 
 def find_all_replicate_runs(base_experiment_dir):
-    pattern = os.path.join(base_experiment_dir, "run_seed*_repr*_*_*")
+    pattern = os.path.join(base_experiment_dir, "run_seed*")
     replicate_dirs = [d for d in glob.glob(pattern) if os.path.isdir(d)]
-    logging.info(f"Found {len(replicate_dirs)} replicate run directories.")
+    logging.info(f"Found {len(replicate_dirs)} replicate run directories using pattern: '{pattern}'")
     return sorted(replicate_dirs)
 
 def collect_metrics_from_replicates(replicate_run_dirs):
