@@ -289,10 +289,16 @@ def main_report_generation():
                 plt.savefig(fig_path, dpi=200); plt.close()
                 add_figure_to_latex_standalone(latex_content, os.path.join("figures", fig_filename), title, clean_for_label(fig_filename))
         
-        summary_table = df_exp.groupby('Hyperparameter_Value')[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
-        summary_table.columns = [col[0] if col[1] == '' else '_'.join(col) for col in summary_table.columns]
-        summary_table.rename(columns={'Hyperparameter_Value': hyperparam_name, 'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
+        grouping_col = 'perplexity' if hyperparam_swept == 'perplexity' else ['n_neighbors', 'min_dist']
+        if hyperparam_swept == 'N/A':
+             # For non-swept methods like PCA, there's nothing to group by for the table
+             summary_table = df_exp[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index(drop=True)
+        else:
+             summary_table = df_exp.groupby(grouping_col)[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
         
+        summary_table.columns = ['_'.join(col).strip() if isinstance(col, tuple) and col[1] != '' else col[0] if isinstance(col, tuple) else col for col in summary_table.columns.values]
+        summary_table.rename(columns={'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
+
         table_label = f"table_{method}_{strategy}"
         csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
         add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", table_label, csv_path)
