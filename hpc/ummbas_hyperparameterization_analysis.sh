@@ -42,7 +42,7 @@ ANALYSIS_SCRIPT="${SCRIPT_DIR}/analyze_hyperparams.py"
 mkdir -p hyperparameterization_report
 echo "Starting main_orchestrator.py..."
 python -u "${ANALYSIS_SCRIPT}" \
-    --base_experiment_dir "experiment_workspace_hyperparam_sweep" \
+    --base_experiment_dir "experiment_workspace_rerun_hyperparam_sweep" \
     --output_report_dir "hyperparameterization_report"
 
 EXIT_CODE=$?
