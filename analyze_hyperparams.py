@@ -231,7 +231,9 @@ def main_report_generation():
     
     # --- Calculate global y-axis ranges for fair plot comparisons ---
     y_ranges = {}
-    for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
+    metrics_to_plot = ['ROC_AUC', 'PR_AUC', 'EF_1Perc', 'NUM_REP']
+    for metric in metrics_to_plot:
+        if metric == 'NUM_REP': continue # We'll handle NUM_REP's range separately if needed
         if metric in df_agg.columns and not df_agg[metric].isnull().all():
             grouped = df_agg.groupby(['Method', 'Embedding_Strategy', 'Hyperparameter_Swept'])[metric]
             means = grouped.mean()
@@ -254,17 +256,25 @@ def main_report_generation():
         
         if hyperparam_swept == 'perplexity':
             latex_content.append(get_section_header_latex_standalone(3, f'Sweeping: {hyperparam_swept}'))
-            for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
-                if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
-                plt.figure(figsize=(8, 6))
-                summary = df_exp.groupby('perplexity')[metric_col].agg(['mean', 'std']).reset_index().fillna(0).sort_values(by='perplexity')
-                plt.plot(summary['perplexity'], summary['mean'], marker='o', linestyle='-')
-                plt.fill_between(summary['perplexity'], summary['mean'] - summary['std'], summary['mean'] + summary['std'], alpha=0.2, label=f"$\\pm$1 SD")
-                
-                title = f'{metric_col} vs. {hyperparam_swept} for {method} ({strategy})' # Use hyperparam_swept
-                plt.xlabel(hyperparam_swept); plt.ylabel(f"Mean {metric_col}")
-                plt.title(title); plt.grid(True, linestyle=':'); plt.legend()
-                if y_ranges.get(metric_col): plt.ylim(y_ranges[metric_col])
+            for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc', 'NUM_REP']:
+                if metric_col == 'NUM_REP':
+                    summary = df_exp.groupby('perplexity').size().reset_index(name='NUM_REP')
+                    plt.figure(figsize=(8, 6))
+                    plt.plot(summary['perplexity'], summary['NUM_REP'], marker='o', linestyle='-')
+                    plt.ylabel("Number of Replicates")
+                else:
+                    if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
+                    plt.figure(figsize=(8, 6))
+                    summary = df_exp.groupby('perplexity')[metric_col].agg(['mean', 'std']).reset_index().fillna(0).sort_values(by='perplexity')
+                    plt.plot(summary['perplexity'], summary['mean'], marker='o', linestyle='-')
+                    plt.fill_between(summary['perplexity'], summary['mean'] - summary['std'], summary['mean'] + summary['std'], alpha=0.2, label=f"$\\pm$1 SD")
+                    plt.ylabel(f"Mean {metric_col}")
+                    if y_ranges.get(metric_col): plt.ylim(y_ranges[metric_col])
+                    plt.legend()
+
+                title = f'{metric_col} vs. {hyperparam_swept} for {method} ({strategy})'
+                plt.xlabel(hyperparam_swept); 
+                plt.title(title); plt.grid(True, linestyle=':');
                 plt.tight_layout()
                 fig_filename = f"fig_{clean_for_label(method)}_{clean_for_label(strategy)}_{hyperparam_swept}_{metric_col}.png"
                 fig_path = os.path.join(report_figures_abs_dir, fig_filename)
@@ -273,16 +283,23 @@ def main_report_generation():
             
         elif hyperparam_swept == 'n_neighbors_vs_min_dist': # Handle UMAP heatmaps
             latex_content.append(get_section_header_latex_standalone(3, 'Sweeping: n_neighbors and min_dist'))
-            for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc']:
-                if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
+            for metric_col in ['ROC_AUC', 'PR_AUC', 'EF_1Perc', 'NUM_REP']:
                 
-                pivot_table = df_exp.groupby(['n_neighbors', 'min_dist'])[metric_col].mean().reset_index()
-                pivot_table = pivot_table.pivot(index='min_dist', columns='n_neighbors', values=metric_col)
-                
+                if metric_col == 'NUM_REP':
+                    pivot_table = df_exp.groupby(['n_neighbors', 'min_dist']).size().reset_index(name='NUM_REP')
+                    pivot_table = pivot_table.pivot(index='min_dist', columns='n_neighbors', values='NUM_REP')
+                    title = f'Number of Replicates for {method} ({strategy})'
+                    fmt = "d"
+                else:
+                    if metric_col not in df_exp.columns or df_exp[metric_col].isnull().all(): continue
+                    pivot_table = df_exp.groupby(['n_neighbors', 'min_dist'])[metric_col].mean().reset_index()
+                    pivot_table = pivot_table.pivot(index='min_dist', columns='n_neighbors', values=metric_col)
+                    title = f'Mean {metric_col} for {method} ({strategy})'
+                    fmt = ".3f"
+
                 plt.figure(figsize=(10, 6))
-                sns.heatmap(pivot_table, annot=True, fmt=".3f", cmap="viridis", linewidths=.5)
+                sns.heatmap(pivot_table, annot=True, fmt=fmt, cmap="viridis", linewidths=.5)
                 
-                title = f'Mean {metric_col} for {method} ({strategy})'
                 plt.title(title); plt.xlabel("n_neighbors"); plt.ylabel("min_dist"); plt.tight_layout()
 
                 fig_filename = f"fig_heatmap_{clean_for_label(method)}_{clean_for_label(strategy)}_{metric_col}.png"
@@ -297,13 +314,20 @@ def main_report_generation():
             grouping_cols = ['n_neighbors', 'min_dist']
         
         if grouping_cols:
-            summary_table = df_exp.groupby(grouping_cols)[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index()
+            # Calculate mean for metrics and count for NUM_REP
+            agg_funcs = {metric: ['mean'] for metric in ['ROC_AUC', 'PR_AUC', 'EF_1Perc'] if metric in df_exp.columns}
+            summary_table = df_exp.groupby(grouping_cols).agg(agg_funcs).reset_index()
+            summary_table.columns = ['_'.join(col).strip() if isinstance(col, tuple) and col[1] != '' else col[0] if isinstance(col, tuple) else col for col in summary_table.columns.values]
+            summary_table.rename(columns={'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
+            
+            # Calculate NUM_REP separately and merge
+            num_rep_table = df_exp.groupby(grouping_cols).size().reset_index(name='NUM_REP')
+            summary_table = pd.merge(summary_table, num_rep_table, on=grouping_cols)
         else: # For non-swept methods
             summary_table = df_exp[['ROC_AUC', 'PR_AUC', 'EF_1Perc']].agg(['mean']).reset_index(drop=True)
+            summary_table.rename(columns={'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
+            summary_table['NUM_REP'] = len(df_exp)
             
-        summary_table.columns = ['_'.join(col).strip() if isinstance(col, tuple) and col[1] != '' else col[0] if isinstance(col, tuple) else col for col in summary_table.columns.values]
-        summary_table.rename(columns={'ROC_AUC_mean': 'ROC_AUC', 'PR_AUC_mean': 'PR_AUC', 'EF_1Perc_mean': 'EF_1Perc'}, inplace=True)
-        
         table_label = f"table_{method}_{strategy}"
         csv_path = os.path.join(report_tables_abs_dir, f"{clean_for_label(table_label)}.csv")
         add_dataframe_as_latex_table_standalone(latex_content, summary_table, f"Performance metrics for {method} ({strategy}).", table_label, csv_path)
