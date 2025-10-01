@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
 #SBATCH --mem=180G
-#SBATCH --time=0-08:00:00
+#SBATCH --time=0-24:00:00
 #SBATCH --exclude=wr43
 
 # --- Arguments passed from submit script ---
