@@ -2,7 +2,7 @@
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
-#SBATCH --mem=180G
+#SBATCH --mem=350G
 #SBATCH --time=0-24:00:00
 #SBATCH --exclude=wr43
 
