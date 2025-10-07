@@ -55,7 +55,7 @@ def main():
     REPR_TYPE_TO_PROCESS = "features"
     SIMSPACE_DIM_TO_PROCESS = 2
 
-    original_run_dirs = glob.glob(os.path.join(args.original_workspace, f"run_seed*_repr{REPR_TYPE_TO_PROCESS}_*"))
+    original_run_dirs = glob.glob(os.path.join(args.original_workspace, f"run_seed*_config_{REPR_TYPE_TO_PROCESS}_*"))
     if not original_run_dirs:
         logging.error(f"No original '{REPR_TYPE_TO_PROCESS}' runs found in '{args.original_workspace}'. Aborting.")
         return
