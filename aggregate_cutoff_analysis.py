@@ -149,11 +149,33 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
             with open(run_config_path, 'r') as f: run_config = json.load(f)
             dr_method_key = list(run_config['dimensionality_reduction_methods'].keys())[0]
             dr_params = run_config['dimensionality_reduction_methods'][dr_method_key]
-            hyperparam_name, hyperparam_value = "N/A", "N/A"
+            
+            # Extract hyperparameters - handle UMAP's multiple hyperparameters
+            hyperparam_names = []
+            hyperparam_values = []
+            hyperparam_dict = {}  # Store as dict for later filtering
+            
             if 'n_neighbors' in dr_params:
-                hyperparam_name = 'n_neighbors'; hyperparam_value = dr_params['n_neighbors']
-            elif 'perplexity' in dr_params:
-                hyperparam_name = 'perplexity'; hyperparam_value = dr_params['perplexity']
+                hyperparam_names.append('n_neighbors')
+                hyperparam_values.append(dr_params['n_neighbors'])
+                hyperparam_dict['n_neighbors'] = dr_params['n_neighbors']
+            if 'min_dist' in dr_params:
+                hyperparam_names.append('min_dist')
+                hyperparam_values.append(dr_params['min_dist'])
+                hyperparam_dict['min_dist'] = dr_params['min_dist']
+            if 'perplexity' in dr_params:
+                hyperparam_names.append('perplexity')
+                hyperparam_values.append(dr_params['perplexity'])
+                hyperparam_dict['perplexity'] = dr_params['perplexity']
+            
+            # Create combined string representations
+            if hyperparam_names:
+                hyperparam_name = ', '.join(hyperparam_names)
+                hyperparam_value = ', '.join(str(v) for v in hyperparam_values)
+            else:
+                hyperparam_name = "N/A"
+                hyperparam_value = "N/A"
+            
             embedding_strategy = "Projection"
             if "tsne" in dr_method_key: embedding_strategy = "Co-embedding (Native)"
             elif strategy_dir.endswith('_Coembed'): embedding_strategy = "Co-embedding"
@@ -161,7 +183,8 @@ def collect_cutoff_experiment_metrics(cutoff_results_dir, original_hyperparam_di
             if df_m.empty: continue
             metric_row = {'Seed': seed, 'Affinity_Cutoff': cutoff_val, 'Representation': repr_type.capitalize(),
                           'DR_Method': dr_params['short_name'], 'Embedding_Strategy': embedding_strategy,
-                          'Hyperparameter': hyperparam_name, 'Hyperparameter_Value': hyperparam_value}
+                          'Hyperparameter': hyperparam_name, 'Hyperparameter_Value': hyperparam_value,
+                          'Hyperparam_Dict': json.dumps(hyperparam_dict)}  # Store full dict for exact matching
             column_map = {'roc_auc': 'ROC_AUC', 'pr_auc': 'PR_AUC', 'ef_1%': 'EF_1Perc'}
             for csv_col, df_col in column_map.items():
                 metric_row[df_col] = df_m[csv_col].iloc[0] if csv_col in df_m and pd.notna(df_m[csv_col].iloc[0]) else np.nan
@@ -248,17 +271,24 @@ def main():
         if df_exp.empty: continue
         
         optimal_value = "N/A"
+        optimal_dict_str = "{}"
+        
         if hyperparam_name != 'N/A':
-            mean_perf_table = df_exp.groupby('Hyperparameter_Value')['EF_1Perc'].mean().reset_index()
+            # Group by the full hyperparam dictionary (stored as JSON string)
+            mean_perf_table = df_exp.groupby('Hyperparam_Dict')['EF_1Perc'].mean().reset_index()
             if not mean_perf_table.empty and not mean_perf_table['EF_1Perc'].isnull().all():
-                optimal_value = mean_perf_table.loc[mean_perf_table['EF_1Perc'].idxmax()]['Hyperparameter_Value']
+                optimal_dict_str = mean_perf_table.loc[mean_perf_table['EF_1Perc'].idxmax()]['Hyperparam_Dict']
+                # Also get the human-readable string value for display
+                matching_row = df_exp[df_exp['Hyperparam_Dict'] == optimal_dict_str].iloc[0]
+                optimal_value = matching_row['Hyperparameter_Value']
         
         df_best_hyperparams_list.append({'Method_Repr': method, 'Embedding_Strategy': strategy, 'Hyperparameter': hyperparam_name, 'Optimal_Value': optimal_value})
         
+        # Filter using the exact hyperparameter dictionary match
         df_optimal_replicates = df_agg[
             (df_agg['Method_Repr'] == method) &
             (df_agg['Embedding_Strategy'] == strategy) &
-            (df_agg['Hyperparameter_Value'] == optimal_value)
+            (df_agg['Hyperparam_Dict'] == optimal_dict_str)
         ].copy()
         optimal_replicate_dfs.append(df_optimal_replicates)
 
