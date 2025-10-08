@@ -213,7 +213,7 @@ def create_performance_vs_cutoff_plot(df, metric, title, filename, report_figure
 def main():
     parser = argparse.ArgumentParser(description="Aggregate results from the affinity cutoff experiment and generate a LaTeX report.")
     parser.add_argument("--base_experiment_dir", default="experiment_workspace_cutoff_analysis/", help="Base directory of the cutoff experiment results.")
-    parser.add_argument("--original_workspace", default="experiment_workspace_hyperparam_sweep/", help="Directory containing the original hyperparameter sweep runs with their configs.")
+    parser.add_argument("--original_workspace", default="experiment_workspace_rerun_hyperparam_sweep//", help="Directory containing the original hyperparameter sweep runs with their configs.")
     parser.add_argument("--output_report_dir", default="final_report_cutoff_analysis/", help="Directory to save the final LaTeX report.")
     args = parser.parse_args()
 
