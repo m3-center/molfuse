@@ -33,13 +33,14 @@ logging.basicConfig(
     ]
 )
 
-def collect_metrics_from_workspace(workspace_dir, workspace_label):
+def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_workspace=False):
     """
     Collect metrics from a workspace directory.
     
     Args:
         workspace_dir: Path to the workspace directory
         workspace_label: Label for this workspace (e.g., 'ABL1_hyperparam' or 'Generalization')
+        is_cutoff_workspace: If True, expect results_cutoff_* subdirectories
     
     Returns:
         DataFrame with metrics
@@ -47,7 +48,11 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label):
     all_metrics = []
     
     # Pattern to find all ranking metrics files
-    pattern = os.path.join(workspace_dir, "run_seed*", "*", "results", "*", "dim_*", "*", "*_ranking_metrics.csv")
+    if is_cutoff_workspace:
+        # Pattern includes results_cutoff_* directory
+        pattern = os.path.join(workspace_dir, "run_seed*", "results_cutoff_*", "*", "results", "*", "dim_*", "*", "*_ranking_metrics.csv")
+    else:
+        pattern = os.path.join(workspace_dir, "run_seed*", "*", "results", "*", "dim_*", "*", "*_ranking_metrics.csv")
     
     logging.info(f"Searching for metrics in: {workspace_dir}")
     logging.info(f"Pattern: {pattern}")
@@ -59,9 +64,22 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label):
             # Extract run directory name
             run_dir_name = next(p for p in path_parts if p.startswith("run_seed"))
             
-            # Extract target ID (the directory after run_seed*)
-            target_idx = path_parts.index(run_dir_name) + 1
-            target_id = path_parts[target_idx]
+            # Extract affinity cutoff if this is cutoff workspace
+            affinity_cutoff = 100000  # Default
+            if is_cutoff_workspace:
+                cutoff_dir = next((p for p in path_parts if p.startswith("results_cutoff_")), None)
+                if cutoff_dir:
+                    cutoff_match = re.search(r"results_cutoff_(\d+)", cutoff_dir)
+                    if cutoff_match:
+                        affinity_cutoff = int(cutoff_match.group(1))
+            
+            # Extract target ID (the directory after run_seed* or results_cutoff_*)
+            if is_cutoff_workspace:
+                cutoff_idx = path_parts.index(next(p for p in path_parts if p.startswith("results_cutoff_")))
+                target_id = path_parts[cutoff_idx + 1]
+            else:
+                target_idx = path_parts.index(run_dir_name) + 1
+                target_id = path_parts[target_idx]
             
             # Extract representation type
             repr_type = path_parts[path_parts.index("results") + 1]
@@ -118,6 +136,7 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label):
                 'Workspace': workspace_label,
                 'Target_ID': target_id,
                 'Seed': seed,
+                'Affinity_Cutoff': affinity_cutoff,
                 'Representation': repr_type.capitalize(),
                 'DR_Method': dr_params['short_name'],
                 'Embedding_Strategy': embedding_strategy,
@@ -331,12 +350,74 @@ def create_summary_tables(df, output_dir):
     
     return tables_created
 
+def create_cutoff_analysis_plots(df, output_dir):
+    """Create plots showing how performance varies with affinity cutoff across proteins."""
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Filter to only cutoff data
+    df_cutoff = df[df['Workspace'] == 'Generalization_Cutoff'].copy()
+    
+    if df_cutoff.empty:
+        logging.warning("No cutoff data available for plotting")
+        return []
+    
+    # Map target IDs to friendly names
+    target_name_map = {
+        'TyrosineProteinKinaseABL1_P00519': 'ABL1',
+        'PyruvateKinaseM2_P14618': 'Pyruvate Kinase M2',
+        'IsocitrateDehydrogenaseNADP_O75874': 'Isocitrate Dehydrogenase'
+    }
+    df_cutoff['Target_Name'] = df_cutoff['Target_ID'].map(target_name_map)
+    
+    plots_created = []
+    
+    # Plot EF@1% vs cutoff for each method, faceted by target
+    for metric in ['EF_1Perc']:
+        if metric not in df_cutoff.columns or df_cutoff[metric].isnull().all():
+            continue
+        
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+        fig.suptitle(f'{metric} vs. Affinity Cutoff Across Proteins (Generalization Test)', 
+                    fontsize=16, fontweight='bold')
+        
+        for idx, target in enumerate(df_cutoff['Target_Name'].unique()):
+            ax = axes[idx]
+            target_data = df_cutoff[df_cutoff['Target_Name'] == target]
+            
+            for method in target_data['Method_Full'].unique():
+                method_data = target_data[target_data['Method_Full'] == method]
+                mean_by_cutoff = method_data.groupby('Affinity_Cutoff')[metric].mean()
+                std_by_cutoff = method_data.groupby('Affinity_Cutoff')[metric].std()
+                
+                ax.errorbar(mean_by_cutoff.index, mean_by_cutoff.values,
+                           yerr=std_by_cutoff.values, marker='o', label=method, capsize=5)
+            
+            ax.set_xscale('log')
+            ax.set_xlabel('Affinity Cutoff (nM)', fontsize=11, fontweight='bold')
+            if idx == 0:
+                ax.set_ylabel(f'Mean {metric}', fontsize=11, fontweight='bold')
+            ax.set_title(target, fontsize=12, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8)
+        
+        plt.tight_layout()
+        plot_path = os.path.join(output_dir, f'{metric}_vs_cutoff_by_protein.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        plots_created.append(plot_path)
+        logging.info(f"Created plot: {plot_path}")
+    
+    return plots_created
+
 def main():
     parser = argparse.ArgumentParser(description="Aggregate and analyze generalization experiment results.")
     parser.add_argument("--abl1_workspace", default="experiment_workspace_rerun_hyperparam_sweep/",
                        help="Workspace directory containing ABL1 hyperparameter results")
     parser.add_argument("--generalization_workspace", default="experiment_workspace_generalization/",
                        help="Workspace directory containing generalization results")
+    parser.add_argument("--generalization_cutoff_workspace", default=None,
+                       help="Optional: Workspace directory containing generalization cutoff analysis results")
     parser.add_argument("--output_dir", default="final_report_generalization/",
                        help="Output directory for report and visualizations")
     args = parser.parse_args()
@@ -364,8 +445,21 @@ def main():
     logging.info("\nCollecting generalization metrics...")
     df_gen = collect_metrics_from_workspace(args.generalization_workspace, "Generalization")
     
+    # Collect metrics from generalization cutoff analysis if provided
+    df_gen_cutoff = pd.DataFrame()
+    if args.generalization_cutoff_workspace and os.path.exists(args.generalization_cutoff_workspace):
+        logging.info("\nCollecting generalization cutoff analysis metrics...")
+        df_gen_cutoff = collect_metrics_from_workspace(
+            args.generalization_cutoff_workspace, 
+            "Generalization_Cutoff",
+            is_cutoff_workspace=True
+        )
+    
     # Combine dataframes
-    df_all = pd.concat([df_abl1, df_gen], ignore_index=True)
+    dfs_to_combine = [df_abl1, df_gen]
+    if not df_gen_cutoff.empty:
+        dfs_to_combine.append(df_gen_cutoff)
+    df_all = pd.concat(dfs_to_combine, ignore_index=True)
     
     if df_all.empty:
         logging.error("No metrics collected. Aborting.")
@@ -386,6 +480,12 @@ def main():
     logging.info("\nCreating summary tables...")
     tables = create_summary_tables(df_all, tables_dir)
     logging.info(f"Created {len(tables)} tables")
+    
+    # Create cutoff analysis plots if cutoff data is available
+    if not df_gen_cutoff.empty:
+        logging.info("\nCreating cutoff analysis plots...")
+        cutoff_plots = create_cutoff_analysis_plots(df_all, figures_dir)
+        logging.info(f"Created {len(cutoff_plots)} cutoff analysis plots")
     
     # Print summary statistics
     logging.info("\n" + "=" * 80)
