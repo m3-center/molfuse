@@ -163,6 +163,129 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_wor
     
     return df
 
+def select_optimal_cutoff_per_method(df):
+    """
+    Select the optimal affinity cutoff for each DR method based on mean EF@1% 
+    across all target proteins.
+    
+    Returns:
+        DataFrame with optimal cutoff selected for each method
+        Dictionary mapping method to optimal cutoff
+    """
+    optimal_cutoffs = {}
+    optimal_data_list = []
+    
+    # Group by DR_Method and Affinity_Cutoff, calculate mean EF@1% across all targets
+    for dr_method in df['DR_Method'].unique():
+        method_data = df[df['DR_Method'] == dr_method]
+        
+        # Calculate mean EF@1% for each cutoff across all targets and seeds
+        cutoff_performance = method_data.groupby('Affinity_Cutoff')['EF_1Perc'].mean()
+        
+        if not cutoff_performance.empty and not cutoff_performance.isnull().all():
+            optimal_cutoff = cutoff_performance.idxmax()
+            optimal_cutoffs[dr_method] = optimal_cutoff
+            
+            # Filter data to only this optimal cutoff for this method
+            method_optimal = method_data[method_data['Affinity_Cutoff'] == optimal_cutoff].copy()
+            optimal_data_list.append(method_optimal)
+            
+            logging.info(f"Selected optimal cutoff for {dr_method}: {optimal_cutoff} nM "
+                        f"(Mean EF@1%: {cutoff_performance[optimal_cutoff]:.2f})")
+    
+    df_optimal = pd.concat(optimal_data_list, ignore_index=True) if optimal_data_list else pd.DataFrame()
+    
+    return df_optimal, optimal_cutoffs
+
+def create_cutoff_trend_plots(df, output_dir):
+    """
+    Create plots showing performance vs affinity cutoff for all target proteins.
+    Similar to the cutoff analysis script but showing all proteins in one view.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    plots_created = []
+    
+    # Use all cutoff data including baseline
+    df_cutoff = df.copy()
+    
+    if df_cutoff.empty:
+        logging.warning("No cutoff variation data available for trend plotting")
+        return plots_created
+    
+    # Check if we have multiple cutoffs
+    unique_cutoffs = df_cutoff['Affinity_Cutoff'].unique()
+    if len(unique_cutoffs) < 2:
+        logging.warning(f"Only one cutoff value found: {unique_cutoffs}. Need multiple cutoffs for trend analysis.")
+        return plots_created
+    
+    # Map target IDs to friendly names
+    target_name_map = {
+        'TyrosineProteinKinaseABL1_P00519': 'ABL1',
+        'PyruvateKinaseM2_P14618': 'Pyruvate Kinase M2',
+        'IsocitrateDehydrogenaseNADP_O75874': 'Isocitrate Dehydrogenase'
+    }
+    df_cutoff['Target_Name'] = df_cutoff['Target_ID'].map(target_name_map)
+    
+    # Create combined method+strategy identifier
+    df_cutoff['Method_Strategy'] = df_cutoff['DR_Method'] + ' (' + df_cutoff['Embedding_Strategy'] + ')'
+    
+    # Plot for each metric
+    for metric in ['EF_1Perc', 'ROC_AUC', 'PR_AUC']:
+        if metric not in df_cutoff.columns or df_cutoff[metric].isnull().all():
+            continue
+        
+        # Create faceted plot by DR method
+        unique_methods = sorted(df_cutoff['DR_Method'].unique())
+        n_methods = len(unique_methods)
+        
+        if n_methods == 0:
+            continue
+        
+        fig, axes = plt.subplots(1, n_methods, figsize=(6*n_methods, 5), sharey=True)
+        if n_methods == 1:
+            axes = [axes]
+        
+        fig.suptitle(f'{metric} vs. Affinity Cutoff Across Target Proteins', 
+                    fontsize=16, fontweight='bold')
+        
+        for idx, dr_method in enumerate(unique_methods):
+            ax = axes[idx]
+            method_data = df_cutoff[df_cutoff['DR_Method'] == dr_method]
+            
+            # Plot each target with a different color
+            for target in method_data['Target_Name'].unique():
+                target_method_data = method_data[method_data['Target_Name'] == target]
+                
+                # For each embedding strategy
+                for strategy in target_method_data['Embedding_Strategy'].unique():
+                    strategy_data = target_method_data[target_method_data['Embedding_Strategy'] == strategy]
+                    
+                    # Calculate mean and std by cutoff
+                    mean_by_cutoff = strategy_data.groupby('Affinity_Cutoff')[metric].mean()
+                    std_by_cutoff = strategy_data.groupby('Affinity_Cutoff')[metric].std()
+                    
+                    label = f"{target} - {strategy}"
+                    ax.errorbar(mean_by_cutoff.index, mean_by_cutoff.values,
+                               yerr=std_by_cutoff.values, marker='o', label=label, 
+                               capsize=5, alpha=0.7)
+            
+            ax.set_xscale('log')
+            ax.set_xlabel('Affinity Cutoff (nM)', fontsize=11, fontweight='bold')
+            if idx == 0:
+                ax.set_ylabel(f'Mean {metric}', fontsize=11, fontweight='bold')
+            ax.set_title(dr_method, fontsize=12, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8, loc='best')
+        
+        plt.tight_layout()
+        plot_path = os.path.join(output_dir, f'{metric}_vs_cutoff_all_targets.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        plots_created.append(plot_path)
+        logging.info(f"Created cutoff trend plot: {plot_path}")
+    
+    return plots_created
+
 def create_comparison_plots(df, output_dir):
     """Create comparative visualizations across proteins."""
     
@@ -471,33 +594,68 @@ def main():
     df_all.to_csv(master_csv, index=False)
     logging.info(f"\nSaved master metrics to: {master_csv}")
     
-    # Create visualizations
-    logging.info("\nCreating visualizations...")
-    plots = create_comparison_plots(df_all, figures_dir)
-    logging.info(f"Created {len(plots)} plots")
+    # STEP 1: Create cutoff trend plots for all target proteins (if cutoff data available)
+    if not df_gen_cutoff.empty:
+        logging.info("\n" + "=" * 80)
+        logging.info("STEP 1: Creating cutoff trend analysis plots...")
+        logging.info("=" * 80)
+        cutoff_trend_plots = create_cutoff_trend_plots(df_gen_cutoff, figures_dir)
+        logging.info(f"Created {len(cutoff_trend_plots)} cutoff trend plots")
+        
+        # STEP 2: Select optimal cutoff for each method based on mean EF@1% across all targets
+        logging.info("\n" + "=" * 80)
+        logging.info("STEP 2: Selecting optimal cutoff for each DR method...")
+        logging.info("=" * 80)
+        df_optimal_cutoff, optimal_cutoffs_map = select_optimal_cutoff_per_method(df_gen_cutoff)
+        
+        # Save optimal cutoff information
+        optimal_cutoff_df = pd.DataFrame([
+            {'DR_Method': method, 'Optimal_Cutoff_nM': cutoff}
+            for method, cutoff in optimal_cutoffs_map.items()
+        ])
+        optimal_cutoff_path = os.path.join(tables_dir, 'optimal_cutoffs_by_method.csv')
+        optimal_cutoff_df.to_csv(optimal_cutoff_path, index=False)
+        logging.info(f"Saved optimal cutoff selections to: {optimal_cutoff_path}")
+        
+        # Use the optimal cutoff data for comparison plots
+        df_for_comparison = df_optimal_cutoff
+        logging.info(f"Using {len(df_for_comparison)} rows with optimal cutoffs for comparison plots")
+    else:
+        logging.info("\nNo cutoff data available. Using all data for comparison plots.")
+        df_for_comparison = df_all
+    
+    # STEP 3: Create visualizations with optimal cutoff data
+    logging.info("\n" + "=" * 80)
+    logging.info("STEP 3: Creating comparison plots with optimal cutoff data...")
+    logging.info("=" * 80)
+    plots = create_comparison_plots(df_for_comparison, figures_dir)
+    logging.info(f"Created {len(plots)} comparison plots")
     
     # Create summary tables
     logging.info("\nCreating summary tables...")
-    tables = create_summary_tables(df_all, tables_dir)
+    tables = create_summary_tables(df_for_comparison, tables_dir)
     logging.info(f"Created {len(tables)} tables")
-    
-    # Create cutoff analysis plots if cutoff data is available
-    if not df_gen_cutoff.empty:
-        logging.info("\nCreating cutoff analysis plots...")
-        cutoff_plots = create_cutoff_analysis_plots(df_all, figures_dir)
-        logging.info(f"Created {len(cutoff_plots)} cutoff analysis plots")
     
     # Print summary statistics
     logging.info("\n" + "=" * 80)
     logging.info("SUMMARY STATISTICS")
     logging.info("=" * 80)
-    logging.info(f"\nTotal experiments analyzed: {len(df_all)}")
+    logging.info(f"\nTotal experiments collected: {len(df_all)}")
     logging.info(f"Unique targets: {df_all['Target_ID'].nunique()}")
     logging.info(f"Unique methods: {df_all['Method_Full'].nunique()}")
     logging.info(f"Seeds per config: {df_all['Seed'].nunique()}")
     
+    if not df_gen_cutoff.empty:
+        logging.info(f"\nCutoff analysis enabled:")
+        logging.info(f"  Total cutoff experiments: {len(df_gen_cutoff)}")
+        logging.info(f"  Unique affinity cutoffs tested: {sorted(df_gen_cutoff['Affinity_Cutoff'].unique())}")
+        logging.info(f"  Experiments with optimal cutoffs: {len(df_for_comparison)}")
+        logging.info(f"\nOptimal cutoffs selected:")
+        for method, cutoff in optimal_cutoffs_map.items():
+            logging.info(f"  {method}: {cutoff} nM")
+    
     logging.info("\nTop performing methods (by mean EF@1% across all proteins):")
-    top_methods = df_all.groupby('Method_Full')['EF_1Perc'].mean().sort_values(ascending=False).head(5)
+    top_methods = df_for_comparison.groupby('Method_Full')['EF_1Perc'].mean().sort_values(ascending=False).head(5)
     for method, ef in top_methods.items():
         logging.info(f"  {method}: {ef:.2f}")
     
