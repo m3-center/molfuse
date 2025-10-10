@@ -548,6 +548,8 @@ def main():
     parser = argparse.ArgumentParser(description="Aggregate and analyze generalization experiment results.")
     parser.add_argument("--abl1_workspace", default="experiment_workspace_rerun_hyperparam_sweep/",
                        help="Workspace directory containing ABL1 hyperparameter results")
+    parser.add_argument("--abl1_cutoff_workspace", default="experiment_workspace_cutoff_analysis/",
+                       help="Workspace directory containing ABL1 cutoff analysis results")
     parser.add_argument("--generalization_workspace", default="experiment_workspace_generalization/",
                        help="Workspace directory containing generalization results")
     parser.add_argument("--generalization_cutoff_workspace", default="experiment_workspace_generalization_cutoff/",
@@ -579,6 +581,17 @@ def main():
     logging.info("\nCollecting generalization metrics...")
     df_gen = collect_metrics_from_workspace(args.generalization_workspace, "Generalization")
     
+    # Collect metrics from ABL1 cutoff analysis if provided
+    df_abl1_cutoff = pd.DataFrame()
+    if args.abl1_cutoff_workspace and os.path.exists(args.abl1_cutoff_workspace):
+        logging.info("\nCollecting ABL1 cutoff analysis metrics...")
+        df_abl1_cutoff = collect_metrics_from_workspace(
+            args.abl1_cutoff_workspace, 
+            "ABL1_Cutoff",
+            is_cutoff_workspace=True,
+            original_workspace_dir=args.abl1_workspace
+        )
+    
     # Collect metrics from generalization cutoff analysis if provided
     df_gen_cutoff = pd.DataFrame()
     if args.generalization_cutoff_workspace and os.path.exists(args.generalization_cutoff_workspace):
@@ -590,8 +603,28 @@ def main():
             original_workspace_dir=args.generalization_workspace
         )
     
+    # Filter ABL1 hyperparameter data to only include methods tested in generalization
+    if not df_abl1.empty and not df_gen.empty:
+        # Get the unique method+strategy combinations from generalization data
+        gen_methods = df_gen[['DR_Method', 'Embedding_Strategy']].drop_duplicates()
+        
+        # Filter ABL1 data to only these combinations
+        df_abl1_filtered = df_abl1.merge(
+            gen_methods,
+            on=['DR_Method', 'Embedding_Strategy'],
+            how='inner'
+        )
+        
+        logging.info(f"Filtered ABL1 hyperparam data from {len(df_abl1)} to {len(df_abl1_filtered)} rows "
+                    f"to match generalization methods")
+        
+        # Use filtered ABL1 data
+        df_abl1 = df_abl1_filtered
+    
     # Combine dataframes
     dfs_to_combine = [df_abl1, df_gen]
+    if not df_abl1_cutoff.empty:
+        dfs_to_combine.append(df_abl1_cutoff)
     if not df_gen_cutoff.empty:
         dfs_to_combine.append(df_gen_cutoff)
     df_all = pd.concat(dfs_to_combine, ignore_index=True)
@@ -607,18 +640,46 @@ def main():
     logging.info(f"\nSaved master metrics to: {master_csv}")
     
     # STEP 1: Create cutoff trend plots for all target proteins (if cutoff data available)
+    # Combine ABL1 and generalization cutoff data for trend analysis
+    df_all_cutoff = pd.DataFrame()
+    cutoff_dfs = []
+    
+    # Filter ABL1 cutoff data to only include methods tested in generalization experiments
+    if not df_abl1_cutoff.empty and not df_gen_cutoff.empty:
+        # Get the unique method+strategy combinations from generalization data
+        gen_methods = df_gen_cutoff[['DR_Method', 'Embedding_Strategy']].drop_duplicates()
+        
+        # Filter ABL1 data to only these combinations
+        df_abl1_cutoff_filtered = df_abl1_cutoff.merge(
+            gen_methods,
+            on=['DR_Method', 'Embedding_Strategy'],
+            how='inner'
+        )
+        
+        logging.info(f"Filtered ABL1 cutoff data from {len(df_abl1_cutoff)} to {len(df_abl1_cutoff_filtered)} rows "
+                    f"to match generalization methods")
+        cutoff_dfs.append(df_abl1_cutoff_filtered)
+    elif not df_abl1_cutoff.empty:
+        # If no generalization cutoff data, use all ABL1 data
+        cutoff_dfs.append(df_abl1_cutoff)
+    
     if not df_gen_cutoff.empty:
+        cutoff_dfs.append(df_gen_cutoff)
+    
+    if cutoff_dfs:
+        df_all_cutoff = pd.concat(cutoff_dfs, ignore_index=True)
+        
         logging.info("\n" + "=" * 80)
         logging.info("STEP 1: Creating cutoff trend analysis plots...")
         logging.info("=" * 80)
-        cutoff_trend_plots = create_cutoff_trend_plots(df_gen_cutoff, figures_dir)
+        cutoff_trend_plots = create_cutoff_trend_plots(df_all_cutoff, figures_dir)
         logging.info(f"Created {len(cutoff_trend_plots)} cutoff trend plots")
         
         # STEP 2: Select optimal cutoff for each method based on mean EF@1% across all targets
         logging.info("\n" + "=" * 80)
         logging.info("STEP 2: Selecting optimal cutoff for each DR method...")
         logging.info("=" * 80)
-        df_optimal_cutoff, optimal_cutoffs_map = select_optimal_cutoff_per_method(df_gen_cutoff)
+        df_optimal_cutoff, optimal_cutoffs_map = select_optimal_cutoff_per_method(df_all_cutoff)
         
         # Save optimal cutoff information
         optimal_cutoff_df = pd.DataFrame([
@@ -657,10 +718,12 @@ def main():
     logging.info(f"Unique methods: {df_all['Method_Full'].nunique()}")
     logging.info(f"Seeds per config: {df_all['Seed'].nunique()}")
     
-    if not df_gen_cutoff.empty:
+    if not df_all_cutoff.empty:
         logging.info(f"\nCutoff analysis enabled:")
-        logging.info(f"  Total cutoff experiments: {len(df_gen_cutoff)}")
-        logging.info(f"  Unique affinity cutoffs tested: {sorted(df_gen_cutoff['Affinity_Cutoff'].unique())}")
+        logging.info(f"  Total cutoff experiments: {len(df_all_cutoff)}")
+        logging.info(f"  ABL1 cutoff experiments: {len(df_abl1_cutoff) if not df_abl1_cutoff.empty else 0}")
+        logging.info(f"  Generalization cutoff experiments: {len(df_gen_cutoff) if not df_gen_cutoff.empty else 0}")
+        logging.info(f"  Unique affinity cutoffs tested: {sorted(df_all_cutoff['Affinity_Cutoff'].unique())}")
         logging.info(f"  Experiments with optimal cutoffs: {len(df_for_comparison)}")
         logging.info(f"\nOptimal cutoffs selected:")
         for method, cutoff in optimal_cutoffs_map.items():
