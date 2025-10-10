@@ -203,6 +203,9 @@ def main(config_path, random_seed_value):
                 simspaces_output_dir_dim = os.path.join(target_workspace_dir, "similarity_spaces", repr_type, f"dim_{simspace_dim_val}")
                 os.makedirs(models_output_dir_dim, exist_ok=True); os.makedirs(simspaces_output_dir_dim, exist_ok=True)
 
+                # Get DR methods config (needed for both similarity space calc and analysis)
+                active_dr_methods_cfg = config["dimensionality_reduction_methods"]
+                
                 # Check if main similarity space already exists (skip expensive recalculation)
                 comprehensive_simspace_csv_PROJECTION = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_similarity_space.csv")
                 if os.path.exists(comprehensive_simspace_csv_PROJECTION):
@@ -224,7 +227,6 @@ def main(config_path, random_seed_value):
                     if os.path.exists(current_zinc_filtered_path): cmd_calc_simspace.extend(["--zinc_data_path", os.path.abspath(current_zinc_filtered_path)])
                     else: cmd_calc_simspace.extend(["--zinc_data_path", "None"])
                     
-                    active_dr_methods_cfg = config["dimensionality_reduction_methods"]
                     cmd_calc_simspace.append(f"--dr_method_pca={str('pca' in active_dr_methods_cfg)}")
                     has_umap = any("umap" in k for k in active_dr_methods_cfg); cmd_calc_simspace.append(f"--dr_method_umap={str(has_umap)}")
                     if has_umap:
