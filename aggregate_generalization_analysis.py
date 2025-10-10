@@ -100,11 +100,16 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_wor
             # For cutoff workspaces, look in the original workspace directory
             if is_cutoff_workspace and original_workspace_dir:
                 run_config_path = os.path.join(original_workspace_dir, run_dir_name, "run_config.json")
+                logging.debug(f"Cutoff workspace: Looking for config at {run_config_path}")
             else:
                 run_config_path = os.path.join(workspace_dir, run_dir_name, "run_config.json")
+                logging.debug(f"Regular workspace: Looking for config at {run_config_path}")
             
             if not os.path.exists(run_config_path):
                 logging.warning(f"Config not found: {run_config_path}")
+                logging.debug(f"  run_dir_name extracted: {run_dir_name}")
+                logging.debug(f"  original_workspace_dir: {original_workspace_dir}")
+                logging.debug(f"  workspace_dir: {workspace_dir}")
                 continue
             
             with open(run_config_path, 'r') as f:
