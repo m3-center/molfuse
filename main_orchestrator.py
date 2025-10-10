@@ -246,7 +246,9 @@ def main(config_path, random_seed_value):
                     # --- PROJECTION STRATEGY RUN (PCA / UMAP Only) ---
                     for dr_key, dr_params_cfg in active_dr_methods_cfg.items():
                         if dr_key == "tsne": continue # t-SNE is handled separately
-                        if run_coembedding_pca_umap_flag: continue # This is a projection-only block
+                        # Skip methods that will be handled by co-embedding block (if both global flag and method flag are true)
+                        if run_coembedding_pca_umap_flag and dr_params_cfg.get("allow_coembedding", False) and (dr_key.startswith("pca") or dr_key.startswith("umap")):
+                            continue # This method will run in co-embedding block
 
                         base_dr_short_name = dr_params_cfg["short_name"]
                         proj_output_leaf_name = base_dr_short_name.replace('-', '_')
