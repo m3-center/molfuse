@@ -167,6 +167,7 @@ def main():
             projection_dir = os.path.join(
                 results_base, dr_params['short_name'].replace('-', '_')
             )
+            print(f'Projection dir: {projection_dir}')
             if os.path.exists(projection_dir):
                 strategies_to_run.append("Projection")
             
