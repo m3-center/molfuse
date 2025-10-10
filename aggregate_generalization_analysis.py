@@ -539,7 +539,7 @@ def main():
                        help="Workspace directory containing ABL1 hyperparameter results")
     parser.add_argument("--generalization_workspace", default="experiment_workspace_generalization/",
                        help="Workspace directory containing generalization results")
-    parser.add_argument("--generalization_cutoff_workspace", default=None,
+    parser.add_argument("--generalization_cutoff_workspace", default="experiment_workspace_generalization_cutoff/",
                        help="Optional: Workspace directory containing generalization cutoff analysis results")
     parser.add_argument("--output_dir", default="final_report_generalization/",
                        help="Output directory for report and visualizations")
