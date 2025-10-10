@@ -33,7 +33,7 @@ logging.basicConfig(
     ]
 )
 
-def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_workspace=False):
+def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_workspace=False, original_workspace_dir=None):
     """
     Collect metrics from a workspace directory.
     
@@ -41,6 +41,7 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_wor
         workspace_dir: Path to the workspace directory
         workspace_label: Label for this workspace (e.g., 'ABL1_hyperparam' or 'Generalization')
         is_cutoff_workspace: If True, expect results_cutoff_* subdirectories
+        original_workspace_dir: For cutoff workspaces, the directory containing original run_config.json files
     
     Returns:
         DataFrame with metrics
@@ -96,7 +97,12 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_wor
             seed = int(seed_match.group(1))
             
             # Get config to extract method information
-            run_config_path = os.path.join(workspace_dir, run_dir_name, "run_config.json")
+            # For cutoff workspaces, look in the original workspace directory
+            if is_cutoff_workspace and original_workspace_dir:
+                run_config_path = os.path.join(original_workspace_dir, run_dir_name, "run_config.json")
+            else:
+                run_config_path = os.path.join(workspace_dir, run_dir_name, "run_config.json")
+            
             if not os.path.exists(run_config_path):
                 logging.warning(f"Config not found: {run_config_path}")
                 continue
@@ -575,7 +581,8 @@ def main():
         df_gen_cutoff = collect_metrics_from_workspace(
             args.generalization_cutoff_workspace, 
             "Generalization_Cutoff",
-            is_cutoff_workspace=True
+            is_cutoff_workspace=True,
+            original_workspace_dir=args.generalization_workspace
         )
     
     # Combine dataframes
