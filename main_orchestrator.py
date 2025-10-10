@@ -203,42 +203,47 @@ def main(config_path, random_seed_value):
                 simspaces_output_dir_dim = os.path.join(target_workspace_dir, "similarity_spaces", repr_type, f"dim_{simspace_dim_val}")
                 os.makedirs(models_output_dir_dim, exist_ok=True); os.makedirs(simspaces_output_dir_dim, exist_ok=True)
 
-                logging.info(f"        --- Step 2b: Calculating Similarity Spaces ---")
-                cmd_calc_simspace = [ "python", "core_scripts/calculate_similarityspaces_exp.py",
-                    "--chembl_mf_data_path", os.path.abspath(current_chembl_mf_filtered_path),
-                    "--target_ligands_unscaled_path_for_tsne_and_coembed", os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else "None"),
-                    "--simspace_dim", str(simspace_dim_val), "--representation_type", repr_type,
-                    "--target_id_name", target_id_name, "--output_simspace_dir", os.path.abspath(simspaces_output_dir_dim),
-                    "--output_model_dir", os.path.abspath(models_output_dir_dim),
-                    "--rdkit_features_list_target_str", rdkit_features_list_target_json_str,
-                    f"--run_coembedding_for_pca_umap={str(run_coembedding_pca_umap_flag)}",
-                    "--dr_method_configs_json_str", dr_method_configs_json_str,
-                    "--random_state", str(random_seed_value),
-                    "--log_file_path", os.path.abspath(log_file_name) 
-                    ]
-                if os.path.exists(current_zinc_filtered_path): cmd_calc_simspace.extend(["--zinc_data_path", os.path.abspath(current_zinc_filtered_path)])
-                else: cmd_calc_simspace.extend(["--zinc_data_path", "None"])
-                
-                active_dr_methods_cfg = config["dimensionality_reduction_methods"]
-                cmd_calc_simspace.append(f"--dr_method_pca={str('pca' in active_dr_methods_cfg)}")
-                has_umap = any("umap" in k for k in active_dr_methods_cfg); cmd_calc_simspace.append(f"--dr_method_umap={str(has_umap)}")
-                if has_umap:
-                    for drk, drp in active_dr_methods_cfg.items():
-                        if "umap" in drk: cmd_calc_simspace.append(f"--umap_metric_to_run_{drp.get('metric')}")
-                cmd_calc_simspace.append(f"--dr_method_tsne={str('tsne' in active_dr_methods_cfg)}")
-                if 'tsne' in active_dr_methods_cfg:
-                    cmd_calc_simspace.extend([f"--tsne_perplexity={str(active_dr_methods_cfg['tsne']['perplexity'])}", 
-                                              f"--tsne_pca_components={str(gs.get('tsne_pca_components', 50))}"]) # Use default if not present
-                if 'fingerprint_pca_components' in gs:
-                    cmd_calc_simspace.append(f"--fingerprint_pca_components={str(gs['fingerprint_pca_components'])}")
+                # Check if main similarity space already exists (skip expensive recalculation)
+                comprehensive_simspace_csv_PROJECTION = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_similarity_space.csv")
+                if os.path.exists(comprehensive_simspace_csv_PROJECTION):
+                    logging.info(f"        --- Step 2b: SKIPPING Similarity Space Calculation (already exists: {os.path.basename(comprehensive_simspace_csv_PROJECTION)}) ---")
+                else:
+                    logging.info(f"        --- Step 2b: Calculating Similarity Spaces ---")
+                    cmd_calc_simspace = [ "python", "core_scripts/calculate_similarityspaces_exp.py",
+                        "--chembl_mf_data_path", os.path.abspath(current_chembl_mf_filtered_path),
+                        "--target_ligands_unscaled_path_for_tsne_and_coembed", os.path.abspath(processed_target_ligands_repr_file if os.path.exists(processed_target_ligands_repr_file) else "None"),
+                        "--simspace_dim", str(simspace_dim_val), "--representation_type", repr_type,
+                        "--target_id_name", target_id_name, "--output_simspace_dir", os.path.abspath(simspaces_output_dir_dim),
+                        "--output_model_dir", os.path.abspath(models_output_dir_dim),
+                        "--rdkit_features_list_target_str", rdkit_features_list_target_json_str,
+                        f"--run_coembedding_for_pca_umap={str(run_coembedding_pca_umap_flag)}",
+                        "--dr_method_configs_json_str", dr_method_configs_json_str,
+                        "--random_state", str(random_seed_value),
+                        "--log_file_path", os.path.abspath(log_file_name) 
+                        ]
+                    if os.path.exists(current_zinc_filtered_path): cmd_calc_simspace.extend(["--zinc_data_path", os.path.abspath(current_zinc_filtered_path)])
+                    else: cmd_calc_simspace.extend(["--zinc_data_path", "None"])
+                    
+                    active_dr_methods_cfg = config["dimensionality_reduction_methods"]
+                    cmd_calc_simspace.append(f"--dr_method_pca={str('pca' in active_dr_methods_cfg)}")
+                    has_umap = any("umap" in k for k in active_dr_methods_cfg); cmd_calc_simspace.append(f"--dr_method_umap={str(has_umap)}")
+                    if has_umap:
+                        for drk, drp in active_dr_methods_cfg.items():
+                            if "umap" in drk: cmd_calc_simspace.append(f"--umap_metric_to_run_{drp.get('metric')}")
+                    cmd_calc_simspace.append(f"--dr_method_tsne={str('tsne' in active_dr_methods_cfg)}")
+                    if 'tsne' in active_dr_methods_cfg:
+                        cmd_calc_simspace.extend([f"--tsne_perplexity={str(active_dr_methods_cfg['tsne']['perplexity'])}", 
+                                                  f"--tsne_pca_components={str(gs.get('tsne_pca_components', 50))}"]) # Use default if not present
+                    if 'fingerprint_pca_components' in gs:
+                        cmd_calc_simspace.append(f"--fingerprint_pca_components={str(gs['fingerprint_pca_components'])}")
 
-                if not run_command(cmd_calc_simspace, f"Calc SimSpace ({repr_type}, dim{simspace_dim_val}) for {target_id_name}"):
-                    logging.error(f"SimSpace calc failed. Skipping further analysis for this dim."); continue
+                    if not run_command(cmd_calc_simspace, f"Calc SimSpace ({repr_type}, dim{simspace_dim_val}) for {target_id_name}"):
+                        logging.error(f"SimSpace calc failed. Skipping further analysis for this dim."); continue
 
                 if target_processing_mode == "full_analysis":
                     logging.info(f"        --- Step 2c: Projecting & Analyzing (Full Analysis Mode) ---")
                     
-                    comprehensive_simspace_csv_PROJECTION = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_similarity_space.csv")
+                    # comprehensive_simspace_csv_PROJECTION already defined above (line 207)
                     if not os.path.exists(comprehensive_simspace_csv_PROJECTION):
                         logging.error(f"Main projection simspace CSV not found: {comprehensive_simspace_csv_PROJECTION}. Cannot run analysis for this dim.")
                         continue
