@@ -176,33 +176,44 @@ def collect_metrics_from_workspace(workspace_dir, workspace_label, is_cutoff_wor
 
 def select_optimal_cutoff_per_method(df):
     """
-    Select the optimal affinity cutoff for each DR method based on mean EF@1% 
-    across all target proteins.
+    Select the optimal affinity cutoff for each DR method AND embedding strategy 
+    based on mean EF@1% across all target proteins.
+    
+    This ensures projection and co-embedding are treated independently.
     
     Returns:
-        DataFrame with optimal cutoff selected for each method
-        Dictionary mapping method to optimal cutoff
+        DataFrame with optimal cutoff selected for each method+strategy combination
+        Dictionary mapping (method, strategy) to optimal cutoff
     """
     optimal_cutoffs = {}
     optimal_data_list = []
     
-    # Group by DR_Method and Affinity_Cutoff, calculate mean EF@1% across all targets
+    # Group by DR_Method, Embedding_Strategy, and Affinity_Cutoff
     for dr_method in df['DR_Method'].unique():
-        method_data = df[df['DR_Method'] == dr_method]
-        
-        # Calculate mean EF@1% for each cutoff across all targets and seeds
-        cutoff_performance = method_data.groupby('Affinity_Cutoff')['EF_1Perc'].mean()
-        
-        if not cutoff_performance.empty and not cutoff_performance.isnull().all():
-            optimal_cutoff = cutoff_performance.idxmax()
-            optimal_cutoffs[dr_method] = optimal_cutoff
+        for strategy in df['Embedding_Strategy'].unique():
+            method_strategy_data = df[
+                (df['DR_Method'] == dr_method) & 
+                (df['Embedding_Strategy'] == strategy)
+            ]
             
-            # Filter data to only this optimal cutoff for this method
-            method_optimal = method_data[method_data['Affinity_Cutoff'] == optimal_cutoff].copy()
-            optimal_data_list.append(method_optimal)
+            if method_strategy_data.empty:
+                continue
             
-            logging.info(f"Selected optimal cutoff for {dr_method}: {optimal_cutoff} nM "
-                        f"(Mean EF@1%: {cutoff_performance[optimal_cutoff]:.2f})")
+            # Calculate mean EF@1% for each cutoff across all targets and seeds
+            cutoff_performance = method_strategy_data.groupby('Affinity_Cutoff')['EF_1Perc'].mean()
+            
+            if not cutoff_performance.empty and not cutoff_performance.isnull().all():
+                optimal_cutoff = cutoff_performance.idxmax()
+                optimal_cutoffs[(dr_method, strategy)] = optimal_cutoff
+                
+                # Filter data to only this optimal cutoff for this method+strategy
+                method_optimal = method_strategy_data[
+                    method_strategy_data['Affinity_Cutoff'] == optimal_cutoff
+                ].copy()
+                optimal_data_list.append(method_optimal)
+                
+                logging.info(f"Selected optimal cutoff for {dr_method} ({strategy}): {optimal_cutoff} nM "
+                            f"(Mean EF@1%: {cutoff_performance[optimal_cutoff]:.2f})")
     
     df_optimal = pd.concat(optimal_data_list, ignore_index=True) if optimal_data_list else pd.DataFrame()
     
@@ -623,10 +634,10 @@ def main():
         
         # Save optimal cutoff information
         optimal_cutoff_df = pd.DataFrame([
-            {'DR_Method': method, 'Optimal_Cutoff_nM': cutoff}
-            for method, cutoff in optimal_cutoffs_map.items()
+            {'DR_Method': method, 'Embedding_Strategy': strategy, 'Optimal_Cutoff_nM': cutoff}
+            for (method, strategy), cutoff in optimal_cutoffs_map.items()
         ])
-        optimal_cutoff_path = os.path.join(tables_dir, 'optimal_cutoffs_by_method.csv')
+        optimal_cutoff_path = os.path.join(tables_dir, 'optimal_cutoffs_by_method_strategy.csv')
         optimal_cutoff_df.to_csv(optimal_cutoff_path, index=False)
         logging.info(f"Saved optimal cutoff selections to: {optimal_cutoff_path}")
         
@@ -665,9 +676,9 @@ def main():
         logging.info(f"  Unique affinity cutoffs tested: {unique_cutoffs}")
         logging.info(f"  Experiments with optimal cutoffs: {len(df_for_comparison)}")
         if 'optimal_cutoffs_map' in locals():
-            logging.info(f"\nOptimal cutoffs selected:")
-            for method, cutoff in optimal_cutoffs_map.items():
-                logging.info(f"  {method}: {cutoff} nM")
+            logging.info(f"\nOptimal cutoffs selected by method and strategy:")
+            for (method, strategy), cutoff in optimal_cutoffs_map.items():
+                logging.info(f"  {method} ({strategy}): {cutoff} nM")
     
     logging.info("\nTop performing methods (by mean EF@1% across all proteins):")
     top_methods = df_for_comparison.groupby('Method_Full')['EF_1Perc'].mean().sort_values(ascending=False).head(5)
