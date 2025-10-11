@@ -32,7 +32,7 @@ GLOBAL_SETTINGS = {
     "simspace_dims_to_test": [2, 3, 5, 10, 20],  # Testing multiple dimensions
     "k_for_knn_distance": [3, 5],
     "tsne_pca_components": 50,
-    "affinity_cutoff_nM": 100000,
+    "affinity_cutoff_nM": 100,
     "workspace_base_dir": "experiment_workspace_dimensionality/",  # UNIQUE WORKSPACE
     "final_report_dir": "final_report_dimensionality/",
     "n_jobs_molcalcs": -1,
