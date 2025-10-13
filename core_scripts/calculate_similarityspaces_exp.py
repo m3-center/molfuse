@@ -403,10 +403,11 @@ def main():
                              df_target, pca_run_config, out_paths, GPU_ENABLED)
         df_results = df_results.join(pca_coords)
 
-    if args.dr_method_tsne and args.simspace_dim == 2:
-        tsne_run_config = {'cuml_params': {'n_components': 2, 'random_state': args.random_state}, 'sklearn_params': {
-            'n_components': 2, 'perplexity': args.tsne_perplexity, 'random_state': args.random_state, 'n_jobs': -1}}
-        out_paths = {'dr_cols': [f't-SNE-{i+1}' for i in range(2)], 'coembed_space': os.path.join(
+    if args.dr_method_tsne:
+        # t-SNE can now run in any dimensionality (2, 3, 5, 10, 20, etc.)
+        tsne_run_config = {'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}, 'sklearn_params': {
+            'n_components': args.simspace_dim, 'perplexity': args.tsne_perplexity, 'random_state': args.random_state, 'n_jobs': -1}}
+        out_paths = {'dr_cols': [f't-SNE-{i+1}' for i in range(args.simspace_dim)], 'coembed_space': os.path.join(
             args.output_simspace_dir, f"{base_name}_tSNE_similarity_space_COEMBED.csv")}
         # t-SNE now always uses the PCA-reduced data
         tsne_coords = run_tsne(X_pca_reduced, df_info, X_target_pca_reduced,

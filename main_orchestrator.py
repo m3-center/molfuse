@@ -319,21 +319,23 @@ def main(config_path, random_seed_value):
                         dr_key = 'tsne'
                         dr_params_cfg = active_dr_methods_cfg[dr_key]
                         base_dr_short_name = dr_params_cfg["short_name"]
-                        if simspace_dim_val == 2:
-                            logging.info(f"          --- (CoEmbedding - Native) Analyzing DR: t-SNE ---")
-                            simspace_csv_for_tsne = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_tSNE_similarity_space_COEMBED.csv")
-                            if os.path.exists(simspace_csv_for_tsne):
-                                results_out_dir_tsne = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", base_dr_short_name.replace('-', '_'))
-                                os.makedirs(results_out_dir_tsne, exist_ok=True)
-                                cmd_pa_tsne = [ "python", "experimental_pipeline/project_and_analyze.py",
-                                    "--simspace_csv_path", os.path.abspath(simspace_csv_for_tsne),
-                                    "--dr_method_key", dr_key, "--dr_short_name", base_dr_short_name,
-                                    "--simspace_dim", str(simspace_dim_val), "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])),
-                                    "--output_dir", os.path.abspath(results_out_dir_tsne),
-                                    "--target_id_name", target_id_name, "--representation_type", repr_type,
-                                    "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
-                                if not run_command(cmd_pa_tsne, f"Analyze (t-SNE, {repr_type}, dim{simspace_dim_val})"):
-                                    logging.error(f"Analysis failed for t-SNE.")
+                        # t-SNE can now run in any dimensionality (2, 3, 5, 10, 20, etc.)
+                        logging.info(f"          --- (CoEmbedding - Native) Analyzing DR: t-SNE (dim={simspace_dim_val}) ---")
+                        simspace_csv_for_tsne = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_tSNE_similarity_space_COEMBED.csv")
+                        if os.path.exists(simspace_csv_for_tsne):
+                            results_out_dir_tsne = os.path.join(target_workspace_dir, "results", repr_type, f"dim_{simspace_dim_val}", base_dr_short_name.replace('-', '_'))
+                            os.makedirs(results_out_dir_tsne, exist_ok=True)
+                            cmd_pa_tsne = [ "python", "experimental_pipeline/project_and_analyze.py",
+                                "--simspace_csv_path", os.path.abspath(simspace_csv_for_tsne),
+                                "--dr_method_key", dr_key, "--dr_short_name", base_dr_short_name,
+                                "--simspace_dim", str(simspace_dim_val), "--k_for_knn", ','.join(map(str, gs['k_for_knn_distance'])),
+                                "--output_dir", os.path.abspath(results_out_dir_tsne),
+                                "--target_id_name", target_id_name, "--representation_type", repr_type,
+                                "--rdkit_features_list_target_str", rdkit_features_list_target_json_str ]
+                            if not run_command(cmd_pa_tsne, f"Analyze (t-SNE, {repr_type}, dim{simspace_dim_val})"):
+                                logging.error(f"Analysis failed for t-SNE.")
+                        else:
+                            logging.warning(f"t-SNE similarity space file not found: {simspace_csv_for_tsne}")
                     
                 elif target_processing_mode == "similarity_space_only":
                     logging.info(f"        --- Step 2c: Ranking ZINC Decoys (Similarity Space Only Mode) ---")
