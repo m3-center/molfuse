@@ -405,8 +405,22 @@ def main():
 
     if args.dr_method_tsne:
         # t-SNE can now run in any dimensionality (2, 3, 5, 10, 20, etc.)
-        tsne_run_config = {'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}, 'sklearn_params': {
-            'n_components': args.simspace_dim, 'perplexity': args.tsne_perplexity, 'random_state': args.random_state, 'n_jobs': -1}}
+        # For n_components >= 4, we must use method='exact' instead of 'barnes_hut'
+        tsne_method = 'barnes_hut' if args.simspace_dim <= 3 else 'exact'
+        logger.info(f"t-SNE: Using method='{tsne_method}' for {args.simspace_dim}D (barnes_hut limited to ≤3D)")
+        
+        sklearn_params = {
+            'n_components': args.simspace_dim, 
+            'perplexity': args.tsne_perplexity, 
+            'random_state': args.random_state, 
+            'method': tsne_method,
+            'n_jobs': -1 if tsne_method == 'barnes_hut' else 1  # exact method doesn't support n_jobs=-1
+        }
+        
+        tsne_run_config = {
+            'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}, 
+            'sklearn_params': sklearn_params
+        }
         out_paths = {'dr_cols': [f't-SNE-{i+1}' for i in range(args.simspace_dim)], 'coembed_space': os.path.join(
             args.output_simspace_dir, f"{base_name}_tSNE_similarity_space_COEMBED.csv")}
         # t-SNE now always uses the PCA-reduced data
