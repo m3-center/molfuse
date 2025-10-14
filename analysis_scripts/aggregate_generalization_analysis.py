@@ -555,6 +555,321 @@ def create_cutoff_analysis_plots(df, output_dir):
     
     return plots_created
 
+def analyze_active_distribution_across_ranks(workspace_dirs, output_dir):
+    """
+    Analyze how actives are distributed across different rank ranges for each method and target.
+    
+    This provides insight into enrichment patterns similar to the PCA baseline analysis.
+    Analyzes rank distribution in bins: 1-10K, 10K-50K, 50K-100K, 100K-500K, 500K+
+    
+    Args:
+        workspace_dirs: Dictionary mapping workspace labels to directories
+        output_dir: Directory for output tables and plots
+    
+    Returns:
+        DataFrame with distribution statistics, list of created files
+    """
+    logging.info("\n" + "=" * 80)
+    logging.info("ANALYZING ACTIVE DISTRIBUTION ACROSS RANK RANGES")
+    logging.info("=" * 80)
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    all_distributions = []
+    rank_bins = [
+        (1, 10000, "1-10K (Top 0.77%)"),
+        (10001, 50000, "10K-50K"),
+        (50001, 100000, "50K-100K"),
+        (100001, 500000, "100K-500K"),
+        (500001, float('inf'), "500K+")
+    ]
+    
+    # Target name mapping
+    target_name_map = {
+        'TyrosineProteinKinaseABL1_P00519': 'ABL1',
+        'PyruvateKinaseM2_P14618': 'Pyruvate Kinase M2',
+        'IsocitrateDehydrogenaseNADP_O75874': 'Isocitrate Dehydrogenase'
+    }
+    
+    for workspace_label, workspace_dir in workspace_dirs.items():
+        if not os.path.exists(workspace_dir):
+            logging.warning(f"Workspace not found: {workspace_dir}")
+            continue
+        
+        logging.info(f"\nProcessing workspace: {workspace_label}")
+        
+        # Find all results CSV files with rankings
+        pattern = os.path.join(workspace_dir, "run_seed*", "*", "results", "*", "dim_*", "*", "*-RANKED.csv")
+        results_files = glob.glob(pattern)
+        
+        logging.info(f"Found {len(results_files)} results files")
+        
+        for results_file in results_files:
+            try:
+                # Parse file path to extract metadata
+                path_parts = results_file.split(os.sep)
+                run_dir_name = next(p for p in path_parts if p.startswith("run_seed"))
+                
+                # Extract seed
+                seed_match = re.search(r"run_seed(\d+)", run_dir_name)
+                if not seed_match:
+                    continue
+                seed = int(seed_match.group(1))
+                
+                # Extract target ID
+                target_idx = path_parts.index(run_dir_name) + 1
+                target_id = path_parts[target_idx]
+                target_name = target_name_map.get(target_id, target_id)
+                
+                # Extract representation type
+                repr_type = path_parts[path_parts.index("results") + 1]
+                
+                # Get config to extract method information
+                run_config_path = os.path.join(workspace_dir, run_dir_name, "run_config.json")
+                if not os.path.exists(run_config_path):
+                    logging.warning(f"Config not found: {run_config_path}")
+                    continue
+                
+                with open(run_config_path, 'r') as f:
+                    run_config = json.load(f)
+                
+                # Extract DR method info
+                dr_method_key = list(run_config['dimensionality_reduction_methods'].keys())[0]
+                dr_params = run_config['dimensionality_reduction_methods'][dr_method_key]
+                dr_method = dr_params['short_name']
+                
+                # Determine embedding strategy
+                strategy_dir = path_parts[path_parts.index(next(p for p in path_parts if p.startswith("dim_"))) + 1]
+                embedding_strategy = "Projection"
+                if "tsne" in dr_method_key:
+                    embedding_strategy = "Co-embedding (Native)"
+                elif strategy_dir.endswith('_Coembed'):
+                    embedding_strategy = "Co-embedding"
+                
+                method_full = f"{dr_method} ({embedding_strategy})"
+                
+                # Read results file
+                df_results = pd.read_csv(results_file)
+                
+                # Check required columns
+                if 'TYPE' not in df_results.columns or 'RANKING' not in df_results.columns:
+                    logging.warning(f"Missing required columns in {results_file}")
+                    continue
+                
+                # Count total actives and total compounds
+                total_actives = len(df_results[df_results['TYPE'] == 'HELDOUT_ACTIVE'])
+                total_compounds = len(df_results)
+                
+                if total_actives == 0:
+                    logging.warning(f"No actives found in {results_file}")
+                    continue
+                
+                # Analyze distribution across rank bins
+                distribution_row = {
+                    'Workspace': workspace_label,
+                    'Target_ID': target_id,
+                    'Target_Name': target_name,
+                    'Seed': seed,
+                    'Representation': repr_type.capitalize(),
+                    'DR_Method': dr_method,
+                    'Embedding_Strategy': embedding_strategy,
+                    'Method_Full': method_full,
+                    'Total_Actives': total_actives,
+                    'Total_Compounds': total_compounds
+                }
+                
+                # Count actives in each rank bin
+                for bin_start, bin_end, bin_label in rank_bins:
+                    if bin_end == float('inf'):
+                        actives_in_bin = len(df_results[
+                            (df_results['TYPE'] == 'HELDOUT_ACTIVE') & 
+                            (df_results['RANKING'] >= bin_start)
+                        ])
+                    else:
+                        actives_in_bin = len(df_results[
+                            (df_results['TYPE'] == 'HELDOUT_ACTIVE') & 
+                            (df_results['RANKING'] >= bin_start) & 
+                            (df_results['RANKING'] <= bin_end)
+                        ])
+                    
+                    pct_of_total = (actives_in_bin / total_actives * 100) if total_actives > 0 else 0
+                    distribution_row[f'Actives_{bin_label}'] = actives_in_bin
+                    distribution_row[f'Pct_{bin_label}'] = pct_of_total
+                
+                all_distributions.append(distribution_row)
+                
+            except Exception as e:
+                logging.warning(f"Failed to process {results_file}: {e}")
+                continue
+    
+    if not all_distributions:
+        logging.warning("No distribution data collected")
+        return pd.DataFrame(), []
+    
+    df_dist = pd.DataFrame(all_distributions)
+    logging.info(f"Collected distribution data for {len(df_dist)} experiments")
+    
+    # Save raw distribution data
+    files_created = []
+    raw_dist_path = os.path.join(output_dir, 'active_distribution_by_ranks_raw.csv')
+    df_dist.to_csv(raw_dist_path, index=False)
+    files_created.append(raw_dist_path)
+    logging.info(f"Saved raw distribution data: {raw_dist_path}")
+    
+    # Aggregate by method and target (mean across seeds)
+    groupby_cols = ['Target_Name', 'Method_Full', 'DR_Method', 'Embedding_Strategy', 'Representation']
+    
+    # Get percentage columns
+    pct_cols = [col for col in df_dist.columns if col.startswith('Pct_')]
+    count_cols = [col for col in df_dist.columns if col.startswith('Actives_')]
+    
+    # Aggregate
+    agg_dict = {col: ['mean', 'std'] for col in pct_cols + count_cols}
+    agg_dict['Seed'] = 'count'  # Number of replicates
+    agg_dict['Total_Actives'] = 'mean'
+    agg_dict['Total_Compounds'] = 'mean'
+    
+    df_agg = df_dist.groupby(groupby_cols).agg(agg_dict).reset_index()
+    
+    # Flatten column names
+    df_agg.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df_agg.columns.values]
+    
+    # Rename count column
+    df_agg.rename(columns={'Seed_count': 'N_Seeds'}, inplace=True)
+    
+    # Save aggregated distribution data
+    agg_dist_path = os.path.join(output_dir, 'active_distribution_by_ranks_aggregated.csv')
+    df_agg.to_csv(agg_dist_path, index=False)
+    files_created.append(agg_dist_path)
+    logging.info(f"Saved aggregated distribution data: {agg_dist_path}")
+    
+    # Create visualization: stacked bar chart showing percentage distribution
+    logging.info("\nCreating distribution visualization...")
+    
+    for target in df_agg['Target_Name'].unique():
+        target_data = df_agg[df_agg['Target_Name'] == target]
+        
+        if target_data.empty:
+            continue
+        
+        # Prepare data for stacked bar chart
+        methods = target_data['Method_Full'].values
+        
+        # Extract mean percentages for each bin
+        bin_labels_short = ["1-10K", "10K-50K", "50K-100K", "100K-500K", "500K+"]
+        bin_data = []
+        for bin_label in rank_bins:
+            col_name = f'Pct_{bin_label[2]}_mean'
+            if col_name in target_data.columns:
+                bin_data.append(target_data[col_name].values)
+        
+        # Create stacked bar chart
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        x = np.arange(len(methods))
+        width = 0.6
+        bottom = np.zeros(len(methods))
+        
+        colors = plt.cm.viridis(np.linspace(0, 1, len(bin_labels_short)))
+        
+        for i, (bin_pcts, bin_label) in enumerate(zip(bin_data, bin_labels_short)):
+            ax.bar(x, bin_pcts, width, label=bin_label, bottom=bottom, color=colors[i])
+            
+            # Add percentage labels on bars (only if > 5%)
+            for j, pct in enumerate(bin_pcts):
+                if pct > 5:
+                    ax.text(x[j], bottom[j] + pct/2, f'{pct:.1f}%', 
+                           ha='center', va='center', fontsize=9, fontweight='bold')
+            
+            bottom += bin_pcts
+        
+        ax.set_xlabel('Method', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Percentage of Total Actives (%)', fontsize=12, fontweight='bold')
+        ax.set_title(f'Active Distribution Across Rank Ranges - {target}', 
+                    fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(methods, rotation=45, ha='right', fontsize=10)
+        ax.legend(title='Rank Range', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+        ax.set_ylim(0, 100)
+        ax.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        plot_path = os.path.join(output_dir, f'active_distribution_{target.replace(" ", "_")}.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        files_created.append(plot_path)
+        logging.info(f"Created distribution plot: {plot_path}")
+    
+    # Create comparison plot: all targets side by side for top bin (1-10K)
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    targets = sorted(df_agg['Target_Name'].unique())
+    methods = sorted(df_agg['Method_Full'].unique())
+    x = np.arange(len(methods))
+    width = 0.25
+    
+    colors = plt.cm.Set2(np.linspace(0, 1, len(targets)))
+    
+    for i, target in enumerate(targets):
+        target_data = df_agg[df_agg['Target_Name'] == target]
+        
+        # Get percentage in top 10K for each method
+        top_bin_col = f'Pct_{rank_bins[0][2]}_mean'
+        top_bin_std = f'Pct_{rank_bins[0][2]}_std'
+        
+        means = []
+        stds = []
+        for method in methods:
+            method_data = target_data[target_data['Method_Full'] == method]
+            if len(method_data) > 0:
+                means.append(method_data[top_bin_col].values[0])
+                std_val = method_data[top_bin_std].values[0] if top_bin_std in method_data.columns else 0
+                stds.append(std_val if not np.isnan(std_val) else 0)
+            else:
+                means.append(0)
+                stds.append(0)
+        
+        ax.bar(x + i*width, means, width, label=target, yerr=stds, 
+               capsize=5, color=colors[i], alpha=0.8)
+    
+    ax.set_xlabel('Method', fontsize=12, fontweight='bold')
+    ax.set_ylabel('% of Actives in Top 10K (0.77%)', fontsize=12, fontweight='bold')
+    ax.set_title('Concentration of Actives in Top Ranks - Method Comparison', 
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(methods, rotation=45, ha='right', fontsize=10)
+    ax.legend(title='Target Protein', fontsize=10)
+    ax.grid(axis='y', alpha=0.3)
+    ax.axhline(y=50, color='red', linestyle='--', linewidth=1, alpha=0.5, label='50% threshold')
+    
+    plt.tight_layout()
+    plot_path = os.path.join(output_dir, 'top_rank_concentration_comparison.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    files_created.append(plot_path)
+    logging.info(f"Created comparison plot: {plot_path}")
+    
+    # Print summary statistics
+    logging.info("\n" + "=" * 80)
+    logging.info("ACTIVE DISTRIBUTION SUMMARY")
+    logging.info("=" * 80)
+    
+    for target in df_agg['Target_Name'].unique():
+        logging.info(f"\n{target}:")
+        target_data = df_agg[df_agg['Target_Name'] == target]
+        
+        top_bin_col = f'Pct_{rank_bins[0][2]}_mean'
+        
+        # Sort by percentage in top 10K
+        target_sorted = target_data.sort_values(top_bin_col, ascending=False)
+        
+        for idx, row in target_sorted.iterrows():
+            method = row['Method_Full']
+            top_pct = row[top_bin_col]
+            logging.info(f"  {method}: {top_pct:.1f}% actives in top 10K")
+    
+    return df_dist, files_created
+
 def main():
     parser = argparse.ArgumentParser(description="Aggregate and analyze generalization experiment results.")
     parser.add_argument("--abl1_workspace", default="experiment_workspace_rerun_hyperparam_sweep/",
@@ -659,6 +974,35 @@ def main():
     logging.info("\nCreating summary tables...")
     tables = create_summary_tables(df_for_comparison, tables_dir)
     logging.info(f"Created {len(tables)} tables")
+    
+    # STEP 4: Analyze active distribution across rank ranges
+    logging.info("\n" + "=" * 80)
+    logging.info("STEP 4: Analyzing active distribution across rank ranges...")
+    logging.info("=" * 80)
+    
+    # Prepare workspace directories for distribution analysis
+    workspace_dirs = {}
+    if args.generalization_workspace and os.path.exists(args.generalization_workspace):
+        workspace_dirs['Generalization'] = args.generalization_workspace
+    if args.abl1_workspace and os.path.exists(args.abl1_workspace):
+        workspace_dirs['ABL1_Hyperparam'] = args.abl1_workspace
+    
+    if workspace_dirs:
+        dist_output_dir = os.path.join(tables_dir, "distribution_analysis")
+        df_distribution, dist_files = analyze_active_distribution_across_ranks(workspace_dirs, dist_output_dir)
+        logging.info(f"Created {len(dist_files)} distribution analysis files")
+        
+        # Also create plots in figures directory
+        if not df_distribution.empty:
+            # Copy key plots to figures directory for easy access
+            import shutil
+            for dist_file in dist_files:
+                if dist_file.endswith('.png'):
+                    dest = os.path.join(figures_dir, os.path.basename(dist_file))
+                    shutil.copy(dist_file, dest)
+                    logging.info(f"Copied distribution plot to figures: {dest}")
+    else:
+        logging.warning("No workspace directories found for distribution analysis")
     
     # Print summary statistics
     logging.info("\n" + "=" * 80)

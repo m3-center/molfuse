@@ -82,6 +82,12 @@ python aggregate_generalization_analysis.py \
   --output_dir final_report_generalization/
 ```
 
+**New Feature: Active Distribution Analysis**
+- Analyzes how actives are distributed across rank ranges (1-10K, 10K-50K, etc.)
+- Compares enrichment patterns across methods and targets
+- Generates stacked bar charts and comparison plots
+- See `docs/ACTIVE_DISTRIBUTION_ANALYSIS.md` for details
+
 **Status**: ✅ Jobs completed, ready to analyze
 
 ---
