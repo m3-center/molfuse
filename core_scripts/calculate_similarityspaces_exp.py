@@ -14,14 +14,13 @@ import pandas as pd
 import numpy as np
 
 from sklearn.decomposition import PCA as sklearnPCA
-from sklearn.manifold import TSNE as sklearnTSNE
 from sklearn.preprocessing import StandardScaler
 
 from core_scripts.utils import PassthroughScaler
 
-# ... (Module imports and initial setup are unchanged) ...
+# cuML and UMAP imports
 try:
-    from cuml import PCA as cumlPCA, UMAP as cumlUMAP, TSNE as cumlTSNE
+    from cuml import PCA as cumlPCA, UMAP as cumlUMAP
     CUML_AVAILABLE = True
 except ImportError:
     CUML_AVAILABLE = False
@@ -217,28 +216,7 @@ def run_pca(X_processed, df_info, X_target_processed, df_target_info, config, ou
     return pd.DataFrame(projection_coords, columns=dr_cols, index=df_info.index)
 
 
-def run_tsne(X_pre_reduced, df_info, X_target_pre_reduced, df_target_info, config, out_paths, use_gpu):
-    logger.info("--- Running t-SNE ---")
-    if X_target_pre_reduced is None:
-        logger.warning("Cannot run t-SNE: held-out actives data is missing.")
-        return pd.DataFrame(columns=out_paths['dr_cols'])
-    X_coembed = np.vstack((X_pre_reduced, X_target_pre_reduced))
-    sklearn_params = config['sklearn_params'].copy()
-    adjusted_perplexity = min(sklearn_params.get(
-        'perplexity', 30.0), X_coembed.shape[0] - 1)
-    sklearn_params['perplexity'] = adjusted_perplexity
-    model = cumlTSNE(**config['cuml_params']
-                     ) if use_gpu else sklearnTSNE(**sklearn_params)
-    logger.info(
-        f"Fitting t-SNE on co-embedded data ({X_coembed.shape}) with perplexity={adjusted_perplexity}...")
-    coembed_coords = model.fit_transform(X_coembed)
-    df_coembed = construct_coembedded_dataframe(
-        df_info, df_target_info, coembed_coords, out_paths['dr_cols'])
-    df_coembed.to_csv(out_paths['coembed_space'], index=False)
-    logger.info(
-        f"Saved co-embedded t-SNE space to {out_paths['coembed_space']}")
-    projection_coords = coembed_coords[:len(df_info), :]
-    return pd.DataFrame(projection_coords, columns=out_paths['dr_cols'], index=df_info.index)
+# t-SNE removed in v2.0: Only supports co-embedding (data leakage), incompatible with projection-only strategy
 
 
 def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_paths, use_gpu):
@@ -303,8 +281,7 @@ def main():
         "--dr_method_pca", type=lambda x: (str(x).lower() == 'true'), default=False)
     parser.add_argument(
         "--dr_method_umap", type=lambda x: (str(x).lower() == 'true'), default=False)
-    parser.add_argument(
-        "--dr_method_tsne", type=lambda x: (str(x).lower() == 'true'), default=False)
+    # t-SNE removed in v2.0
     parser.add_argument("--umap_metric_to_run_euclidean",
                         action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_cosine",
@@ -315,11 +292,9 @@ def main():
                         action='store_true', default=False)
     parser.add_argument("--umap_metric_to_run_jaccard",
                         action='store_true', default=False)
-    parser.add_argument("--tsne_perplexity", type=float, default=30.0)
-    parser.add_argument("--tsne_pca_components", type=int, default=50)
+    # t-SNE arguments removed in v2.0
     parser.add_argument("--n_neighbors", type=int, default=None)
-    parser.add_argument("--run_coembedding_for_pca_umap",
-                        type=lambda x: (str(x).lower() == 'true'), default=False)
+    # Co-embedding removed in v2.0 - projection only
     parser.add_argument("--dr_method_configs_json_str", required=True)
     parser.add_argument("--random_state", type=int, default=42)
     args = parser.parse_args()
@@ -403,31 +378,8 @@ def main():
                              df_target, pca_run_config, out_paths, GPU_ENABLED)
         df_results = df_results.join(pca_coords)
 
-    if args.dr_method_tsne:
-        # t-SNE can now run in any dimensionality (2, 3, 5, 10, 20, etc.)
-        # For n_components >= 4, we must use method='exact' instead of 'barnes_hut'
-        tsne_method = 'barnes_hut' if args.simspace_dim <= 3 else 'exact'
-        logger.info(f"t-SNE: Using method='{tsne_method}' for {args.simspace_dim}D (barnes_hut limited to ≤3D)")
-        
-        sklearn_params = {
-            'n_components': args.simspace_dim, 
-            'perplexity': args.tsne_perplexity, 
-            'random_state': args.random_state, 
-            'method': tsne_method,
-            'n_jobs': -1 if tsne_method == 'barnes_hut' else 1  # exact method doesn't support n_jobs=-1
-        }
-        
-        tsne_run_config = {
-            'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}, 
-            'sklearn_params': sklearn_params
-        }
-        out_paths = {'dr_cols': [f't-SNE-{i+1}' for i in range(args.simspace_dim)], 'coembed_space': os.path.join(
-            args.output_simspace_dir, f"{base_name}_tSNE_similarity_space_COEMBED.csv")}
-        # t-SNE now always uses the PCA-reduced data
-        tsne_coords = run_tsne(X_pca_reduced, df_info, X_target_pca_reduced,
-                               df_target, tsne_run_config, out_paths, GPU_ENABLED)
-        df_results = df_results.join(tsne_coords)
-
+    # t-SNE execution removed in v2.0: Only supports co-embedding (data leakage)
+    
     if args.dr_method_umap:
         X_data_dict = {
             'original': X_original, 'scaled': X_scaled, 'pca_reduced': X_pca_reduced,
