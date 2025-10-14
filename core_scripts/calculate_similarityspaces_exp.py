@@ -330,22 +330,19 @@ def main():
     base_name = f"{args.target_id_name}_{args.representation_type}_dim{args.simspace_dim}"
 
     if args.dr_method_pca:
-        # v2.0: PCA only for features (not fingerprints)
-        if args.representation_type == "fingerprints":
-            logger.warning("WARNING: PCA requested for fingerprints - SKIPPING in v2.0.")
-            logger.warning("Rationale: PCA on binary fingerprints is meaningless. Use UMAP-Jaccard instead.")
-        else:
-            # PCA on features uses scaled data (projection-only in v2.0)
-            pca_run_config = {
-                'simspace_dim': args.simspace_dim,
-                'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state},
-                'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}
-            }
-            out_paths = {
-                'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma")
-            }
-            pca_coords = run_pca(X_scaled, df_info, pca_run_config, out_paths, GPU_ENABLED)
-            df_results = df_results.join(pca_coords)
+        # v2.0: PCA works for both features and fingerprints (projection-only)
+        # Note: For fingerprints, PCA treats binary vectors as numerical features
+        # UMAP-Jaccard is preferred for fingerprints, but PCA is still valid for comparison
+        pca_run_config = {
+            'simspace_dim': args.simspace_dim,
+            'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state},
+            'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}
+        }
+        out_paths = {
+            'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma")
+        }
+        pca_coords = run_pca(X_scaled, df_info, pca_run_config, out_paths, GPU_ENABLED)
+        df_results = df_results.join(pca_coords)
 
     # t-SNE execution removed in v2.0: Only supports co-embedding (data leakage)
     
