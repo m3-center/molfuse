@@ -37,7 +37,7 @@ TARGET_FOR_SWEEP = "TyrosineProteinKinaseABL1_P00519"
 FIXED_SIMSPACE_DIM = 2  # Only 2D for hyperparameter sweep
 
 # UMAP hyperparameter grid (comprehensive search)
-UMAP_N_NEIGHBORS_VALUES = [15, 50, 100, 200, 500]  # Comprehensive range
+UMAP_N_NEIGHBORS_VALUES = [10, 100, 500]  # Comprehensive range
 UMAP_MIN_DIST_VALUES = [0.0, 0.01, 0.1, 0.5]  # From tight to loose embedding
 
 def generate_configs():
