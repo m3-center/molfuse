@@ -53,9 +53,10 @@ TARGETS = [
         "id_name": "PyruvateKinaseM2_P14618",
         "display_name": "Pyruvate Kinase M2",
         "uniprot_id": "P14618",
-        "molecular_function_canonical_name": "Protein kinase inhibitor",
-        "molecular_function_filename_segment": "Protein_kinase_inhibitor",
-        "molecular_function_display_name": "Protein kinase inhibitor"
+        "molecular_function_canonical_name": "Transferase",  # CORRECTED from "Protein kinase inhibitor"
+        "molecular_function_filename_segment": "Transferase",  # CORRECTED
+        "molecular_function_display_name": "Transferase",  # CORRECTED
+        "molecular_function_kw_code": "KW-0808"
     },
     {
         "id_name": "IsocitrateDehydrogenaseNADP_O75874",
@@ -63,7 +64,8 @@ TARGETS = [
         "uniprot_id": "O75874",
         "molecular_function_canonical_name": "Oxidoreductase",
         "molecular_function_filename_segment": "Oxidoreductase",
-        "molecular_function_display_name": "Oxidoreductase"
+        "molecular_function_display_name": "Oxidoreductase",
+        "molecular_function_kw_code": "KW-0560"
     }
 ]
 
