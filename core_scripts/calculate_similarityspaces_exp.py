@@ -260,7 +260,8 @@ def main():
     parser.add_argument("--chembl_mf_data_path", required=True)
     parser.add_argument("--zinc_data_path", default=None)
     parser.add_argument(
-        "--target_ligands_unscaled_path_for_tsne_and_coembed", default=None)
+        "--target_ligands_path_for_projection", default=None,
+        help="Path to held-out target ligands for projection (v2.0 projection-only strategy)")
     parser.add_argument("--simspace_dim", type=int, required=True)
     parser.add_argument("--representation_type", required=True,
                         choices=["features", "fingerprints"])
@@ -315,9 +316,9 @@ def main():
         save_model(scaler, os.path.join(args.output_model_dir,
                    f"{args.target_id_name}_fingerprints_dim{args.simspace_dim}_scaler.lzma"))
 
-    # 3. Prepare Target Ligands (not used in v2.0 projection-only, kept for compatibility)
+    # 3. Prepare Target Ligands for projection (v2.0 projection-only strategy)
     df_target, X_target_original, X_target_scaled = prepare_target_ligands(
-        args.target_ligands_unscaled_path_for_tsne_and_coembed, 
+        args.target_ligands_path_for_projection, 
         args.representation_type, 
         features_list, 
         scaler
