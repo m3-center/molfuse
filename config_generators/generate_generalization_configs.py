@@ -16,41 +16,75 @@ performance in the hyperparameter sweep.
 
 The goal is to test whether the methods generalize across different target proteins
 without expensive hyperparameter retuning.
+
+Usage:
+    python generate_generalization_configs.py              # Full run
+    python generate_generalization_configs.py --test-run   # Test with small dataset
 """
 
 import json
 import os
+import argparse
 from pathlib import Path
 
 # Output directory for generalization configs
 OUTPUT_DIR = Path("generalization_configs")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Global settings - same as in hyperparameter sweep
-GLOBAL_SETTINGS = {
-    "chembl_db_path": "datasets/chembl/chembl_35.db",
-    "chembl_affinity_full_csv_path": "datasets/chembl/chembl_35_affinity_data.csv",
-    "chembl_target_mapping_csv_path": "datasets/chembl/chembl_35_target_mapping.csv",
-    "zinc_full_csv_path": "datasets/zinc_data.csv",
-    "molecular_function_keywords_csv_path": "datasets/protein_collection/molecular_function_keywords.csv",
-    "precalculated_chembl_mf_features_base_dir": "datasets/molecular_function_features_fingerprints/",
-    "precalculated_chembl_mf_fingerprints_base_dir": "datasets/molecular_function_features_fingerprints/",
-    "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
-    "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
-    "simspace_dims_to_test": [2],  # Only 2D as in hyperparameter analysis
-    "k_for_knn_distance": [3, 5],
-    "affinity_cutoff_nM": 100000,
-    "workspace_base_dir": "experiment_workspace_generalization/",  # UNIQUE WORKSPACE
-    "final_report_dir": "final_report_generalization/",
-    "n_jobs_molcalcs": -1,
-    "rdkit_features_list_target": [
-        "DipoleMoment", "ABC", "nAcid", "nBase", "nAromAtom", "nAtom", "nH", "nC", "nN", "nO", "nS",
-        "nP", "nX", "nBonds", "nBondsO", "nBondsS", "nBondsD", "nBondsT", "nBondsA", "nBondsM",
-        "nBondsKS", "nBondsKD", "EState_VSA7", "nHBAcc", "nHBDon", "Lipinski", "apol", "bpol",
-        "nRing", "n3Ring", "n4Ring", "n5Ring", "n6Ring", "n7Ring", "n8Ring", "nRot", "Diameter",
-        "TopoShapeIndex", "Vabc", "MW"
-    ]
-}
+def get_global_settings(test_run=False):
+    """Get global settings based on run type."""
+    if test_run:
+        # Test run: small dataset, faster execution
+        return {
+            "chembl_db_path": "datasets_debugging/chembl/chembl_35.db",
+            "chembl_affinity_full_csv_path": "datasets_debugging/chembl/chembl_35_affinity_data.csv",
+            "chembl_target_mapping_csv_path": "datasets_debugging/chembl/chembl_35_target_mapping.csv",
+            "zinc_full_csv_path": "datasets_debugging/zinc_data.csv",
+            "molecular_function_keywords_csv_path": "datasets_debugging/protein_collection/molecular_function_keywords.csv",
+            "precalculated_chembl_mf_features_base_dir": "datasets_debugging/molecular_function_features_fingerprints/",
+            "precalculated_chembl_mf_fingerprints_base_dir": "datasets_debugging/molecular_function_features_fingerprints/",
+            "precalculated_zinc_features_path": "datasets_debugging/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
+            "precalculated_zinc_fingerprints_path": "datasets_debugging/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
+            "simspace_dims_to_test": [2],  # Only 2D for test
+            "k_for_knn_distance": [3],  # Single k for faster test
+            "affinity_cutoff_nM": 100000,
+            "workspace_base_dir": "test_experiment_workspace/",
+            "final_report_dir": "test_final_report/",
+            "n_jobs_molcalcs": -1,
+            "rdkit_features_list_target": [
+                "DipoleMoment", "ABC", "nAcid", "nBase", "nAromAtom", "nAtom", "nH", "nC", "nN", "nO", "nS",
+                "nP", "nX", "nBonds", "nBondsO", "nBondsS", "nBondsD", "nBondsT", "nBondsA", "nBondsM",
+                "nBondsKS", "nBondsKD", "EState_VSA7", "nHBAcc", "nHBDon", "Lipinski", "apol", "bpol",
+                "nRing", "n3Ring", "n4Ring", "n5Ring", "n6Ring", "n7Ring", "n8Ring", "nRot", "Diameter",
+                "TopoShapeIndex", "Vabc", "MW"
+            ]
+        }
+    else:
+        # Full run: complete dataset
+        return {
+            "chembl_db_path": "datasets/chembl/chembl_35.db",
+            "chembl_affinity_full_csv_path": "datasets/chembl/chembl_35_affinity_data.csv",
+            "chembl_target_mapping_csv_path": "datasets/chembl/chembl_35_target_mapping.csv",
+            "zinc_full_csv_path": "datasets/zinc_data.csv",
+            "molecular_function_keywords_csv_path": "datasets/protein_collection/molecular_function_keywords.csv",
+            "precalculated_chembl_mf_features_base_dir": "datasets/molecular_function_features_fingerprints/",
+            "precalculated_chembl_mf_fingerprints_base_dir": "datasets/molecular_function_features_fingerprints/",
+            "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
+            "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
+            "simspace_dims_to_test": [2],  # Only 2D as in hyperparameter analysis
+            "k_for_knn_distance": [3, 5],
+            "affinity_cutoff_nM": 100000,
+            "workspace_base_dir": "experiment_workspace_generalization/",  # UNIQUE WORKSPACE
+            "final_report_dir": "final_report_generalization/",
+            "n_jobs_molcalcs": -1,
+            "rdkit_features_list_target": [
+                "DipoleMoment", "ABC", "nAcid", "nBase", "nAromAtom", "nAtom", "nH", "nC", "nN", "nO", "nS",
+                "nP", "nX", "nBonds", "nBondsO", "nBondsS", "nBondsD", "nBondsT", "nBondsA", "nBondsM",
+                "nBondsKS", "nBondsKD", "EState_VSA7", "nHBAcc", "nHBDon", "Lipinski", "apol", "bpol",
+                "nRing", "n3Ring", "n4Ring", "n5Ring", "n6Ring", "n7Ring", "n8Ring", "nRot", "Diameter",
+                "TopoShapeIndex", "Vabc", "MW"
+            ]
+        }
 
 # Target proteins for generalization (excluding ABL1 which was used for hyperparameter tuning)
 TARGETS = [
@@ -101,11 +135,11 @@ DR_METHODS = {
     }
 }
 
-def create_config(target, dr_method_name, dr_method_info):
+def create_config(target, dr_method_name, dr_method_info, global_settings, test_run=False):
     """Create a single configuration file."""
     
     config = {
-        "global_settings": GLOBAL_SETTINGS.copy(),
+        "global_settings": global_settings.copy(),
         "targets": [target],
         "representations": REPRESENTATIONS,
         "dimensionality_reduction_methods": {
@@ -115,7 +149,8 @@ def create_config(target, dr_method_name, dr_method_info):
     
     # Generate filename with target name to avoid overwriting
     target_short = target["id_name"]
-    filename = f"config_{target_short}_features_{dr_method_name}.json"
+    suffix = "_TEST" if test_run else ""
+    filename = f"config_{target_short}_features_{dr_method_name}{suffix}.json"
     filepath = OUTPUT_DIR / filename
     
     # Write to file
@@ -125,22 +160,56 @@ def create_config(target, dr_method_name, dr_method_info):
     return filepath
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Generate v2.0 generalization experiment configurations",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python generate_generalization_configs.py              # Full run (2 targets, complete datasets)
+  python generate_generalization_configs.py --test-run   # Test run (1 target, small dataset)
+        """
+    )
+    parser.add_argument(
+        '--test-run',
+        action='store_true',
+        help='Generate test configurations with small dataset for validation'
+    )
+    args = parser.parse_args()
+    
+    # Get settings and targets based on run type
+    global_settings = get_global_settings(test_run=args.test_run)
+    
+    # For test runs, only use first target (Pyruvate Kinase M2)
+    targets_to_use = [TARGETS[0]] if args.test_run else TARGETS
+    
+    # Print header
+    run_type = "TEST RUN" if args.test_run else "FULL RUN"
     print("=" * 70)
-    print("Generating Generalization Experiment Configurations")
+    print(f"Generating Generalization Experiment Configurations ({run_type})")
     print("=" * 70)
     print(f"\nOutput directory: {OUTPUT_DIR}")
-    print(f"Number of targets: {len(TARGETS)}")
+    print(f"Number of targets: {len(targets_to_use)}")
     print(f"Number of DR methods: {len(DR_METHODS)}")
-    print(f"Total configs to generate: {len(TARGETS) * len(DR_METHODS)}")
+    print(f"Total configs to generate: {len(targets_to_use) * len(DR_METHODS)}")
+    
+    if args.test_run:
+        print("\n⚠️  TEST RUN MODE")
+        print("   - Using datasets_debugging/ (small dataset)")
+        print("   - Only 1 target: Pyruvate Kinase M2")
+        print("   - Single k value (k=3)")
+        print("   - Workspace: test_experiment_workspace/")
+        print("   - Reports: test_final_report/")
+    
     print()
     
     configs_created = []
     
-    for target in TARGETS:
+    for target in targets_to_use:
         print(f"\nTarget: {target['display_name']} ({target['id_name']})")
         
         for dr_name, dr_info in DR_METHODS.items():
-            filepath = create_config(target, dr_name, dr_info)
+            filepath = create_config(target, dr_name, dr_info, global_settings, test_run=args.test_run)
             configs_created.append(filepath)
             print(f"  ✓ Created: {filepath.name}")
     
@@ -160,19 +229,38 @@ def main():
     print("  ✗ Co-embedding removed (data leakage)")
     print("  ✓ Projection-only strategy (prevents data leakage)")
     print()
-    print("Targets (with corrected molecular functions):")
-    for target in TARGETS:
-        mf = target['molecular_function_canonical_name']
-        kw = target['molecular_function_kw_code']
-        print(f"  • {target['display_name']} ({mf}, {kw})")
-    print()
-    print("Workspace: experiment_workspace_generalization/")
-    print("Reports: final_report_generalization/")
-    print()
-    print("To run the experiment:")
-    print("  1. Submit jobs using: bash hpc/submit_generalization_jobs.sh")
-    print("  2. Each config will be run with 5 random seeds (42-46)")
-    print(f"  3. Total jobs: {len(configs_created)} configs × 5 seeds = {len(configs_created) * 5} jobs")
+    
+    if args.test_run:
+        print("Test Run Targets:")
+        for target in targets_to_use:
+            mf = target['molecular_function_canonical_name']
+            kw = target['molecular_function_kw_code']
+            print(f"  • {target['display_name']} ({mf}, {kw})")
+        print()
+        print(f"Workspace: {global_settings['workspace_base_dir']}")
+        print(f"Reports: {global_settings['final_report_dir']}")
+        print()
+        print("To run the test:")
+        print("  1. Submit jobs using: bash hpc/submit_generalization_jobs.sh --test-run")
+        print("  2. Each config will be run with 3 random seeds (42-44)")
+        print(f"  3. Total jobs: {len(configs_created)} configs × 3 seeds = {len(configs_created) * 3} jobs")
+        print(f"  4. Expected runtime: ~2-4 hours per job")
+    else:
+        print("Targets (with corrected molecular functions):")
+        for target in targets_to_use:
+            mf = target['molecular_function_canonical_name']
+            kw = target['molecular_function_kw_code']
+            print(f"  • {target['display_name']} ({mf}, {kw})")
+        print()
+        print(f"Workspace: {global_settings['workspace_base_dir']}")
+        print(f"Reports: {global_settings['final_report_dir']}")
+        print()
+        print("To run the experiment:")
+        print("  1. Submit jobs using: bash hpc/submit_generalization_jobs.sh")
+        print("  2. Each config will be run with 5 random seeds (42-46)")
+        print(f"  3. Total jobs: {len(configs_created)} configs × 5 seeds = {len(configs_created) * 5} jobs")
+        print(f"  4. Expected runtime: ~24-48 hours per job")
+    
     print("=" * 70)
 
 if __name__ == "__main__":

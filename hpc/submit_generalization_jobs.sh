@@ -6,17 +6,35 @@
 # This script submits SLURM jobs for the generalization experiment.
 # It runs each configuration with 5 random seeds (42-46) to get statistical data.
 #
-# Usage: bash hpc/submit_generalization_jobs.sh
+# Usage: 
+#   bash hpc/submit_generalization_jobs.sh              # Full run (5 seeds)
+#   bash hpc/submit_generalization_jobs.sh --test-run   # Test run (3 seeds)
 # ============================================================================
 
+# Check for test run flag
+TEST_RUN=false
+if [[ "$1" == "--test-run" ]]; then
+    TEST_RUN=true
+fi
+
 echo "========================================================================"
-echo "UMMBAS Generalization Experiment - Job Submission Script"
+if [ "$TEST_RUN" = true ]; then
+    echo "UMMBAS Generalization Experiment - TEST RUN Job Submission"
+else
+    echo "UMMBAS Generalization Experiment - FULL RUN Job Submission"
+fi
 echo "========================================================================"
 echo "Start time: $(date)"
 echo ""
 
-# Random seeds for statistical analysis (same as hyperparameter sweep)
-SEEDS=(42 43 44 45 46)
+# Random seeds for statistical analysis
+if [ "$TEST_RUN" = true ]; then
+    SEEDS=(42 43 44)  # Reduced seeds for test run
+    CONFIG_SUFFIX="_TEST.json"
+else
+    SEEDS=(42 43 44 45 46)  # Full seeds for production run
+    CONFIG_SUFFIX=".json"
+fi
 
 # Configuration directory
 CONFIG_DIR="generalization_configs"
@@ -24,23 +42,35 @@ CONFIG_DIR="generalization_configs"
 # Check if config directory exists
 if [ ! -d "${CONFIG_DIR}" ]; then
     echo "ERROR: Configuration directory '${CONFIG_DIR}' not found!"
-    echo "Please run: python generate_generalization_configs.py"
+    if [ "$TEST_RUN" = true ]; then
+        echo "Please run: python config_generators/generate_generalization_configs.py --test-run"
+    else
+        echo "Please run: python config_generators/generate_generalization_configs.py"
+    fi
     exit 1
 fi
 
 # Create slurm_logs directory if it doesn't exist
 mkdir -p slurm_logs
 
-# Count total configs
-TOTAL_CONFIGS=$(find "${CONFIG_DIR}" -name "*.json" | wc -l)
+# Count total configs based on run type
+if [ "$TEST_RUN" = true ]; then
+    TOTAL_CONFIGS=$(find "${CONFIG_DIR}" -name "*${CONFIG_SUFFIX}" | wc -l)
+else
+    TOTAL_CONFIGS=$(find "${CONFIG_DIR}" -name "*.json" ! -name "*_TEST.json" | wc -l)
+fi
 TOTAL_JOBS=$((TOTAL_CONFIGS * ${#SEEDS[@]}))
 
 echo "Configuration directory: ${CONFIG_DIR}"
+echo "Run mode: $([ "$TEST_RUN" = true ] && echo "TEST RUN" || echo "FULL RUN")"
 echo "Number of configs found: ${TOTAL_CONFIGS}"
 echo "Number of seeds per config: ${#SEEDS[@]}"
 echo "Total jobs to submit: ${TOTAL_JOBS}"
 echo ""
 echo "Random seeds: ${SEEDS[*]}"
+if [ "$TEST_RUN" = true ]; then
+    echo "Config suffix: ${CONFIG_SUFFIX}"
+fi
 echo ""
 echo "========================================================================"
 echo ""
@@ -49,9 +79,22 @@ echo ""
 SUBMITTED=0
 FAILED=0
 
-# Loop through all JSON config files
-for CONFIG_FILE in "${CONFIG_DIR}"/*.json; do
+# Loop through JSON config files based on run type
+if [ "$TEST_RUN" = true ]; then
+    # Test run: only process *_TEST.json files
+    CONFIG_PATTERN="${CONFIG_DIR}/*${CONFIG_SUFFIX}"
+else
+    # Full run: process all .json files except *_TEST.json
+    CONFIG_PATTERN="${CONFIG_DIR}/*.json"
+fi
+
+for CONFIG_FILE in ${CONFIG_PATTERN}; do
     if [ ! -f "${CONFIG_FILE}" ]; then
+        continue
+    fi
+    
+    # Skip test configs in full run
+    if [ "$TEST_RUN" = false ] && [[ "${CONFIG_FILE}" == *"_TEST.json" ]]; then
         continue
     fi
     
