@@ -18,7 +18,7 @@ source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 
 SCRIPT_DIR=$(pwd) # Or specify absolute path to your project root
 EXPERIMENT_DIR="${SCRIPT_DIR}/experiment_workspace/"
-REPORT_SCRIPT="${SCRIPT_DIR}/aggregate_and_report.py"
+REPORT_SCRIPT="${SCRIPT_DIR}/analysis_scripts/aggregate_and_report.py"
 CONFIG_FILE="${SCRIPT_DIR}/experiment_config.json"
 
 # --- Run the report generator ---

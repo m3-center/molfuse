@@ -36,7 +36,7 @@ source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 # Assumes this template is in the project root with the other scripts.
 # Adjust SCRIPT_DIR if your project structure is different.
 SCRIPT_DIR=$(pwd) 
-ANALYSIS_SCRIPT="${SCRIPT_DIR}/analyze_fingerprint_variance.py"
+ANALYSIS_SCRIPT="${SCRIPT_DIR}/analysis_scripts/analyze_fingerprint_variance.py"
 
 
 # --- Run the Orchestrator ---

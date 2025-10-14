@@ -24,7 +24,7 @@ CONFIG_DIR="dimensionality_configs"
 # Check if config directory exists
 if [ ! -d "${CONFIG_DIR}" ]; then
     echo "ERROR: Configuration directory '${CONFIG_DIR}' not found!"
-    echo "Please run: python generate_dimensionality_configs.py"
+    echo "Please run: python config_generators/generate_dimensionality_configs.py"
     exit 1
 fi
 
@@ -95,7 +95,7 @@ echo "Monitor jobs with: squeue -u \$USER"
 echo "Check logs in: slurm_logs/"
 echo ""
 echo "After jobs complete, run:"
-echo "  python aggregate_dimensionality_analysis.py"
+echo "  python analysis_scripts/aggregate_dimensionality_analysis.py"
 echo ""
 echo "End time: $(date)"
 echo "========================================================================"

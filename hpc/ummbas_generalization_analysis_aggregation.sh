@@ -32,7 +32,7 @@ source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 # Assumes this template is in the project root with the other scripts.
 # Adjust SCRIPT_DIR if your project structure is different.
 SCRIPT_DIR=$(pwd) 
-ORCHESTRATOR_SCRIPT="${SCRIPT_DIR}/aggregate_generalization_analysis.py"
+ORCHESTRATOR_SCRIPT="${SCRIPT_DIR}/analysis_scripts/aggregate_generalization_analysis.py"
 
 # Check that required files exist
 if [ ! -f "${ORCHESTRATOR_SCRIPT}" ]; then
