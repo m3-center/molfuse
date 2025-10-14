@@ -1,8 +1,15 @@
 datasets/*
 datasets_debugging/*
 test_outputs/*
+experiment_workspace*
+final_report*
+logs/*
+reports/*
+temp/*
+TeX/*
 *.lzma
 *.png
 *.log
 *.out
 *.err
+*.pdf
