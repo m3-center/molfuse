@@ -7,7 +7,6 @@ This document describes the organizational structure of the UMMBAS screening exp
 
 ### Core Scripts
 - **`main_orchestrator.py`**: Main pipeline orchestration script (coordinates all phases)
-- **`gui_similarity.py`**: GUI tool for similarity space visualization
 - **`run_generalization_experiment.sh`**: Shell script for running generalization experiments
 
 ### Configuration Files
