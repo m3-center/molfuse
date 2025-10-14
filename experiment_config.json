@@ -13,7 +13,6 @@
     
     "simspace_dims_to_test": [2, 3, 5, 10, 20],
     "k_for_knn_distance": [3, 5],
-    "tsne_pca_components": 50,
     "affinity_cutoff_nM": 100000,
     
     "workspace_base_dir": "experiment_workspace/",
@@ -25,19 +24,17 @@
         "nBondsKS","nBondsKD","EState_VSA7","nHBAcc","nHBDon","Lipinski","apol","bpol",
         "nRing","n3Ring","n4Ring","n5Ring","n6Ring","n7Ring","n8Ring","nRot","Diameter",
         "TopoShapeIndex","Vabc","MW"
-
-        
-    ],
-    "run_coembedding_for_pca_umap": true 
+    ] 
   },
   "targets": [
     {
       "id_name": "PyruvateKinaseM2_P14618",
       "display_name": "Pyruvate Kinase M2",
       "uniprot_id": "P14618",
-      "molecular_function_canonical_name": "Protein kinase inhibitor",
-      "molecular_function_filename_segment": "Protein_kinase_inhibitor",
-      "molecular_function_display_name": "Protein kinase inhibitor"
+      "molecular_function_canonical_name": "Transferase",
+      "molecular_function_filename_segment": "Transferase",
+      "molecular_function_display_name": "Transferase",
+      "molecular_function_kw_code": "KW-0808"
     },
     {
       "id_name": "IsocitrateDehydrogenaseNADP_O75874",
@@ -45,15 +42,17 @@
       "uniprot_id": "O75874",
       "molecular_function_canonical_name": "Oxidoreductase",
       "molecular_function_filename_segment": "Oxidoreductase",
-      "molecular_function_display_name": "Oxidoreductase"
+      "molecular_function_display_name": "Oxidoreductase",
+      "molecular_function_kw_code": "KW-0560"
     },
     {
       "id_name": "TyrosineProteinKinaseABL1_P00519",
       "display_name": "Tyrosine-protein Kinase ABL1",
       "uniprot_id": "P00519",
-      "molecular_function_canonical_name": "Protein kinase inhibitor",
-      "molecular_function_filename_segment": "Protein_kinase_inhibitor",
-      "molecular_function_display_name": "Protein kinase inhibitor"
+      "molecular_function_canonical_name": "Transferase",
+      "molecular_function_filename_segment": "Transferase",
+      "molecular_function_display_name": "Transferase",
+      "molecular_function_kw_code": "KW-0808"
     },
     {
       "id_name": "ActinCytoplasmic1_P60709",
@@ -74,13 +73,10 @@
       "processing_mode": "similarity_space_only"
     }
   ],
-  "representations": ["fingerprints", "features"],
+  "representations": ["features"],
   "dimensionality_reduction_methods": {
-       "pca": {"short_name": "PCA", "allow_coembedding": true},
-      "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean", "allow_coembedding": true},
-      "umap_cosine": {"short_name": "UMAP-Cosine", "metric": "cosine", "allow_coembedding": true},
-      "umap_hamming": {"short_name": "UMAP-Hamming", "metric": "hamming", "allow_coembedding": true},
-      "umap_jaccard": {"short_name": "UMAP-Jaccard", "metric": "jaccard", "allow_coembedding": true},
-      "tsne": {"short_name": "t-SNE", "perplexity": 30, "allow_coembedding": true} 
+    "pca": {"short_name": "PCA"},
+    "umap_euclidean": {"short_name": "UMAP-Euclidean", "metric": "euclidean"},
+    "umap_jaccard": {"short_name": "UMAP-Jaccard", "metric": "jaccard"}
   }
 }

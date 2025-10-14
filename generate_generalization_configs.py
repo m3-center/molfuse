@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
-Generate configuration files for the generalization experiment.
+Generate configuration files for the generalization experiment (v2.0).
 
-This script creates configs for the two new target proteins (PyruvateKinaseM2 and 
-IsocitrateDehydrogenaseNADP) using reasonable default hyperparameters for method 
-comparison. We focus on features (not fingerprints) since fingerprints showed 
-poor performance in the hyperparameter sweep.
+This script creates configs for two target proteins (PyruvateKinaseM2 and 
+IsocitrateDehydrogenaseNADP) using optimal hyperparameters from ABL1 analysis.
+
+v2.0 Changes:
+- Corrected molecular function assignments (kinases → Transferase KW-0808)
+- Removed t-SNE (co-embedding only, data leakage)
+- Removed co-embedding (data leakage in prospective screening)
+- Projection-only strategy for all DR methods
+
+We focus on features (not fingerprints) since fingerprints showed poor 
+performance in the hyperparameter sweep.
 
 The goal is to test whether the methods generalize across different target proteins
 without expensive hyperparameter retuning.
@@ -32,7 +39,6 @@ GLOBAL_SETTINGS = {
     "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
     "simspace_dims_to_test": [2],  # Only 2D as in hyperparameter analysis
     "k_for_knn_distance": [3, 5],
-    "tsne_pca_components": 50,
     "affinity_cutoff_nM": 100000,
     "workspace_base_dir": "experiment_workspace_generalization/",  # UNIQUE WORKSPACE
     "final_report_dir": "final_report_generalization/",
@@ -43,8 +49,7 @@ GLOBAL_SETTINGS = {
         "nBondsKS", "nBondsKD", "EState_VSA7", "nHBAcc", "nHBDon", "Lipinski", "apol", "bpol",
         "nRing", "n3Ring", "n4Ring", "n5Ring", "n6Ring", "n7Ring", "n8Ring", "nRot", "Diameter",
         "TopoShapeIndex", "Vabc", "MW"
-    ],
-    "run_coembedding_for_pca_umap": True
+    ]
 }
 
 # Target proteins for generalization (excluding ABL1 which was used for hyperparameter tuning)
@@ -72,33 +77,17 @@ TARGETS = [
 # Only features representation (fingerprints performed poorly)
 REPRESENTATIONS = ["features"]
 
-# Dimensionality reduction methods with BEST hyperparameters from ABL1 analysis
-# These are the optimal values that showed the best performance in the hyperparameter sweep
+# v2.0: Dimensionality reduction methods (PROJECTION-ONLY)
+# t-SNE removed (co-embedding only, data leakage)
+# Co-embedding removed (data leakage)
+# Using optimal hyperparameters from ABL1 analysis
 DR_METHODS = {
     "pca_projection": {
         "method_key": "pca",
         "config": {
-            "short_name": "PCA",
-            "allow_coembedding": False
+            "short_name": "PCA"
         },
         "strategy": "projection"
-    },
-    "pca_coembedding": {
-        "method_key": "pca",
-        "config": {
-            "short_name": "PCA",
-            "allow_coembedding": True
-        },
-        "strategy": "coembedding"
-    },
-    "tsne": {
-        "method_key": "tsne",
-        "config": {
-            "short_name": "t-SNE",
-            "perplexity": 1000,
-            "allow_coembedding": True
-        },
-        "strategy": "coembedding"
     },
     "umap_euclidean_projection": {
         "method_key": "umap_euclidean",
@@ -106,21 +95,9 @@ DR_METHODS = {
             "short_name": "UMAP-Euclidean",
             "metric": "euclidean",
             "n_neighbors": 500,
-            "min_dist": 0.01,
-            "allow_coembedding": False
+            "min_dist": 0.01
         },
         "strategy": "projection"
-    },
-    "umap_euclidean_coembedding": {
-        "method_key": "umap_euclidean",
-        "config": {
-            "short_name": "UMAP-Euclidean",
-            "metric": "euclidean",
-            "n_neighbors": 500,
-            "min_dist": 0.01,
-            "allow_coembedding": True
-        },
-        "strategy": "coembedding"
     }
 }
 
@@ -168,22 +145,26 @@ def main():
             print(f"  ✓ Created: {filepath.name}")
     
     print(f"\n{'=' * 70}")
-    print(f"Successfully created {len(configs_created)} configuration files")
+    print(f"Successfully created {len(configs_created)} configuration files (v2.0)")
     print(f"{'=' * 70}")
     
     # Print summary
-    print("\nConfiguration Summary:")
+    print("\nConfiguration Summary (v2.0 - Projection-Only):")
     print("-" * 70)
     print("Methods included (with BEST hyperparameters from ABL1):")
-    print("  • PCA (Projection)")
-    print("  • PCA (Co-embedding)")
-    print("  • t-SNE (perplexity=1000)")
-    print("  • UMAP-Euclidean Projection (n_neighbors=500, min_dist=0.01)")
-    print("  • UMAP-Euclidean Co-embedding (n_neighbors=500, min_dist=0.01)")
+    print("  • PCA (Projection-only)")
+    print("  • UMAP-Euclidean (Projection-only, n_neighbors=500, min_dist=0.01)")
     print()
-    print("Targets:")
+    print("v2.0 Changes:")
+    print("  ✗ t-SNE removed (co-embedding only, data leakage)")
+    print("  ✗ Co-embedding removed (data leakage)")
+    print("  ✓ Projection-only strategy (prevents data leakage)")
+    print()
+    print("Targets (with corrected molecular functions):")
     for target in TARGETS:
-        print(f"  • {target['display_name']}")
+        mf = target['molecular_function_canonical_name']
+        kw = target['molecular_function_kw_code']
+        print(f"  • {target['display_name']} ({mf}, {kw})")
     print()
     print("Workspace: experiment_workspace_generalization/")
     print("Reports: final_report_generalization/")
