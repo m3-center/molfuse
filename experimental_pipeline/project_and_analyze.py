@@ -361,15 +361,13 @@ def main():
         try:
             df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
             
-            scaler_suffix = "scaler.lzma" # Default for features
+            # v2.0: Simplified scaler logic
+            # Features always use StandardScaler, fingerprints always use PassthroughScaler (no scaling)
+            scaler_suffix = "scaler.lzma"
             if args.representation_type == "fingerprints":
-                # For fingerprints, choose the scaler based on the DR method
-                if args.dr_method_key in ["umap_jaccard", "umap_hamming"]:
-                    scaler_suffix = "scaler_for_binary.lzma"
-                    logging.info("Using PassthroughScaler for binary-native UMAP metric.")
-                else:
-                    scaler_suffix = "scaler_for_pca.lzma"
-                    logging.info("Using StandardScaler for Euclidean-like DR method.")
+                logging.info("Using PassthroughScaler for fingerprints (v2.0: no scaling for binary vectors).")
+            else:
+                logging.info("Using StandardScaler for features.")
                     
             scaler_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_{scaler_suffix}")
             metric = args.dr_method_key.split("_")[-1] if "umap" in args.dr_method_key else ""
