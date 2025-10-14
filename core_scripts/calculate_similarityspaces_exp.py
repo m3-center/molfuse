@@ -91,15 +91,7 @@ def save_model(model, path):
         logger.error(f"Failed to save model to {path}: {e}", exc_info=True)
 
 
-def construct_coembedded_dataframe(df_main_info, df_target_info, coembed_coords, dr_col_names):
-    df_coords = pd.DataFrame(coembed_coords, columns=dr_col_names)
-    main_info = df_main_info[['MOLECULE ID', 'SMILES', 'DataSource']].copy()
-    target_info = df_target_info[[
-        'SMILES', 'Activity Type', 'Standard Value (nM)', 'accession']].copy()
-    target_info['MOLECULE ID'] = df_target_info['Compound ChEMBL ID']
-    target_info['DataSource'] = 'HELDOUT_ACTIVE'
-    df_full_info = pd.concat([main_info, target_info], ignore_index=True)
-    return pd.concat([df_full_info, df_coords], axis=1)
+# construct_coembedded_dataframe() removed in v2.0: Co-embedding creates data leakage
 
 
 def _parse_fingerprint_chunk(df_chunk):
@@ -170,11 +162,16 @@ def load_and_prepare_data(chembl_mf_path, zinc_path, repr_type, features_list):
 
 
 def prepare_target_ligands(path, repr_type, features_list, scaler):
+    """
+    Load and prepare held-out target ligands for PROJECTION ONLY.
+    These ligands will be transformed using a pre-fitted DR model.
+    Co-embedding removed in v2.0 to prevent data leakage.
+    """
     if not path or path.lower() == 'none' or not os.path.exists(path):
         logger.warning(
-            f"Target ligands file not found or not provided. Co-embedding will be skipped.")
+            f"Target ligands file not found or not provided. Projection will be skipped.")
         return None, None, None
-    logger.info(f"Preparing held-out active ligands from {path}.")
+    logger.info(f"Preparing held-out active ligands from {path} for projection.")
     df_target_raw = pd.read_csv(path, low_memory=False)
     if df_target_raw.empty:
         return None, None, None
@@ -188,13 +185,17 @@ def prepare_target_ligands(path, repr_type, features_list, scaler):
         dtype_to_use)
     X_target_processed = scaler.transform(X_target_original)
     logger.info(
-        f"Prepared {len(df_target_raw)} target ligands for co-embedding.")
+        f"Prepared {len(df_target_raw)} target ligands for projection.")
     return df_target_raw, X_target_original, X_target_processed
-# (DR functions are unchanged)
 
 
-def run_pca(X_processed, df_info, X_target_processed, df_target_info, config, out_paths, use_gpu):
-    logger.info("--- Running PCA ---")
+def run_pca(X_processed, df_info, config, out_paths, use_gpu):
+    """
+    Run PCA using PROJECTION-ONLY strategy (v2.0).
+    Fits PCA model on training data (MF cloud + decoys) only.
+    Held-out actives will be projected separately to prevent data leakage.
+    """
+    logger.info("--- Running PCA Projection ---")
     dr_cols = [f'PCA-{i+1}' for i in range(config['simspace_dim'])]
     logger.info(
         f"Fitting PCA projection model on main data ({X_processed.shape})...")
@@ -202,37 +203,32 @@ def run_pca(X_processed, df_info, X_target_processed, df_target_info, config, ou
         **config['cuml_params']) if use_gpu else sklearnPCA(**config['sklearn_params'])
     projection_coords = model.fit_transform(X_processed)
     save_model(model, out_paths['projection_model'])
-    if config['run_coembedding'] and X_target_processed is not None:
-        logger.info("Running PCA co-embedding...")
-        X_coembed = np.vstack((X_processed, X_target_processed))
-        coembed_model = cumlPCA(
-            **config['cuml_params']) if use_gpu else sklearnPCA(**config['sklearn_params'])
-        coembed_coords = coembed_model.fit_transform(X_coembed)
-        df_coembed = construct_coembedded_dataframe(
-            df_info, df_target_info, coembed_coords, dr_cols)
-        df_coembed.to_csv(out_paths['coembed_space'], index=False)
-        logger.info(
-            f"Saved co-embedded PCA space to {out_paths['coembed_space']}")
+    logger.info("PCA projection complete. Model saved.")
     return pd.DataFrame(projection_coords, columns=dr_cols, index=df_info.index)
 
 
 # t-SNE removed in v2.0: Only supports co-embedding (data leakage), incompatible with projection-only strategy
 
 
-def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_paths, use_gpu):
-    logger.info(f"--- Running UMAP for metric: {metric} with configuration: {config} ---")
+def run_umap_for_metric(metric, X_dict, df_info, config, out_paths, use_gpu):
+    """
+    Run UMAP using PROJECTION-ONLY strategy (v2.0).
+    Fits UMAP model on training data (MF cloud + decoys) only.
+    Held-out actives will be projected separately to prevent data leakage.
+    """
+    logger.info(f"--- Running UMAP Projection for metric: {metric} ---")
     if config['repr_type'] == "features":
         logger.info(f"UMAP ({metric}) on features: using SCALED data.")
-        X_main, X_target = X_dict['scaled'], X_dict['target_scaled']
+        X_main = X_dict['scaled']
     elif config['repr_type'] == "fingerprints":
         if metric.lower() in ["jaccard", "hamming"]:
             logger.info(
                 f"UMAP ({metric}) on fingerprints: using RAW, UNPROCESSED, 2048-D data.")
-            X_main, X_target = X_dict['original'], X_dict['target_original']
+            X_main = X_dict['original']
         else:
             logger.info(
                 f"UMAP ({metric}) on fingerprints: using SCALED then PCA-REDUCED data.")
-            X_main, X_target = X_dict['pca_reduced'], X_dict['target_pca_reduced']
+            X_main = X_dict['pca_reduced']
     if X_main is None:
         logger.error(f"Input data for UMAP ({metric}) is None. Skipping.")
         return pd.DataFrame(columns=out_paths['dr_cols'])
@@ -244,17 +240,7 @@ def run_umap_for_metric(metric, X_dict, df_info, df_target_info, config, out_pat
         metric=metric, **config['sklearn_params'])
     projection_coords = model.fit_transform(X_main)
     save_model(model, out_paths['projection_model'])
-    if config['run_coembedding'] and X_target is not None:
-        logger.info(f"Running UMAP co-embedding ({metric})...")
-        X_coembed = np.vstack((X_main, X_target))
-        coembed_model = cumlUMAP(**config['cuml_params']) if use_cuml_for_metric else umapUMAP(
-            metric=metric, **config['sklearn_params'])
-        coembed_coords = coembed_model.fit_transform(X_coembed)
-        df_coembed = construct_coembedded_dataframe(
-            df_info, df_target_info, coembed_coords, out_paths['dr_cols'])
-        df_coembed.to_csv(out_paths['coembed_space'], index=False)
-        logger.info(
-            f"Saved co-embedded UMAP space ({metric}) to {out_paths['coembed_space']}")
+    logger.info(f"UMAP ({metric}) projection complete. Model saved.")
     return pd.DataFrame(projection_coords, columns=out_paths['dr_cols'], index=df_info.index)
 
 
@@ -367,44 +353,51 @@ def main():
     base_name = f"{args.target_id_name}_{args.representation_type}_dim{args.simspace_dim}"
 
     if args.dr_method_pca:
-        # PCA always uses the scaled data
-        X_main_pca = X_scaled
-        X_target_pca = X_target_scaled
-        pca_run_config = {'simspace_dim': args.simspace_dim, 'run_coembedding': args.run_coembedding_for_pca_umap, 'cuml_params': {
-            'n_components': args.simspace_dim, 'random_state': args.random_state}, 'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}}
-        out_paths = {'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma"), 'coembed_space': os.path.join(
-            args.output_simspace_dir, f"{base_name}_PCA_similarity_space_COEMBED.csv")}
-        pca_coords = run_pca(X_scaled, df_info, X_target_scaled,
-                             df_target, pca_run_config, out_paths, GPU_ENABLED)
+        # PCA always uses the scaled data (projection-only in v2.0)
+        pca_run_config = {
+            'simspace_dim': args.simspace_dim,
+            'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state},
+            'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}
+        }
+        out_paths = {
+            'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma")
+        }
+        pca_coords = run_pca(X_scaled, df_info, pca_run_config, out_paths, GPU_ENABLED)
         df_results = df_results.join(pca_coords)
 
     # t-SNE execution removed in v2.0: Only supports co-embedding (data leakage)
     
     if args.dr_method_umap:
+        # Projection-only in v2.0: only training data (no target data in dict)
         X_data_dict = {
-            'original': X_original, 'scaled': X_scaled, 'pca_reduced': X_pca_reduced,
-            'target_original': X_target_original, 'target_scaled': X_target_scaled, 'target_pca_reduced': X_target_pca_reduced
+            'original': X_original,
+            'scaled': X_scaled,
+            'pca_reduced': X_pca_reduced
         }
         active_metrics = [m for m in ['euclidean', 'cosine', 'manhattan',
                                       'hamming', 'jaccard'] if getattr(args, f"umap_metric_to_run_{m}")]
         for metric in active_metrics:
             umap_params = dr_configs.get(f"umap_{metric}", {})
             n_neighbors = umap_params.get('n_neighbors', 15)
-            min_dist = umap_params.get('min_dist', 0.1) # Get min_dist, with a default
+            min_dist = umap_params.get('min_dist', 0.1)
             logger.info(f"Preparing UMAP run for metric '{metric}' with n_neighbors={n_neighbors} and min_dist={min_dist}")
 
             sklearn_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist}
             cuml_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'metric': metric}
 
-            umap_config = {'repr_type': args.representation_type, 'run_coembedding': args.run_coembedding_for_pca_umap,
-                           'cuml_params': cuml_params, 'sklearn_params': sklearn_params}
+            umap_config = {
+                'repr_type': args.representation_type,
+                'cuml_params': cuml_params,
+                'sklearn_params': sklearn_params
+            }
 
-
-            out_paths = {'dr_cols': [f'UMAP-{metric.capitalize()}-{i+1}' for i in range(args.simspace_dim)], 'projection_model': os.path.join(args.output_model_dir,
-                                                                                                                                              f"{base_name}_{metric}_UMAP_model.lzma"), 'coembed_space': os.path.join(args.output_simspace_dir, f"{base_name}_{metric}_UMAP_similarity_space_COEMBED.csv")}
+            out_paths = {
+                'dr_cols': [f'UMAP-{metric.capitalize()}-{i+1}' for i in range(args.simspace_dim)],
+                'projection_model': os.path.join(args.output_model_dir, f"{base_name}_{metric}_UMAP_model.lzma")
+            }
             
             umap_coords = run_umap_for_metric(
-                metric, X_data_dict, df_info, df_target, umap_config, out_paths, GPU_ENABLED)
+                metric, X_data_dict, df_info, umap_config, out_paths, GPU_ENABLED)
             df_results = df_results.join(umap_coords)
 
     # 6. Save Final & 7. Cleanup
