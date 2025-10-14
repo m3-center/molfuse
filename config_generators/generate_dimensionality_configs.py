@@ -3,7 +3,7 @@
 Generate configuration files for the dimensionality experiment (v2.0).
 
 This script creates configs for ABL1 using optimal hyperparameters from the 
-hyperparameter sweep, testing different dimensionalities [2, 3, 5, 10, 20].
+hyperparameter sweep, testing different dimensionalities [2, 3, 5, 10].
 
 v2.0 Changes:
 - Corrected ABL1 molecular function: Transferase (KW-0808) not "Protein kinase inhibitor"
@@ -37,7 +37,7 @@ GLOBAL_SETTINGS = {
     "precalculated_chembl_mf_fingerprints_base_dir": "datasets/molecular_function_features_fingerprints/",
     "precalculated_zinc_features_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
     "precalculated_zinc_fingerprints_path": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
-    "simspace_dims_to_test": [2, 3, 5, 10, 20],  # Testing multiple dimensions
+    "simspace_dims_to_test": [2, 3, 5, 10],  # Testing multiple dimensions
     "k_for_knn_distance": [3, 5],
     "affinity_cutoff_nM": 100000,
     "workspace_base_dir": "experiment_workspace_dimensionality_v2/",  # UNIQUE WORKSPACE
