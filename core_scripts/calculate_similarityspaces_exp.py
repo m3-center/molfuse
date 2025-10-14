@@ -215,27 +215,32 @@ def run_umap_for_metric(metric, X_dict, df_info, config, out_paths, use_gpu):
     Run UMAP using PROJECTION-ONLY strategy (v2.0).
     Fits UMAP model on training data (MF cloud + decoys) only.
     Held-out actives will be projected separately to prevent data leakage.
+    
+    v2.0: Fingerprints ONLY support Jaccard metric (binary-native).
     """
     logger.info(f"--- Running UMAP Projection for metric: {metric} ---")
+    
+    # v2.0: Validate fingerprint + metric combinations
+    if config['repr_type'] == "fingerprints" and metric.lower() != "jaccard":
+        logger.error(f"ERROR: Fingerprints only support Jaccard metric in v2.0, not '{metric}'.")
+        logger.error("Rationale: Non-Jaccard metrics require scaling, which destroys binary fingerprint meaning.")
+        return pd.DataFrame(columns=out_paths['dr_cols'])
+    
     if config['repr_type'] == "features":
         logger.info(f"UMAP ({metric}) on features: using SCALED data.")
         X_main = X_dict['scaled']
     elif config['repr_type'] == "fingerprints":
-        if metric.lower() in ["jaccard", "hamming"]:
-            logger.info(
-                f"UMAP ({metric}) on fingerprints: using RAW, UNPROCESSED, 2048-D data.")
-            X_main = X_dict['original']
-        else:
-            logger.info(
-                f"UMAP ({metric}) on fingerprints: using SCALED then PCA-REDUCED data.")
-            X_main = X_dict['pca_reduced']
+        logger.info(f"UMAP-Jaccard on fingerprints: using RAW BINARY 2048-bit data (no scaling, no PCA).")
+        X_main = X_dict['original']
+    
     if X_main is None:
         logger.error(f"Input data for UMAP ({metric}) is None. Skipping.")
         return pd.DataFrame(columns=out_paths['dr_cols'])
-    logger.info(
-        f"Fitting UMAP projection model ({metric}) on main data ({X_main.shape})...")
-    use_cuml_for_metric = use_gpu and metric.lower() not in [
-        "jaccard", "hamming"]
+    
+    logger.info(f"Fitting UMAP projection model ({metric}) on main data ({X_main.shape})...")
+    
+    # Use sklearn UMAP for Jaccard (cuML doesn't support it well)
+    use_cuml_for_metric = use_gpu and metric.lower() not in ["jaccard", "hamming"]
     model = cumlUMAP(**config['cuml_params']) if use_cuml_for_metric else umapUMAP(
         metric=metric, **config['sklearn_params'])
     projection_coords = model.fit_transform(X_main)
@@ -296,56 +301,27 @@ def main():
     df_info, X_original, _ = load_and_prepare_data(
         args.chembl_mf_data_path, args.zinc_data_path, args.representation_type, features_list)
 
-    # --- FIX 1: HYBRID DATA PREPARATION ---
-    # Prepare different data versions based on representation type.
-    scaler_for_pca = StandardScaler()
-    scaler_for_binary = PassthroughScaler()
-
+    # 2. Data Preparation (v2.0: Simplified)
     if args.representation_type == "features":
         logger.info("STEP 2: Scaling features data with StandardScaler.")
-        X_scaled = scaler_for_pca.fit_transform(X_original)
-        save_model(scaler_for_pca, os.path.join(args.output_model_dir,
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_original)
+        save_model(scaler, os.path.join(args.output_model_dir,
                    f"{args.target_id_name}_features_dim{args.simspace_dim}_scaler.lzma"))
     else:  # fingerprints
-        logger.info(
-            "STEP 2: Preparing both scaled and unscaled versions of fingerprint data.")
-        X_scaled = scaler_for_pca.fit_transform(X_original)
-        # We save both potential "scalers" so the downstream script can load the correct one
-        save_model(scaler_for_pca, os.path.join(args.output_model_dir,
-                   f"{args.target_id_name}_fingerprints_dim{args.simspace_dim}_scaler_for_pca.lzma"))
-        save_model(scaler_for_binary, os.path.join(args.output_model_dir,
-                   f"{args.target_id_name}_fingerprints_dim{args.simspace_dim}_scaler_for_binary.lzma"))
+        logger.info("STEP 2: Fingerprints detected - NO SCALING will be applied (v2.0: Jaccard only).")
+        scaler = PassthroughScaler()
+        X_scaled = X_original.copy()  # No transformation for fingerprints
+        save_model(scaler, os.path.join(args.output_model_dir,
+                   f"{args.target_id_name}_fingerprints_dim{args.simspace_dim}_scaler.lzma"))
 
-    # 3. Prepare Target Ligands
-    # This step is now more complex as we need to prepare targets with the correct scaler
+    # 3. Prepare Target Ligands (not used in v2.0 projection-only, kept for compatibility)
     df_target, X_target_original, X_target_scaled = prepare_target_ligands(
-        args.target_ligands_unscaled_path_for_tsne_and_coembed, args.representation_type, features_list, scaler_for_pca
+        args.target_ligands_unscaled_path_for_tsne_and_coembed, 
+        args.representation_type, 
+        features_list, 
+        scaler
     )
-    _, _, X_target_binary = prepare_target_ligands(
-        args.target_ligands_unscaled_path_for_tsne_and_coembed, args.representation_type, features_list, scaler_for_binary
-    )
-
-    # --- FIX 2: UNIVERSAL PCA PRE-REDUCTION FOR T-SNE ---
-    # 4. Pre-reduce Data with PCA for Manifold Learning
-    X_pca_reduced, X_target_pca_reduced = None, None
-    if args.representation_type == "fingerprints":
-        logger.info("STEP 4: Pre-reducing SCALED fingerprints with PCA for manifold learning.")
-        n_comps = min(args.fingerprint_pca_components, X_scaled.shape[0] - 1, X_scaled.shape[1])
-        pca_pre_model = cumlPCA(n_components=n_comps) if GPU_ENABLED else sklearnPCA(n_components=n_comps)
-        X_pca_reduced = pca_pre_model.fit_transform(X_scaled)
-        if X_target_scaled is not None:
-            X_target_pca_reduced = pca_pre_model.transform(X_target_scaled)
-        logger.info(f"Fingerprint PCA pre-reduction complete. New shape: {X_pca_reduced.shape}")
-    
-    elif args.representation_type == "features" and args.dr_method_tsne:
-        # This block is now ONLY for t-SNE on features, restoring the old correct behavior
-        logger.info("STEP 4: Pre-reducing SCALED features with PCA for t-SNE.")
-        n_comps = min(args.tsne_pca_components, X_scaled.shape[0] - 1, X_scaled.shape[1])
-        pca_pre_model = cumlPCA(n_components=n_comps) if GPU_ENABLED else sklearnPCA(n_components=n_comps)
-        X_pca_reduced = pca_pre_model.fit_transform(X_scaled)
-        if X_target_scaled is not None:
-            X_target_pca_reduced = pca_pre_model.transform(X_target_scaled)
-        logger.info(f"Feature PCA pre-reduction for t-SNE complete. New shape: {X_pca_reduced.shape}")
 
     # 5. Run DR Methods
     logger.info("STEP 5: Running selected dimensionality reduction methods.")
@@ -353,29 +329,42 @@ def main():
     base_name = f"{args.target_id_name}_{args.representation_type}_dim{args.simspace_dim}"
 
     if args.dr_method_pca:
-        # PCA always uses the scaled data (projection-only in v2.0)
-        pca_run_config = {
-            'simspace_dim': args.simspace_dim,
-            'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state},
-            'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}
-        }
-        out_paths = {
-            'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma")
-        }
-        pca_coords = run_pca(X_scaled, df_info, pca_run_config, out_paths, GPU_ENABLED)
-        df_results = df_results.join(pca_coords)
+        # v2.0: PCA only for features (not fingerprints)
+        if args.representation_type == "fingerprints":
+            logger.warning("WARNING: PCA requested for fingerprints - SKIPPING in v2.0.")
+            logger.warning("Rationale: PCA on binary fingerprints is meaningless. Use UMAP-Jaccard instead.")
+        else:
+            # PCA on features uses scaled data (projection-only in v2.0)
+            pca_run_config = {
+                'simspace_dim': args.simspace_dim,
+                'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state},
+                'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}
+            }
+            out_paths = {
+                'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma")
+            }
+            pca_coords = run_pca(X_scaled, df_info, pca_run_config, out_paths, GPU_ENABLED)
+            df_results = df_results.join(pca_coords)
 
     # t-SNE execution removed in v2.0: Only supports co-embedding (data leakage)
     
     if args.dr_method_umap:
         # Projection-only in v2.0: only training data (no target data in dict)
         X_data_dict = {
-            'original': X_original,
-            'scaled': X_scaled,
-            'pca_reduced': X_pca_reduced
+            'original': X_original,  # Raw data (binary for fingerprints, unscaled for features)
+            'scaled': X_scaled       # Scaled for features, unchanged for fingerprints (PassthroughScaler)
         }
         active_metrics = [m for m in ['euclidean', 'cosine', 'manhattan',
                                       'hamming', 'jaccard'] if getattr(args, f"umap_metric_to_run_{m}")]
+        
+        # v2.0: Warn if fingerprints used with non-Jaccard metrics
+        if args.representation_type == "fingerprints":
+            invalid_metrics = [m for m in active_metrics if m != 'jaccard']
+            if invalid_metrics:
+                logger.warning(f"WARNING: Fingerprints in v2.0 only support Jaccard metric.")
+                logger.warning(f"Skipping invalid metrics for fingerprints: {invalid_metrics}")
+                logger.warning("Rationale: Non-Jaccard metrics require scaling, destroying binary fingerprint meaning.")
+        
         for metric in active_metrics:
             umap_params = dr_configs.get(f"umap_{metric}", {})
             n_neighbors = umap_params.get('n_neighbors', 15)
