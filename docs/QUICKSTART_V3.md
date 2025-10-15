@@ -38,41 +38,75 @@ Breakdown:
 
 ---
 
-### 2. Launch Phase 1 on HPC
+### 2. Configure HPC Environment (One-Time Setup)
+
+**Edit the conda environment path in `hpc/ummbas_v3_cpu.sh` (line 55):**
 
 ```bash
-# On HPC login node
-python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase1 \
-  --workspace experiment_workspace_v3_phase1 \
-  --n_jobs 20
+# Change this line to match your HPC setup:
+source /home/YOUR_USERNAME/miniforge3/bin/activate ummbas-screening
+```
+
+---
+
+### 3. Launch Phase 1 on HPC
+
+```bash
+# Submit all 260 jobs (52 configs × 5 seeds)
+bash hpc/submit_v3_phase1.sh
+```
+
+**The script will:**
+- Verify all prerequisites (configs exist, scripts present)
+- Show summary (260 total jobs expected)
+- Ask for confirmation
+- Submit all jobs to SLURM queue
+
+**Expected output:**
+```
+============================================================
+UMMBAS v3.0 - Phase 1 Submission
+============================================================
+Configuration Directory: hyperparam_configs_v3_phase1
+Number of Configs: 52
+Number of Seeds: 5
+Total Jobs: 260 (expected: 260)
+============================================================
+Proceed with submission? (y/n): y
 ```
 
 **This will:**
 - Test all dimensionalities (2D, 5D, 10D)
 - Test all UMAP hyperparameters (nn=10,20,100,500 × md=0.01,0.1,0.5)
 - Run 5 seeds each
-- Take ~2-7 days depending on parallelization
+- Take ~3-7 days depending on cluster resources
 
 ---
 
-### 3. Monitor Progress
+### 4. Monitor Progress
 
 While Phase 1 runs:
 
 ```bash
-python check_hyperparam_status.py \
+# Check SLURM queue
+squeue -u $USER
+
+# Check experiment progress with status checker
+python scripts/check_hyperparam_status.py \
   --workspace experiment_workspace_v3_phase1
+
+# View live logs
+tail -f slurm_logs/UMMBAS_v3_*.out
 ```
 
-**Output:**
+**Status checker output:**
 - Status report CSV
 - Debug logs
 - Scatter plot visualizations (PCA vs UMAP per seed)
 
 ---
 
-### 4. Extract Best Configs (After Phase 1 Completes)
+### 5. Extract Best Configs (After Phase 1 Completes)
 
 ```bash
 python extract_phase1_best_configs.py \
@@ -89,48 +123,39 @@ python extract_phase1_best_configs.py \
 
 ---
 
-### 5. Generate and Run Subsequent Phases
+### 6. Run Subsequent Phases
 
-**Phase 2 (Ablation):**
+**Phase 2 (MF Cloud Ablation - 60 runs):**
 ```bash
+# Generate configs based on Phase 1 best
 python generate_phase2_configs.py
-python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase2_ablation \
-  --workspace experiment_workspace_v3_phase2 \
-  --n_jobs 20
+
+# Submit jobs
+bash hpc/submit_v3_phase2.sh
 ```
 
-**Phase 3 (Generalization):**
+**Phase 3 (Cross-Protein Generalization - 80 runs):**
 ```bash
+# Generate configs for Pyru and Iso proteins
 python generate_phase3_configs.py
-python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase3_generalization \
-  --workspace experiment_workspace_v3_phase3 \
-  --n_jobs 20
+
+# Submit jobs
+bash hpc/submit_v3_phase3.sh
 ```
 
-**Phase 4 (Cutoff):**
+**Phase 4 (Affinity Cutoff Analysis - 40 runs):**
 ```bash
+# Generate configs for cutoff sensitivity
 python generate_phase4_configs.py
-python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase4_cutoff \
-  --workspace experiment_workspace_v3_phase4 \
-  --n_jobs 20
+
+# Submit jobs
+bash hpc/submit_v3_phase4.sh
 ```
 
----
-
-## Alternative: Use Master Orchestrator
-
-```bash
-python orchestrate_v3_pipeline.py
-```
-
-This will:
-1. Detect which phase you're on
-2. Generate configs automatically
-3. Provide instructions for running each phase
-4. Extract best configs between phases
+Each submission script will:
+- Verify prerequisites exist
+- Show job count summary
+- Ask for confirmation before submitting
 
 ---
 
@@ -147,13 +172,15 @@ This will:
 
 ## Expected Timeline
 
-| Phase | Runs | Time (10 cores) | Time (20 cores) |
+| Phase | Runs | Time (32 cores) | Time (64 cores) |
 |-------|------|-----------------|-----------------|
-| Phase 1 | 260 | ~5-10 days | ~3-5 days |
+| Phase 1 | 260 | ~6-10 days | ~3-5 days |
 | Phase 2 | 60 | ~1-2 days | ~0.5-1 day |
-| Phase 3 | 80 | ~2-3 days | ~1-2 days |
+| Phase 3 | 80 | ~2-3 days | ~1-1.5 days |
 | Phase 4 | 40 | ~1 day | ~0.5 day |
-| **Total** | **440** | **~9-16 days** | **~5-8 days** |
+| **Total** | **440** | **~10-16 days** | **~5-8 days** |
+
+Times depend on cluster load and hardware.
 
 ---
 
@@ -199,18 +226,26 @@ ls experiment_workspace_v3_phase1/run_*/*/results/*/dim_*/*/*_ranking_metrics.cs
 # Step 1: Generate Phase 1 configs
 python generate_phase1_configs.py
 
-# Step 2: Launch on HPC
-python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase1 \
-  --workspace experiment_workspace_v3_phase1 \
-  --n_jobs 20
+# Step 2: Configure HPC (one-time)
+# Edit: hpc/ummbas_v3_cpu.sh line 55
+# Set your conda environment path
+
+# Step 3: Launch on HPC
+bash hpc/submit_v3_phase1.sh
+
+# Step 4: Monitor progress
+squeue -u $USER
+python scripts/check_hyperparam_status.py --workspace experiment_workspace_v3_phase1
 ```
 
 **Good luck with the experiments!**
 
 ---
 
-**Questions?** Check `README_V3_PIPELINE.md` for full documentation.
+**Questions?** 
+- Quick reference: This document
+- Full details: `README_V3_PIPELINE.md`
+- HPC scripts: `hpc/README.md`
 
 **Version:** 3.0  
 **Last Updated:** October 15, 2025
