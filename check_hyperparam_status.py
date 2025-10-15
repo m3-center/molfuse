@@ -82,7 +82,11 @@ def extract_config_info(run_dir):
     return info
 
 def check_experiment_status(run_dir, workspace_root, debug_log=None):
-    """Check if experiment completed successfully and extract error if failed."""
+    """Check if experiment completed successfully and extract error if failed.
+    
+    Strategy: Check for output files FIRST (ranking metrics = success), 
+    then check logs for error details only if needed.
+    """
     status = {
         'completed': False,
         'has_results': False,
@@ -96,93 +100,13 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
     # Extract run name from directory
     run_name = os.path.basename(run_dir)
     
-    # Check for orchestrator log in repo root (one level up from workspace)
-    # Pattern: orchestrator_run_*_seed*_config*.log
-    # The log name has timestamp between "run_" and "seed*", so we need to match flexibly
-    # run_seed42_config_features_pca_projection -> orchestrator_run_*_seed42_config_features_pca_projection.log
-    run_name_parts = run_name.replace('run_', '', 1)  # Remove 'run_' prefix
-    repo_root = os.path.dirname(os.path.abspath(workspace_root))  # Go one level up from workspace
-    search_pattern = os.path.join(repo_root, f'orchestrator_run_*_{run_name_parts}.log')
-    
     if debug_log:
         debug_log.write(f"\n{'='*80}\n")
         debug_log.write(f"Run directory: {run_name}\n")
-        debug_log.write(f"Repo root: {repo_root}\n")
-        debug_log.write(f"Search pattern: {search_pattern}\n")
     
-    orchestrator_logs = glob.glob(search_pattern)
-    
-    if debug_log:
-        debug_log.write(f"Found {len(orchestrator_logs)} log files: {orchestrator_logs}\n")
-    
-    if orchestrator_logs:
-        log_file = orchestrator_logs[0]
-        status['log_file'] = os.path.basename(log_file)
-        
-        if debug_log:
-            debug_log.write(f"Reading log file: {log_file}\n")
-        
-        try:
-            with open(log_file, 'r') as f:
-                log_content = f.read()
-                
-                # Check for completion
-                if 'STEP 7: Script finished' in log_content or 'Orchestration complete' in log_content:
-                    status['completed'] = True
-                    if debug_log:
-                        debug_log.write(f"✅ Completion marker found\n")
-                
-                # Check for errors
-                if 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
-                    # Extract error information
-                    lines = log_content.split('\n')
-                    error_lines = []
-                    in_traceback = False
-                    
-                    for line in lines:
-                        if 'ERROR' in line or 'Error' in line:
-                            error_lines.append(line.strip())
-                        elif 'Traceback' in line:
-                            in_traceback = True
-                            error_lines.append(line.strip())
-                        elif in_traceback:
-                            error_lines.append(line.strip())
-                            if line.strip() and not line.startswith(' '):
-                                in_traceback = False
-                    
-                    if error_lines:
-                        status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
-                        
-                        # Categorize error type
-                        error_text = ' '.join(error_lines).lower()
-                        if 'filenotfounderror' in error_text or 'no such file' in error_text:
-                            if 'model' in error_text:
-                                status['error_type'] = 'Missing Model File'
-                            elif 'scaler' in error_text:
-                                status['error_type'] = 'Missing Scaler File'
-                            else:
-                                status['error_type'] = 'File Not Found'
-                        elif 'memoryerror' in error_text or 'out of memory' in error_text:
-                            status['error_type'] = 'Out of Memory'
-                        elif 'valueerror' in error_text:
-                            status['error_type'] = 'Value Error'
-                        elif 'keyerror' in error_text:
-                            status['error_type'] = 'Key Error'
-                        elif 'cuda' in error_text or 'gpu' in error_text:
-                            status['error_type'] = 'GPU/CUDA Error'
-                        else:
-                            status['error_type'] = 'Other Error'
-                        
-                        if debug_log:
-                            debug_log.write(f"❌ Error detected: {status['error_type']}\n")
-        except Exception as e:
-            if debug_log:
-                debug_log.write(f"⚠️  Error reading log file: {e}\n")
-    else:
-        if debug_log:
-            debug_log.write(f"⚠️  No orchestrator log found\n")
-    
-    # Check for results files
+    # ============================================================================
+    # STEP 1: Check for output files (PRIMARY success indicator)
+    # ============================================================================
     results_pattern = os.path.join(run_dir, '*/results/*/*/dim_*/*')
     results_dirs = glob.glob(results_pattern)
     
@@ -198,27 +122,122 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
             ranking_files = glob.glob(os.path.join(results_dir, '*-RANKED.csv'))
             if ranking_files:
                 status['has_rankings'] = True
+                if debug_log:
+                    debug_log.write(f"✅ Found ranking file: {ranking_files[0]}\n")
                 break
         
-        # Check for metrics files
+        # Check for metrics files (KEY success indicator)
         for results_dir in results_dirs:
             metrics_files = glob.glob(os.path.join(results_dir, '*_ranking_metrics.csv'))
             if metrics_files:
                 status['has_metrics'] = True
+                if debug_log:
+                    debug_log.write(f"✅ Found metrics file: {metrics_files[0]}\n")
                 break
     
-    # If we have ranking metrics but no log completion marker, consider it completed
-    # (The analysis phase completed successfully even if log wasn't captured)
-    if status['has_metrics'] and not status['completed']:
+    # If we have ranking metrics, the experiment completed successfully
+    # (Even if there were warnings/errors like CUDA fallback to CPU)
+    if status['has_metrics']:
         status['completed'] = True
         if debug_log:
-            debug_log.write(f"✅ Marked complete based on metrics file presence\n")
+            debug_log.write(f"✅ Marked COMPLETED based on metrics file presence\n")
+    
+    # ============================================================================
+    # STEP 2: If NOT completed, check logs for error details
+    # ============================================================================
+    if not status['completed']:
+        # Check for orchestrator log in repo root (one level up from workspace)
+        # Pattern: orchestrator_run_*_seed*_config*.log
+        run_name_parts = run_name.replace('run_', '', 1)  # Remove 'run_' prefix
+        repo_root = os.path.dirname(os.path.abspath(workspace_root))  # Go one level up
+        search_pattern = os.path.join(repo_root, f'orchestrator_run_*_{run_name_parts}.log')
+        
+        if debug_log:
+            debug_log.write(f"Repo root: {repo_root}\n")
+            debug_log.write(f"Log search pattern: {search_pattern}\n")
+        
+        orchestrator_logs = glob.glob(search_pattern)
+        
+        if debug_log:
+            debug_log.write(f"Found {len(orchestrator_logs)} log files: {orchestrator_logs}\n")
+        
+        if orchestrator_logs:
+            log_file = orchestrator_logs[0]
+            status['log_file'] = os.path.basename(log_file)
+            
+            if debug_log:
+                debug_log.write(f"Reading log file: {log_file}\n")
+            
+            try:
+                with open(log_file, 'r') as f:
+                    log_content = f.read()
+                    
+                    # Check for fatal errors (that stopped execution)
+                    if 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
+                        # Extract error information
+                        lines = log_content.split('\n')
+                        error_lines = []
+                        in_traceback = False
+                        
+                        for line in lines:
+                            if 'ERROR' in line or 'Error' in line:
+                                error_lines.append(line.strip())
+                            elif 'Traceback' in line:
+                                in_traceback = True
+                                error_lines.append(line.strip())
+                            elif in_traceback:
+                                error_lines.append(line.strip())
+                                if line.strip() and not line.startswith(' '):
+                                    in_traceback = False
+                        
+                        if error_lines:
+                            status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
+                            
+                            # Categorize error type (ignore CUDA warnings if job completed)
+                            error_text = ' '.join(error_lines).lower()
+                            if 'filenotfounderror' in error_text or 'no such file' in error_text:
+                                if 'model' in error_text:
+                                    status['error_type'] = 'Missing Model File'
+                                elif 'scaler' in error_text:
+                                    status['error_type'] = 'Missing Scaler File'
+                                else:
+                                    status['error_type'] = 'File Not Found'
+                            elif 'memoryerror' in error_text or 'out of memory' in error_text:
+                                status['error_type'] = 'Out of Memory'
+                            elif 'valueerror' in error_text:
+                                status['error_type'] = 'Value Error'
+                            elif 'keyerror' in error_text:
+                                status['error_type'] = 'Key Error'
+                            elif 'cuda' in error_text or 'gpu' in error_text:
+                                # Only mark as CUDA error if it actually failed
+                                # (CUDA warnings with CPU fallback are OK)
+                                status['error_type'] = 'GPU/CUDA Error'
+                            else:
+                                status['error_type'] = 'Other Error'
+                            
+                            if debug_log:
+                                debug_log.write(f"❌ Error detected in log: {status['error_type']}\n")
+            except Exception as e:
+                if debug_log:
+                    debug_log.write(f"⚠️  Error reading log file: {e}\n")
+        else:
+            if debug_log:
+                debug_log.write(f"⚠️  No orchestrator log found - experiment may be running\n")
+    else:
+        # Even if completed, record which log file corresponds to this run
+        run_name_parts = run_name.replace('run_', '', 1)
+        repo_root = os.path.dirname(os.path.abspath(workspace_root))
+        search_pattern = os.path.join(repo_root, f'orchestrator_run_*_{run_name_parts}.log')
+        orchestrator_logs = glob.glob(search_pattern)
+        if orchestrator_logs:
+            status['log_file'] = os.path.basename(orchestrator_logs[0])
     
     if debug_log:
         debug_log.write(f"Final status: completed={status['completed']}, "
                        f"has_results={status['has_results']}, "
                        f"has_rankings={status['has_rankings']}, "
-                       f"has_metrics={status['has_metrics']}\n")
+                       f"has_metrics={status['has_metrics']}, "
+                       f"error_type={status['error_type']}\n")
     
     return status
 
