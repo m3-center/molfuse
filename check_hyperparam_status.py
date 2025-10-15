@@ -18,6 +18,9 @@ import glob
 import argparse
 from collections import defaultdict
 from datetime import datetime
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
 
 def extract_config_info(run_dir):
     """Extract configuration info from run directory name or config file."""
@@ -251,6 +254,216 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
     
     return status
 
+def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output_dir):
+    """Generate scatter plots comparing PCA vs best UMAP for each seed.
+    
+    Args:
+        workspace: Workspace directory path
+        completed_results: List of completed experiment results
+        best_umap_method: Dict with best UMAP method info
+        output_dir: Output directory for figures
+    """
+    # Group results by seed
+    by_seed = defaultdict(list)
+    for r in completed_results:
+        if r['seed']:
+            by_seed[r['seed']].append(r)
+    
+    print(f"\n{'='*80}")
+    print(f"GENERATING VISUALIZATION FIGURES")
+    print(f"{'='*80}")
+    print(f"Output directory: {output_dir}")
+    print(f"Best UMAP method: {best_umap_method['method']}")
+    print(f"Seeds to visualize: {sorted(by_seed.keys())}")
+    print()
+    
+    figures_dir = os.path.join(output_dir, 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    
+    for seed in sorted(by_seed.keys()):
+        seed_experiments = by_seed[seed]
+        
+        # Find PCA and best UMAP experiments for this seed
+        pca_exp = None
+        umap_exp = None
+        
+        for exp in seed_experiments:
+            # Find features-PCA experiment
+            if exp['representation'] == 'features' and exp['dr_method'] == 'PCA':
+                pca_exp = exp
+            
+            # Find best UMAP experiment (matching method from best_umap_method)
+            if (exp['representation'] == best_umap_method['representation'] and
+                exp['dr_method'] == best_umap_method['dr_method'] and
+                str(exp.get('n_neighbors', '')) == str(best_umap_method.get('n_neighbors', '')) and
+                str(exp.get('min_dist', '')) == str(best_umap_method.get('min_dist', ''))):
+                umap_exp = exp
+        
+        if not pca_exp or not umap_exp:
+            print(f"⚠️  Skipping seed {seed}: Missing PCA or UMAP experiment")
+            continue
+        
+        # Load similarity space coordinates
+        pca_coords = load_similarity_space(workspace, pca_exp)
+        umap_coords = load_similarity_space(workspace, umap_exp)
+        
+        if pca_coords is None or umap_coords is None:
+            print(f"⚠️  Skipping seed {seed}: Could not load coordinates")
+            continue
+        
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        
+        # Plot PCA
+        plot_similarity_space(ax1, pca_coords, f"PCA (Seed {seed})")
+        
+        # Plot UMAP
+        umap_title = f"UMAP (nn={umap_exp['n_neighbors']}, md={umap_exp['min_dist']}, Seed {seed})"
+        plot_similarity_space(ax2, umap_coords, umap_title)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        output_path = os.path.join(figures_dir, f'seed{seed}_pca_vs_umap.png')
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        print(f"✅ Saved figure for seed {seed}: {output_path}")
+    
+    print(f"\n✅ Visualization complete! Figures saved to: {figures_dir}\n")
+
+def load_similarity_space(workspace, experiment):
+    """Load similarity space coordinates and metadata for an experiment.
+    
+    Returns:
+        DataFrame with columns: ['coord_1', 'coord_2', 'category', 'molecule_id']
+        or None if loading fails
+    """
+    run_dir = os.path.join(workspace, experiment['run_dir'])
+    
+    # Find similarity space CSV file
+    # Pattern: TARGET/results/REPR/dim_N/METHOD/*_similarity_space.csv
+    simspace_pattern = os.path.join(run_dir, '*/results/*/dim_*/*/*_similarity_space.csv')
+    simspace_files = glob.glob(simspace_pattern)
+    
+    if not simspace_files:
+        return None
+    
+    try:
+        df = pd.read_csv(simspace_files[0])
+        
+        # Identify coordinate columns (usually dim_1, dim_2 or similar)
+        coord_cols = [col for col in df.columns if 'dim' in col.lower() or 'coord' in col.lower() or 'component' in col.lower()]
+        if len(coord_cols) < 2:
+            # Try numeric columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            coord_cols = numeric_cols[:2] if len(numeric_cols) >= 2 else []
+        
+        if len(coord_cols) < 2:
+            print(f"⚠️  Could not identify coordinate columns in {simspace_files[0]}")
+            return None
+        
+        # Rename coordinate columns to standard names
+        df_viz = pd.DataFrame()
+        df_viz['coord_1'] = df[coord_cols[0]]
+        df_viz['coord_2'] = df[coord_cols[1]]
+        
+        # Identify molecule categories
+        # Strategy: Look for columns indicating molecule type or dataset
+        if 'molecule_id' in df.columns:
+            df_viz['molecule_id'] = df['molecule_id']
+        elif 'SMILES' in df.columns:
+            df_viz['molecule_id'] = df['SMILES']
+        else:
+            df_viz['molecule_id'] = df.index
+        
+        # Categorize molecules: ZINC (decoys), MF (molecular function), TARGETS (actives)
+        # Check for explicit category column
+        if 'category' in df.columns:
+            df_viz['category'] = df['category']
+        elif 'dataset' in df.columns:
+            df_viz['category'] = df['dataset']
+        elif 'source' in df.columns:
+            df_viz['category'] = df['source']
+        elif 'is_active' in df.columns:
+            # Binary active/inactive
+            df_viz['category'] = df['is_active'].apply(lambda x: 'TARGET' if x else 'ZINC')
+        elif 'label' in df.columns:
+            df_viz['category'] = df['label']
+        else:
+            # Try to infer from molecule IDs or other columns
+            # Look for columns with ZINC, MF, TARGET keywords
+            potential_cat_cols = [col for col in df.columns if any(kw in col.lower() for kw in ['zinc', 'mf', 'target', 'active', 'decoy'])]
+            if potential_cat_cols:
+                df_viz['category'] = df[potential_cat_cols[0]]
+            else:
+                # Default: assume all are ZINC (decoys)
+                df_viz['category'] = 'ZINC'
+                print(f"⚠️  Could not identify category column, assuming all ZINC")
+        
+        return df_viz
+        
+    except Exception as e:
+        print(f"⚠️  Error loading similarity space from {simspace_files[0]}: {e}")
+        return None
+
+def plot_similarity_space(ax, df, title):
+    """Plot similarity space coordinates with different colors for categories."""
+    # Define colors for each category
+    color_map = {
+        'ZINC': '#3498db',      # Blue
+        'MF': '#2ecc71',        # Green
+        'TARGET': '#e74c3c',    # Red
+        'TARGETS': '#e74c3c',   # Red (plural)
+        'ACTIVE': '#e74c3c',    # Red (alternative name)
+        'DECOY': '#3498db',     # Blue (alternative name)
+        'INACTIVE': '#3498db'   # Blue (alternative name)
+    }
+    
+    # Normalize category names
+    df['category_norm'] = df['category'].astype(str).str.upper()
+    
+    # Plot each category separately
+    categories = df['category_norm'].unique()
+    
+    for category in sorted(categories):
+        mask = df['category_norm'] == category
+        subset = df[mask]
+        
+        # Get color for this category
+        color = color_map.get(category, '#95a5a6')  # Gray as default
+        
+        # Set alpha and size based on category
+        if category in ['TARGET', 'TARGETS', 'ACTIVE']:
+            alpha = 0.8
+            size = 50
+            zorder = 3  # Plot on top
+            label = 'TARGETS'
+        elif category in ['MF']:
+            alpha = 0.5
+            size = 20
+            zorder = 2
+            label = 'MF Cloud'
+        else:  # ZINC/DECOY/INACTIVE
+            alpha = 0.3
+            size = 15
+            zorder = 1  # Plot on bottom
+            label = 'ZINC Decoys'
+        
+        ax.scatter(subset['coord_1'], subset['coord_2'], 
+                  c=color, alpha=alpha, s=size, 
+                  label=label, zorder=zorder, edgecolors='none')
+    
+    ax.set_xlabel('Dimension 1', fontsize=12)
+    ax.set_ylabel('Dimension 2', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    # Add legend (avoid duplicates)
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), loc='best', framealpha=0.9)
+
 def main():
     parser = argparse.ArgumentParser(description='Check hyperparameter sweep status')
     parser.add_argument('--workspace', default='experiment_workspace_hyperparam_sweep_v2',
@@ -420,9 +633,57 @@ def main():
                     ef_str = f"{result['avg_ef']:.2f}"
                 print(f"{result['method']:<60} {ef_str:>15} {result['n_seeds']:>8}")
             print()
+            
+            # ========================================================================
+            # GENERATE VISUALIZATION FIGURES
+            # ========================================================================
+            # Find best UMAP method from features representation
+            best_umap = None
+            for result in results_with_metrics:
+                method = result['method']
+                if 'features' in method and 'UMAP' in method:
+                    # Parse method string to extract details
+                    parts = method.split('-')
+                    best_umap = {
+                        'method': method,
+                        'representation': 'features',
+                        'dr_method': parts[1] if len(parts) > 1 else 'UMAP',
+                        'avg_ef': result['avg_ef']
+                    }
+                    # Extract hyperparameters
+                    for part in parts:
+                        if part.startswith('nn'):
+                            best_umap['n_neighbors'] = part[2:]
+                        elif part.startswith('md'):
+                            best_umap['min_dist'] = part[2:]
+                    break
+            
+            if best_umap:
+                # Create output directory for this run
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_dir = os.path.join(workspace, f'status_check_outputs_{timestamp}')
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Generate visualizations
+                try:
+                    visualize_pca_vs_umap(workspace, completed, best_umap, output_dir)
+                except Exception as e:
+                    print(f"⚠️  Error generating visualizations: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("⚠️  No UMAP experiments found for visualization")
+                output_dir = workspace  # Fallback to workspace directory
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         else:
             print("No ranking metrics found in completed experiments.")
             print()
+            output_dir = workspace
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    else:
+        # No completed experiments
+        output_dir = workspace
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Error types
     if failed:
@@ -472,8 +733,17 @@ def main():
             if len(experiments) > 5:
                 print(f"\n  ... and {len(experiments) - 5} more with same error type")
     
+    # ============================================================================
+    # EXPORT RESULTS AND ORGANIZE OUTPUT
+    # ============================================================================
+    # Create output directory if not already created
+    if 'output_dir' not in locals():
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(workspace, f'status_check_outputs_{timestamp}')
+        os.makedirs(output_dir, exist_ok=True)
+    
     # Export to CSV
-    output_file = os.path.join(workspace, f'status_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+    output_file = os.path.join(output_dir, f'status_report_{timestamp}.csv')
     try:
         import csv
         with open(output_file, 'w', newline='') as f:
@@ -484,8 +754,18 @@ def main():
             writer.writerows(results)
         print()
         print("=" * 80)
+        print(f"OUTPUT FILES")
+        print("=" * 80)
         print(f"✅ Detailed report saved to: {output_file}")
-        print(f"✅ Debug log saved to: {debug_log_path}")
+        
+        # Move debug log to output directory
+        import shutil
+        new_debug_log_path = os.path.join(output_dir, f'status_check_debug_{timestamp}.log')
+        if os.path.exists(debug_log_path):
+            shutil.move(debug_log_path, new_debug_log_path)
+            print(f"✅ Debug log saved to: {new_debug_log_path}")
+        
+        print(f"✅ All outputs saved to: {output_dir}")
         print("=" * 80)
     except Exception as e:
         print(f"\n⚠️  Could not save CSV report: {e}")
