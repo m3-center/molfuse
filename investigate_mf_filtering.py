@@ -291,19 +291,107 @@ def main():
                             print(f"      {abs(discrepancy):,} SMILES should have been removed but weren't")
                             print(f"      Sample missing: {list(missing)[:3]}")
                     
-                    # Check final integrity
-                    print(f"\n  Final ZINC Integrity Check:")
+                    # Check final integrity with FILTERED MF cloud
+                    print(f"\n  Final ZINC Integrity Check (using FILTERED MF cloud):")
                     final_target_overlap = zinc_filtered_smiles.intersection(target_smiles)
-                    final_mf_overlap = zinc_filtered_smiles.intersection(mf_original_smiles)
+                    final_mf_filtered_overlap = zinc_filtered_smiles.intersection(mf_filtered_smiles)
                     
-                    if len(final_target_overlap) == 0 and len(final_mf_overlap) == 0:
-                        print(f"    ✓ ZINC ↔ Target overlap: 0 (CORRECT)")
-                        print(f"    ✓ ZINC ↔ MF overlap: 0 (CORRECT)")
+                    print(f"    ZINC (filtered) ↔ Target overlap: {len(final_target_overlap):,}")
+                    print(f"    ZINC (filtered) ↔ MF (filtered) overlap: {len(final_mf_filtered_overlap):,}")
+                    
+                    if len(final_target_overlap) == 0 and len(final_mf_filtered_overlap) == 0:
+                        print(f"    ✓ ALL CHECKS PASS - No contamination!")
                     else:
-                        print(f"    ✗ ZINC ↔ Target overlap: {len(final_target_overlap):,} (SHOULD BE 0!)")
-                        print(f"    ✗ ZINC ↔ MF overlap: {len(final_mf_overlap):,} (SHOULD BE 0!)")
+                        print(f"    ✗ CONTAMINATION DETECTED!")
                         if final_target_overlap:
-                            print(f"        Sample contaminating SMILES: {list(final_target_overlap)[:3]}")
+                            print(f"        Target contamination: {len(final_target_overlap):,} SMILES")
+                            print(f"        Sample: {list(final_target_overlap)[:3]}")
+                        if final_mf_filtered_overlap:
+                            print(f"        MF contamination: {len(final_mf_filtered_overlap):,} SMILES")
+                            print(f"        Sample: {list(final_mf_filtered_overlap)[:3]}")
+                    
+                    # Additional check: Use RDKit to canonicalize SMILES and recheck
+                    print(f"\n  Deep Integrity Check (with RDKit canonicalization):")
+                    try:
+                        from rdkit import Chem
+                        from rdkit import RDLogger
+                        RDLogger.DisableLog('rdApp.*')  # Suppress RDKit warnings
+                        
+                        print("    Canonicalizing SMILES with RDKit...")
+                        
+                        # Canonicalize ZINC filtered SMILES
+                        zinc_canonical = set()
+                        zinc_failed = 0
+                        for smi in zinc_filtered_smiles:
+                            try:
+                                mol = Chem.MolFromSmiles(smi)
+                                if mol is not None:
+                                    canonical = Chem.MolToSmiles(mol)
+                                    zinc_canonical.add(canonical)
+                                else:
+                                    zinc_failed += 1
+                            except:
+                                zinc_failed += 1
+                        
+                        print(f"      ZINC: {len(zinc_canonical):,} canonical SMILES ({zinc_failed} failed)")
+                        
+                        # Canonicalize MF filtered SMILES
+                        mf_canonical = set()
+                        mf_failed = 0
+                        for smi in mf_filtered_smiles:
+                            try:
+                                mol = Chem.MolFromSmiles(smi)
+                                if mol is not None:
+                                    canonical = Chem.MolToSmiles(mol)
+                                    mf_canonical.add(canonical)
+                                else:
+                                    mf_failed += 1
+                            except:
+                                mf_failed += 1
+                        
+                        print(f"      MF (filtered): {len(mf_canonical):,} canonical SMILES ({mf_failed} failed)")
+                        
+                        # Canonicalize target SMILES
+                        target_canonical = set()
+                        target_failed = 0
+                        for smi in target_smiles:
+                            try:
+                                mol = Chem.MolFromSmiles(smi)
+                                if mol is not None:
+                                    canonical = Chem.MolToSmiles(mol)
+                                    target_canonical.add(canonical)
+                                else:
+                                    target_failed += 1
+                            except:
+                                target_failed += 1
+                        
+                        print(f"      Target: {len(target_canonical):,} canonical SMILES ({target_failed} failed)")
+                        
+                        # Check overlaps with canonical SMILES
+                        canonical_zinc_target = zinc_canonical.intersection(target_canonical)
+                        canonical_zinc_mf = zinc_canonical.intersection(mf_canonical)
+                        
+                        print(f"\n    Canonical overlap check:")
+                        print(f"      ZINC ↔ Target: {len(canonical_zinc_target):,} molecules")
+                        print(f"      ZINC ↔ MF (filtered): {len(canonical_zinc_mf):,} molecules")
+                        
+                        if len(canonical_zinc_target) == 0 and len(canonical_zinc_mf) == 0:
+                            print(f"      ✓ PERFECT - Zero overlap after canonicalization!")
+                        else:
+                            print(f"      ✗ WARNING - Overlap detected even after canonicalization!")
+                            if canonical_zinc_target:
+                                # Find original SMILES for these canonical ones
+                                print(f"\n      Canonical SMILES in both ZINC and Target:")
+                                for canon_smi in list(canonical_zinc_target)[:3]:
+                                    print(f"        {canon_smi}")
+                            if canonical_zinc_mf:
+                                print(f"\n      Canonical SMILES in both ZINC and MF (filtered):")
+                                for canon_smi in list(canonical_zinc_mf)[:3]:
+                                    print(f"        {canon_smi}")
+                        
+                    except ImportError:
+                        print("    ⚠️  RDKit not available - skipping canonical SMILES check")
+                        print("    (Install with: conda install -c conda-forge rdkit)")
                 
                 else:
                     print(f"  ERROR: Filtered ZINC file not found!")
