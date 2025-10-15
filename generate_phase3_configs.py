@@ -74,8 +74,9 @@ def create_generalization_config(method_config, target, seed, base_config):
         "experiment_type": f"{target['id_name']}_{representation}_{method.lower().replace('-', '_')}_dim{dimension}"
     }
     
-    # Override dimensions
+    # Override dimensions and workspace
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
+    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase3/"
     
     # Set DR method
     if method == 'PCA':

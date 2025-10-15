@@ -63,10 +63,9 @@ def create_ablation_config(method_config, mf_size, seed, base_config):
         "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_mf{mf_size}"
     }
     
-    # Override dimensions
+    # Override dimensions, workspace, and MF cloud size
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
-    
-    # Override MF cloud size
+    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase2/"
     config["global_settings"]["mf_cloud_max_molecules"] = mf_size
     
     # Set DR method

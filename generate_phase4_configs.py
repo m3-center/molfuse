@@ -63,10 +63,9 @@ def create_cutoff_config(method_config, cutoff_nM, seed, base_config):
         "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_cutoff{cutoff_nM}nM"
     }
     
-    # Override dimensions
+    # Override dimensions, workspace, and affinity cutoff
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
-    
-    # Override affinity cutoff
+    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase4/"
     config["global_settings"]["affinity_cutoff_nM"] = cutoff_nM
     
     # Set DR method

@@ -59,8 +59,9 @@ def create_pca_config(representation, dimension, seed, base_config):
         "experiment_type": f"{representation}_pca_dim{dimension}"
     }
     
-    # Override dimensions
+    # Override dimensions and workspace
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
+    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase1/"
     
     return config
 
@@ -87,8 +88,9 @@ def create_umap_config(representation, metric, dimension, n_neighbors, min_dist,
         "experiment_type": f"{representation}_umap_{metric_name}_dim{dimension}_nn{n_neighbors}_md{min_dist}"
     }
     
-    # Override dimensions
+    # Override dimensions and workspace
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
+    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase1/"
     
     return config
 
