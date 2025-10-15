@@ -372,7 +372,7 @@ def load_similarity_space(workspace, experiment):
         return None
     
     try:
-        df = pd.read_csv(simspace_files[0])
+        df = pd.read_csv(simspace_files[0], low_memory=False)
         
         # Identify coordinate columns (usually dim_1, dim_2 or similar)
         coord_cols = [col for col in df.columns if 'dim' in col.lower() or 'coord' in col.lower() or 'component' in col.lower()]
