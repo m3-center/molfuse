@@ -96,16 +96,18 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
     # Extract run name from directory
     run_name = os.path.basename(run_dir)
     
-    # Check for orchestrator log in workspace root
+    # Check for orchestrator log in repo root (one level up from workspace)
     # Pattern: orchestrator_run_*_seed*_config*.log
     # The log name has timestamp between "run_" and "seed*", so we need to match flexibly
     # run_seed42_config_features_pca_projection -> orchestrator_run_*_seed42_config_features_pca_projection.log
     run_name_parts = run_name.replace('run_', '', 1)  # Remove 'run_' prefix
-    search_pattern = os.path.join(workspace_root, f'orchestrator_run_*_{run_name_parts}.log')
+    repo_root = os.path.dirname(os.path.abspath(workspace_root))  # Go one level up from workspace
+    search_pattern = os.path.join(repo_root, f'orchestrator_run_*_{run_name_parts}.log')
     
     if debug_log:
         debug_log.write(f"\n{'='*80}\n")
         debug_log.write(f"Run directory: {run_name}\n")
+        debug_log.write(f"Repo root: {repo_root}\n")
         debug_log.write(f"Search pattern: {search_pattern}\n")
     
     orchestrator_logs = glob.glob(search_pattern)
