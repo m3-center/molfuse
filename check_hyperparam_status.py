@@ -359,7 +359,8 @@ def main():
         for r in completed:
             # Find metrics file for this run
             run_dir = os.path.join(workspace, r['run_dir'])
-            metrics_pattern = os.path.join(run_dir, '*/results/*/dim_*/*/\*_ranking_metrics.csv')
+            # Pattern: TARGET/results/REPR/dim_N/METHOD/*_ranking_metrics.csv
+            metrics_pattern = os.path.join(run_dir, '*/results/*/dim_*/*/*_ranking_metrics.csv')
             metrics_files = glob.glob(metrics_pattern)
             
             if metrics_files:
