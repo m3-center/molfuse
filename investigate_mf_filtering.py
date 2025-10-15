@@ -220,15 +220,108 @@ def main():
                                 in_target = "IN TARGET SET" if s in target_smiles else "NOT IN TARGET SET"
                                 print(f"          {s} - {in_target}")
             
-            # 5. Summary
+            # 5. Check ZINC filtering
             print("\n" + "="*80)
-            print("SUMMARY")
+            print("Step 5: Investigating ZINC Filtering")
+            print("-"*80)
+            
+            # Load original ZINC
+            precalc_zinc_path = gs.get('precalculated_zinc_features_path')
+            if not precalc_zinc_path:
+                print("  ERROR: Cannot find precalculated_zinc_features_path in config!")
+            elif not os.path.exists(precalc_zinc_path):
+                print(f"  ERROR: ZINC file doesn't exist: {precalc_zinc_path}")
+            else:
+                print(f"  Loading ORIGINAL ZINC: {os.path.basename(precalc_zinc_path)}")
+                print("  (This may take a while - ZINC is large...)")
+                
+                # Load ZINC (this is big, so be patient)
+                df_zinc_original = pd.read_csv(precalc_zinc_path, low_memory=False)
+                zinc_original_smiles = set(df_zinc_original['SMILES'].dropna().unique()) if 'SMILES' in df_zinc_original.columns else set()
+                
+                print(f"    Total records: {len(df_zinc_original):,}")
+                print(f"    Unique SMILES: {len(zinc_original_smiles):,}")
+                
+                # Load filtered ZINC
+                zinc_filtered_file = None
+                for file in os.listdir(args.temp_data_dir):
+                    if 'zinc_excluded_features' in file:
+                        zinc_filtered_file = os.path.join(args.temp_data_dir, file)
+                        break
+                
+                if zinc_filtered_file and os.path.exists(zinc_filtered_file):
+                    print(f"\n  Loading FILTERED ZINC: {os.path.basename(zinc_filtered_file)}")
+                    df_zinc_filtered = pd.read_csv(zinc_filtered_file, low_memory=False)
+                    zinc_filtered_smiles = set(df_zinc_filtered['SMILES'].dropna().unique()) if 'SMILES' in df_zinc_filtered.columns else set()
+                    
+                    print(f"    Records after filtering: {len(df_zinc_filtered):,}")
+                    print(f"    Unique SMILES after filtering: {len(zinc_filtered_smiles):,}")
+                    
+                    # Calculate what was removed
+                    zinc_removed_smiles = zinc_original_smiles - zinc_filtered_smiles
+                    print(f"\n  SMILES removed from ZINC: {len(zinc_removed_smiles):,}")
+                    
+                    # Check overlap with target and MF
+                    zinc_removed_target_overlap = zinc_removed_smiles.intersection(target_smiles)
+                    zinc_removed_mf_overlap = zinc_removed_smiles.intersection(mf_original_smiles)
+                    
+                    print(f"    Removed SMILES that match target ligands: {len(zinc_removed_target_overlap):,}")
+                    print(f"    Removed SMILES that match MF cloud: {len(zinc_removed_mf_overlap):,}")
+                    print(f"    Removed SMILES from both: {len(zinc_removed_target_overlap.intersection(zinc_removed_mf_overlap)):,}")
+                    
+                    # This is the critical check
+                    all_smiles_to_exclude = target_smiles.union(mf_original_smiles)
+                    expected_to_remove = zinc_original_smiles.intersection(all_smiles_to_exclude)
+                    
+                    print(f"\n  Expected SMILES to remove (target + MF): {len(expected_to_remove):,}")
+                    print(f"  Actually removed: {len(zinc_removed_smiles):,}")
+                    
+                    if len(zinc_removed_smiles) == len(expected_to_remove):
+                        print("  ✓ ZINC filtering is CORRECT!")
+                    else:
+                        discrepancy = len(zinc_removed_smiles) - len(expected_to_remove)
+                        print(f"  ⚠️  Discrepancy: {discrepancy:,} SMILES")
+                        
+                        if discrepancy > 0:
+                            extra = zinc_removed_smiles - expected_to_remove
+                            print(f"      {len(extra):,} extra SMILES removed (not in target or MF)")
+                            print(f"      Sample extra removed: {list(extra)[:3]}")
+                        else:
+                            missing = expected_to_remove - zinc_removed_smiles
+                            print(f"      {abs(discrepancy):,} SMILES should have been removed but weren't")
+                            print(f"      Sample missing: {list(missing)[:3]}")
+                    
+                    # Check final integrity
+                    print(f"\n  Final ZINC Integrity Check:")
+                    final_target_overlap = zinc_filtered_smiles.intersection(target_smiles)
+                    final_mf_overlap = zinc_filtered_smiles.intersection(mf_original_smiles)
+                    
+                    if len(final_target_overlap) == 0 and len(final_mf_overlap) == 0:
+                        print(f"    ✓ ZINC ↔ Target overlap: 0 (CORRECT)")
+                        print(f"    ✓ ZINC ↔ MF overlap: 0 (CORRECT)")
+                    else:
+                        print(f"    ✗ ZINC ↔ Target overlap: {len(final_target_overlap):,} (SHOULD BE 0!)")
+                        print(f"    ✗ ZINC ↔ MF overlap: {len(final_mf_overlap):,} (SHOULD BE 0!)")
+                        if final_target_overlap:
+                            print(f"        Sample contaminating SMILES: {list(final_target_overlap)[:3]}")
+                
+                else:
+                    print(f"  ERROR: Filtered ZINC file not found!")
+            
+            # 6. Summary
+            print("\n" + "="*80)
+            print("OVERALL SUMMARY")
             print("="*80)
             print(f"  Original MF cloud: {len(mf_original_smiles):,} unique SMILES")
             print(f"  Filtered MF cloud: {len(mf_filtered_smiles):,} unique SMILES")
             print(f"  Removed from MF: {len(removed_smiles):,} unique SMILES")
             print(f"  Target ligands: {len(target_smiles):,} unique SMILES")
-            print(f"  Discrepancy: {len(removed_smiles) - len(target_smiles):,} SMILES")
+            print(f"  MF discrepancy: {len(removed_smiles) - len(target_smiles):,} SMILES")
+            
+            if 'zinc_original_smiles' in locals() and 'zinc_filtered_smiles' in locals():
+                print(f"\n  Original ZINC: {len(zinc_original_smiles):,} unique SMILES")
+                print(f"  Filtered ZINC: {len(zinc_filtered_smiles):,} unique SMILES")
+                print(f"  Removed from ZINC: {len(zinc_removed_smiles):,} unique SMILES")
             
             if len(removed_smiles) > len(target_smiles) * 1.1:
                 print("\n  ⚠️  MAJOR ISSUE: Far more molecules removed than expected!")
