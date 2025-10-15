@@ -348,9 +348,25 @@ def load_similarity_space(workspace, experiment):
     run_dir = os.path.join(workspace, experiment['run_dir'])
     
     # Find similarity space CSV file
-    # Pattern: TARGET/results/REPR/dim_N/METHOD/*_similarity_space.csv
-    simspace_pattern = os.path.join(run_dir, '*/results/*/dim_*/*/*_similarity_space.csv')
+    # Pattern: TARGET/similarity_spaces/REPR/dim_N/*_similarity_space.csv
+    simspace_pattern = os.path.join(run_dir, '*/similarity_spaces/*/dim_*/*_similarity_space.csv')
     simspace_files = glob.glob(simspace_pattern)
+    
+    if not simspace_files:
+        print(f"⚠️  No similarity space files found with pattern: {simspace_pattern}")
+        # Try alternative patterns to debug
+        alt_pattern1 = os.path.join(run_dir, '*/results/*/dim_*/*/*_similarity_space.csv')
+        alt_files1 = glob.glob(alt_pattern1)
+        if alt_files1:
+            print(f"    Found files in results directory: {alt_files1[0]}")
+            simspace_files = alt_files1
+        else:
+            # Try to find any similarity space CSV files
+            any_simspace_pattern = os.path.join(run_dir, '**/*_similarity_space.csv')
+            any_simspace = glob.glob(any_simspace_pattern, recursive=True)
+            if any_simspace:
+                print(f"    Found similarity space file elsewhere: {any_simspace[0]}")
+                simspace_files = any_simspace
     
     if not simspace_files:
         return None
