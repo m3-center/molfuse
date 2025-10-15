@@ -10,8 +10,10 @@
 
 # --- Configuration ---
 CONFIG_DIR="hyperparam_configs_v3_phase3_generalization"
-RANDOM_SEEDS=(42 43 44 45 46)
 SLURM_SCRIPT="hpc/ummbas_v3_cpu.sh"
+
+# NOTE: Each config file already contains a specific seed.
+# We do NOT loop over seeds here - that would create duplicate jobs!
 
 # --- Pre-submission Checks ---
 echo "============================================================"
@@ -43,12 +45,10 @@ fi
 
 # Count config files
 NUM_CONFIGS=$(ls -1 ${CONFIG_DIR}/*.json | wc -l)
-NUM_SEEDS=${#RANDOM_SEEDS[@]}
-TOTAL_JOBS=$((NUM_CONFIGS * NUM_SEEDS))
+TOTAL_JOBS=${NUM_CONFIGS}
 
 echo "Configuration Directory: ${CONFIG_DIR}"
 echo "Number of Configs: ${NUM_CONFIGS}"
-echo "Number of Seeds: ${NUM_SEEDS}"
 echo "Total Jobs: ${TOTAL_JOBS} (expected: 80)"
 echo "============================================================"
 
@@ -69,21 +69,23 @@ echo "------------------------------------------------------------"
 JOB_COUNT=0
 FAILED_COUNT=0
 
+# Each config file already has a seed in it, so we just submit once per file
 for config_file in "${CONFIG_DIR}"/*.json; do
-    for seed in "${RANDOM_SEEDS[@]}"; do
-        config_basename=$(basename "${config_file}" .json)
-        job_name="UMMBAS_v3_phase3_${config_basename}_s${seed}"
-        
-        # Submit the SLURM job
-        sbatch --job-name="${job_name}" "${SLURM_SCRIPT}" "${seed}" "${config_file}"
-        
-        if [ $? -eq 0 ]; then
-            JOB_COUNT=$((JOB_COUNT + 1))
-        else
-            echo "ERROR: Failed to submit job for ${config_file}, seed=${seed}"
-            FAILED_COUNT=$((FAILED_COUNT + 1))
-        fi
-    done
+    config_basename=$(basename "${config_file}" .json)
+    job_name="UMMBAS_v3_phase3_${config_basename}"
+    
+    # Extract seed from config filename (format: ..._seed42.json)
+    seed=$(echo "${config_basename}" | grep -oP 'seed\K\d+' || echo "unknown")
+    
+    # Submit the SLURM job with the seed from the config
+    sbatch --job-name="${job_name}" "${SLURM_SCRIPT}" "${seed}" "${config_file}"
+    
+    if [ $? -eq 0 ]; then
+        JOB_COUNT=$((JOB_COUNT + 1))
+    else
+        echo "ERROR: Failed to submit job for ${config_file}"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
 done
 
 echo "============================================================"
