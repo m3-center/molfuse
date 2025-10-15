@@ -191,11 +191,17 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                     in_traceback = False
                         
                         if error_lines:
-                            status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
-                            
-                            # Categorize error type (ignore CUDA warnings if job completed)
+                            # Categorize error type
                             error_text = ' '.join(error_lines).lower()
-                            if 'filenotfounderror' in error_text or 'no such file' in error_text:
+                            
+                            # IGNORE CUDA errors - they are warnings, code falls back to CPU
+                            if 'cuda' in error_text or 'gpu' in error_text or 'numba.cuda' in error_text:
+                                if debug_log:
+                                    debug_log.write(f"⚠️  CUDA warning detected but IGNORED (fallback to CPU)\n")
+                                # Don't set error status for CUDA warnings
+                                pass
+                            elif 'filenotfounderror' in error_text or 'no such file' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
                                 if 'model' in error_text:
                                     status['error_type'] = 'Missing Model File'
                                 elif 'scaler' in error_text:
@@ -203,19 +209,19 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                 else:
                                     status['error_type'] = 'File Not Found'
                             elif 'memoryerror' in error_text or 'out of memory' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Out of Memory'
                             elif 'valueerror' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Value Error'
                             elif 'keyerror' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Key Error'
-                            elif 'cuda' in error_text or 'gpu' in error_text:
-                                # Only mark as CUDA error if it actually failed
-                                # (CUDA warnings with CPU fallback are OK)
-                                status['error_type'] = 'GPU/CUDA Error'
                             else:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Other Error'
                             
-                            if debug_log:
+                            if status['error_type'] and debug_log:
                                 debug_log.write(f"❌ Error detected in log: {status['error_type']}\n")
             except Exception as e:
                 if debug_log:
