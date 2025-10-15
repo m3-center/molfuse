@@ -293,14 +293,20 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
                 pca_exp = exp
             
             # Find best UMAP experiment (matching method from best_umap_method)
-            if (exp['representation'] == best_umap_method['representation'] and
-                exp['dr_method'] == best_umap_method['dr_method'] and
+            # More flexible matching - just check that UMAP is in method name and hyperparams match
+            if (exp['representation'] == 'features' and 
+                'UMAP' in exp.get('dr_method', '') and
                 str(exp.get('n_neighbors', '')) == str(best_umap_method.get('n_neighbors', '')) and
                 str(exp.get('min_dist', '')) == str(best_umap_method.get('min_dist', ''))):
                 umap_exp = exp
         
         if not pca_exp or not umap_exp:
+            # Debug: show what experiments we found
             print(f"⚠️  Skipping seed {seed}: Missing PCA or UMAP experiment")
+            print(f"    Found {len(seed_experiments)} experiments for this seed:")
+            for exp in seed_experiments:
+                print(f"      - {exp['representation']}-{exp['dr_method']} (nn={exp.get('n_neighbors')}, md={exp.get('min_dist')})")
+            print(f"    Looking for: features-PCA and features-UMAP (nn={best_umap_method.get('n_neighbors')}, md={best_umap_method.get('min_dist')})")
             continue
         
         # Load similarity space coordinates
