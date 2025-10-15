@@ -1,3 +1,4 @@
+# UMMBAS - Data and outputs (DO NOT COMMIT)
 datasets/*
 datasets_debugging/*
 test_outputs/*
@@ -7,9 +8,35 @@ logs/*
 reports/*
 temp/*
 TeX/*
+
+# v3.0 Generated configs (regenerate locally via generate_phase*_configs.py)
+hyperparam_configs_v3*/
+ablation_configs_v3*/
+generalization_configs_v3*/
+cutoff_configs_v3*/
+
+# v3.0 Analysis outputs
+duplicate_analysis/
+status_check_outputs*/
+phase*_results/
+phase*_analysis/
+reports_v3*/
+
+# Archives
+archive_v2.0/
+
+# Output files
 *.lzma
 *.png
 *.log
 *.out
 *.err
 *.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
