@@ -107,12 +107,16 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
     # ============================================================================
     # STEP 1: Check for output files (PRIMARY success indicator)
     # ============================================================================
-    results_pattern = os.path.join(run_dir, '*/results/*/*/dim_*/*')
+    # Pattern: run_seed*/TARGET/results/REPR/dim_N/METHOD/
+    # Example: run_seed46.../TyrosineProteinKinaseABL1_P00519/results/features/dim_2/PCA/
+    results_pattern = os.path.join(run_dir, '*/results/*/dim_*/*')
     results_dirs = glob.glob(results_pattern)
     
     if debug_log:
         debug_log.write(f"Results pattern: {results_pattern}\n")
         debug_log.write(f"Found {len(results_dirs)} result directories\n")
+        if results_dirs:
+            debug_log.write(f"Example: {results_dirs[0]}\n")
     
     if results_dirs:
         status['has_results'] = True
