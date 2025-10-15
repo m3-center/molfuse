@@ -22,8 +22,9 @@ phase*_results/
 phase*_analysis/
 reports_v3*/
 
-# Archives
+# Archives (allow docs/archive_* for historical documentation)
 archive_v2.0/
+!docs/archive_*/
 
 # Output files
 *.lzma
