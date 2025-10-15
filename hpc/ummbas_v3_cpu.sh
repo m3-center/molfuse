@@ -2,9 +2,8 @@
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
-#SBATCH --mem=350G
-#SBATCH --time=0-24:00:00
-#SBATCH --exclude=wr43
+#SBATCH --mem=170G
+#SBATCH --time=0-48:00:00
 
 # =============================================================================
 # UMMBAS v3.0 - Single Experiment SLURM Script (CPU)
