@@ -19,6 +19,8 @@ import argparse
 from collections import defaultdict
 from datetime import datetime
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for faster rendering
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -317,7 +319,7 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
             print(f"⚠️  Skipping seed {seed}: Could not load coordinates")
             continue
         
-        # Create figure with 2 subplots
+        # Create figure with 2 subplots (use Agg backend for faster non-interactive rendering)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
         
         # Plot PCA
@@ -329,10 +331,15 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
         
         plt.tight_layout()
         
-        # Save figure
+        # Save figure with optimized settings
         output_path = os.path.join(figures_dir, f'seed{seed}_pca_vs_umap.png')
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        plt.close()
+        plt.savefig(output_path, dpi=150, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
+        plt.close(fig)  # Explicitly close the figure to free memory
+        
+        # Force garbage collection to prevent memory buildup
+        import gc
+        gc.collect()
         
         print(f"✅ Saved figure for seed {seed}: {output_path}")
     
@@ -430,7 +437,9 @@ def load_similarity_space(workspace, experiment):
         return None
 
 def plot_similarity_space(ax, df, title):
-    """Plot similarity space coordinates with different colors for categories."""
+    """Plot similarity space coordinates with different colors for categories.
+    Optimized for performance with large datasets.
+    """
     # Define colors for each category
     color_map = {
         'ZINC': '#3498db',      # Blue
@@ -445,10 +454,26 @@ def plot_similarity_space(ax, df, title):
     # Normalize category names
     df['category_norm'] = df['category'].astype(str).str.upper()
     
-    # Plot each category separately
+    # Plot each category separately, but in optimal order (largest first, targets last)
     categories = df['category_norm'].unique()
     
-    for category in sorted(categories):
+    # Sort categories by size (largest first) but keep TARGETS for last (on top)
+    category_order = []
+    target_categories = []
+    for category in categories:
+        if category in ['TARGET', 'TARGETS', 'ACTIVE']:
+            target_categories.append(category)
+        else:
+            category_order.append(category)
+    
+    # Sort non-target categories by count (descending)
+    category_counts = df['category_norm'].value_counts()
+    category_order.sort(key=lambda x: category_counts.get(x, 0), reverse=True)
+    
+    # Add targets at the end (so they plot on top)
+    category_order.extend(target_categories)
+    
+    for category in category_order:
         mask = df['category_norm'] == category
         subset = df[mask]
         
@@ -461,20 +486,25 @@ def plot_similarity_space(ax, df, title):
             size = 50
             zorder = 3  # Plot on top
             label = 'TARGETS'
+            rasterized = False  # Keep targets as vectors for clarity
         elif category in ['MF']:
             alpha = 0.5
             size = 20
             zorder = 2
             label = 'MF Cloud'
+            rasterized = True  # Rasterize large point clouds for performance
         else:  # ZINC/DECOY/INACTIVE
             alpha = 0.3
             size = 15
             zorder = 1  # Plot on bottom
             label = 'ZINC Decoys'
+            rasterized = True  # Rasterize large point clouds for performance
         
-        ax.scatter(subset['coord_1'], subset['coord_2'], 
+        # Use more efficient scatter plotting with rasterization for large datasets
+        ax.scatter(subset['coord_1'].values, subset['coord_2'].values, 
                   c=color, alpha=alpha, s=size, 
-                  label=label, zorder=zorder, edgecolors='none')
+                  label=label, zorder=zorder, edgecolors='none',
+                  rasterized=rasterized)
     
     ax.set_xlabel('Dimension 1', fontsize=12)
     ax.set_ylabel('Dimension 2', fontsize=12)
