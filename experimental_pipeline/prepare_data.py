@@ -129,7 +129,10 @@ def main():
     target_smiles_to_exclude = set(raw_target_ligands_df['SMILES'].dropna().unique()) if not raw_target_ligands_df.empty else set()
     target_chembl_ids_to_exclude = set(raw_target_ligands_df['Compound ChEMBL ID'].dropna().unique()) if not raw_target_ligands_df.empty else set()
 
-    # --- 2. Filter PRE-CALCULATED ChEMBL Molecular Function files ---
+    # --- 2. Filter PRE-CALCULATED ChEMBL Molecular Function files AND collect MF SMILES for ZINC filtering ---
+    # CRITICAL: We need to collect ALL MF cloud SMILES to remove them from ZINC decoys!
+    mf_smiles_to_exclude_from_zinc = set()  # Will accumulate ALL MF cloud SMILES
+    
     mf_kw_id = get_mf_keyword_id_from_keywords_csv(gs['molecular_function_keywords_csv_path'], canonical_mf_name)
     if not mf_kw_id:
         logging.error(f"Cannot proceed with ChEMBL MF file filtering for {args.target_id_name} due to missing KW-ID for '{canonical_mf_name}'.")
@@ -167,6 +170,12 @@ def main():
                     
                     df_filtered_precalc_mf.to_csv(output_chembl_mf_excluded_path, index=False)
                     logging.info(f"Saved filtered pre-calculated ChEMBL MF {repr_type} to: {output_chembl_mf_excluded_path}")
+                    
+                    # COLLECT MF SMILES for ZINC filtering (from filtered MF cloud)
+                    if 'SMILES' in df_filtered_precalc_mf.columns:
+                        mf_smiles_from_this_file = set(df_filtered_precalc_mf['SMILES'].dropna().unique())
+                        mf_smiles_to_exclude_from_zinc.update(mf_smiles_from_this_file)
+                        logging.info(f"Collected {len(mf_smiles_from_this_file)} unique SMILES from MF {repr_type} file for ZINC filtering")
 
                 except Exception as e:
                     logging.error(f"Error processing pre-calculated ChEMBL MF file {precalc_mf_full_path}: {e}")
@@ -176,6 +185,17 @@ def main():
                 pd.DataFrame().to_csv(output_chembl_mf_excluded_path, index=False)
 
     # --- 3. Filter PRE-CALCULATED ZINC files ---
+    # CRITICAL: Remove BOTH target ligands AND MF cloud molecules from ZINC decoys!
+    logging.info(f"\n{'='*80}")
+    logging.info(f"DATA INTEGRITY CHECK: Filtering ZINC decoys")
+    logging.info(f"{'='*80}")
+    logging.info(f"Target ligand SMILES to exclude: {len(target_smiles_to_exclude)}")
+    logging.info(f"MF cloud SMILES to exclude: {len(mf_smiles_to_exclude_from_zinc)}")
+    
+    # Combine both exclusion sets
+    all_smiles_to_exclude_from_zinc = target_smiles_to_exclude.union(mf_smiles_to_exclude_from_zinc)
+    logging.info(f"TOTAL SMILES to exclude from ZINC: {len(all_smiles_to_exclude_from_zinc)}")
+    
     for repr_type in config['representations']:
         precalc_zinc_path = gs.get(f'precalculated_zinc_{repr_type}_path')
         if not precalc_zinc_path:
@@ -189,11 +209,22 @@ def main():
                 df_precalc_zinc = pd.read_csv(precalc_zinc_path, low_memory=False)
                 logging.info(f"Loaded pre-calculated ZINC {repr_type} file: {precalc_zinc_path} (shape: {df_precalc_zinc.shape})")
 
-                if 'SMILES' in df_precalc_zinc.columns and target_smiles_to_exclude:
-                    df_filtered_precalc_zinc = df_precalc_zinc[~df_precalc_zinc['SMILES'].isin(target_smiles_to_exclude)].copy()
-                    logging.info(f"Filtered ZINC {repr_type} by SMILES. Original: {len(df_precalc_zinc)}, Filtered: {len(df_filtered_precalc_zinc)}")
+                if 'SMILES' in df_precalc_zinc.columns and all_smiles_to_exclude_from_zinc:
+                    # Filter out BOTH target ligands AND MF cloud molecules
+                    df_filtered_precalc_zinc = df_precalc_zinc[~df_precalc_zinc['SMILES'].isin(all_smiles_to_exclude_from_zinc)].copy()
+                    removed_count = len(df_precalc_zinc) - len(df_filtered_precalc_zinc)
+                    logging.info(f"Filtered ZINC {repr_type} by SMILES (target + MF cloud exclusion).")
+                    logging.info(f"  Original: {len(df_precalc_zinc)}, Filtered: {len(df_filtered_precalc_zinc)}, Removed: {removed_count}")
+                    
+                    # Report breakdown
+                    if target_smiles_to_exclude:
+                        zinc_target_overlap = df_precalc_zinc['SMILES'].isin(target_smiles_to_exclude).sum()
+                        logging.info(f"  - Removed {zinc_target_overlap} ZINC molecules matching target ligands")
+                    if mf_smiles_to_exclude_from_zinc:
+                        zinc_mf_overlap = df_precalc_zinc['SMILES'].isin(mf_smiles_to_exclude_from_zinc).sum()
+                        logging.info(f"  - Removed {zinc_mf_overlap} ZINC molecules matching MF cloud")
                 else:
-                    logging.warning(f"Cannot filter pre-calculated ZINC {repr_type} file by SMILES (column missing or no target SMILES). Using file as is.")
+                    logging.warning(f"Cannot filter pre-calculated ZINC {repr_type} file by SMILES (column missing or no exclusions). Using file as is.")
                     df_filtered_precalc_zinc = df_precalc_zinc.copy()
                 
                 df_filtered_precalc_zinc.to_csv(output_zinc_excluded_path, index=False)
