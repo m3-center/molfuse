@@ -22,17 +22,30 @@ This directory contains SLURM job scripts for running UMMBAS v3.0 experiments on
 
 ## Quick Start
 
-### Prerequisites
+### Prerequisites (One-Time Setup)
 
-1. **Generate configurations** for the phase you want to run:
+1. **Setup workspace directories** (creates symlinks to `/work` partition):
    ```bash
-   # For Phase 1
-   python generate_phase1_configs.py
+   bash setup_hpc_workspaces.sh
    ```
+   
+   This creates:
+   - `/work/ahagg2s/ummbas_results/experiment_workspace_v3_phase1/` → `experiment_workspace_v3_phase1`
+   - `/work/ahagg2s/ummbas_results/experiment_workspace_v3_phase2/` → `experiment_workspace_v3_phase2`
+   - `/work/ahagg2s/ummbas_results/experiment_workspace_v3_phase3/` → `experiment_workspace_v3_phase3`
+   - `/work/ahagg2s/ummbas_results/experiment_workspace_v3_phase4/` → `experiment_workspace_v3_phase4`
 
 2. **Update conda environment path** in `ummbas_v3_cpu.sh` (line 55):
    ```bash
    source /home/YOUR_USERNAME/miniforge3/bin/activate ummbas-screening
+   ```
+
+### Before Each Phase
+
+3. **Generate configurations** for the phase you want to run:
+   ```bash
+   # For Phase 1
+   python generate_phase1_configs.py
    ```
 
 ### Submit Jobs

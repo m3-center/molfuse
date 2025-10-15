@@ -19,7 +19,44 @@ You're on branch `3.0` and ready to launch the new experimental pipeline!
 
 ## Step-by-Step Launch
 
-### 1. Generate Phase 1 Configurations
+### 1. Setup HPC Workspaces (One-Time, on Cluster)
+
+**On the HPC cluster, run:**
+
+```bash
+bash setup_hpc_workspaces.sh
+```
+
+**This script will:**
+- Create workspace directories in `/work/ahagg2s/ummbas_results/`
+- Create symlinks in repository root for easy access
+- Verify all symlinks are correct
+
+**Expected output:**
+```
+============================================================
+UMMBAS v3.0 - HPC Workspace Setup
+============================================================
+✓ Created directory: /work/ahagg2s/ummbas_results/experiment_workspace_v3_phase1
+✓ Created symlink: experiment_workspace_v3_phase1 -> /work/ahagg2s/ummbas_results/experiment_workspace_v3_phase1
+...
+✓ All workspaces set up successfully!
+```
+
+---
+
+### 2. Configure HPC Environment (One-Time Setup)
+
+**Edit the conda environment path in `hpc/ummbas_v3_cpu.sh` (line 55):**
+
+```bash
+# Change this line to match your HPC setup:
+source /home/YOUR_USERNAME/miniforge3/bin/activate ummbas-screening
+```
+
+---
+
+### 3. Generate Phase 1 Configurations
 
 ```bash
 python generate_phase1_configs.py
@@ -38,18 +75,7 @@ Breakdown:
 
 ---
 
-### 2. Configure HPC Environment (One-Time Setup)
-
-**Edit the conda environment path in `hpc/ummbas_v3_cpu.sh` (line 55):**
-
-```bash
-# Change this line to match your HPC setup:
-source /home/YOUR_USERNAME/miniforge3/bin/activate ummbas-screening
-```
-
----
-
-### 3. Launch Phase 1 on HPC
+### 4. Launch Phase 1 on HPC
 
 ```bash
 # Submit all 260 jobs (52 configs × 5 seeds)
@@ -83,7 +109,7 @@ Proceed with submission? (y/n): y
 
 ---
 
-### 4. Monitor Progress
+### 5. Monitor Progress
 
 While Phase 1 runs:
 
@@ -106,7 +132,7 @@ tail -f slurm_logs/UMMBAS_v3_*.out
 
 ---
 
-### 5. Extract Best Configs (After Phase 1 Completes)
+### 6. Extract Best Configs (After Phase 1 Completes)
 
 ```bash
 python extract_phase1_best_configs.py \
@@ -123,7 +149,7 @@ python extract_phase1_best_configs.py \
 
 ---
 
-### 6. Run Subsequent Phases
+### 7. Run Subsequent Phases
 
 **Phase 2 (MF Cloud Ablation - 60 runs):**
 ```bash
@@ -223,17 +249,20 @@ ls experiment_workspace_v3_phase1/run_*/*/results/*/dim_*/*/*_ranking_metrics.cs
 ## Ready to Launch! 🚀
 
 ```bash
-# Step 1: Generate Phase 1 configs
-python generate_phase1_configs.py
+# Step 1: Setup workspaces (one-time, on HPC)
+bash setup_hpc_workspaces.sh
 
 # Step 2: Configure HPC (one-time)
 # Edit: hpc/ummbas_v3_cpu.sh line 55
 # Set your conda environment path
 
-# Step 3: Launch on HPC
+# Step 3: Generate Phase 1 configs
+python generate_phase1_configs.py
+
+# Step 4: Launch on HPC
 bash hpc/submit_v3_phase1.sh
 
-# Step 4: Monitor progress
+# Step 5: Monitor progress
 squeue -u $USER
 python scripts/check_hyperparam_status.py --workspace experiment_workspace_v3_phase1
 ```
