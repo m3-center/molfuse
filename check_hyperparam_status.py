@@ -81,7 +81,7 @@ def extract_config_info(run_dir):
     
     return info
 
-def check_experiment_status(run_dir, workspace_root):
+def check_experiment_status(run_dir, workspace_root, debug_log=None):
     """Check if experiment completed successfully and extract error if failed."""
     status = {
         'completed': False,
@@ -89,7 +89,8 @@ def check_experiment_status(run_dir, workspace_root):
         'has_rankings': False,
         'has_metrics': False,
         'error': None,
-        'error_type': None
+        'error_type': None,
+        'log_file': None
     }
     
     # Extract run name from directory
@@ -100,9 +101,25 @@ def check_experiment_status(run_dir, workspace_root):
     # The log name has timestamp between "run_" and "seed*", so we need to match flexibly
     # run_seed42_config_features_pca_projection -> orchestrator_run_*_seed42_config_features_pca_projection.log
     run_name_parts = run_name.replace('run_', '', 1)  # Remove 'run_' prefix
-    orchestrator_logs = glob.glob(os.path.join(workspace_root, f'orchestrator_run_*_{run_name_parts}.log'))
+    search_pattern = os.path.join(workspace_root, f'orchestrator_run_*_{run_name_parts}.log')
+    
+    if debug_log:
+        debug_log.write(f"\n{'='*80}\n")
+        debug_log.write(f"Run directory: {run_name}\n")
+        debug_log.write(f"Search pattern: {search_pattern}\n")
+    
+    orchestrator_logs = glob.glob(search_pattern)
+    
+    if debug_log:
+        debug_log.write(f"Found {len(orchestrator_logs)} log files: {orchestrator_logs}\n")
+    
     if orchestrator_logs:
         log_file = orchestrator_logs[0]
+        status['log_file'] = os.path.basename(log_file)
+        
+        if debug_log:
+            debug_log.write(f"Reading log file: {log_file}\n")
+        
         try:
             with open(log_file, 'r') as f:
                 log_content = f.read()
@@ -110,6 +127,8 @@ def check_experiment_status(run_dir, workspace_root):
                 # Check for completion
                 if 'STEP 7: Script finished' in log_content or 'Orchestration complete' in log_content:
                     status['completed'] = True
+                    if debug_log:
+                        debug_log.write(f"✅ Completion marker found\n")
                 
                 # Check for errors
                 if 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
@@ -151,12 +170,24 @@ def check_experiment_status(run_dir, workspace_root):
                             status['error_type'] = 'GPU/CUDA Error'
                         else:
                             status['error_type'] = 'Other Error'
-        except:
-            pass
+                        
+                        if debug_log:
+                            debug_log.write(f"❌ Error detected: {status['error_type']}\n")
+        except Exception as e:
+            if debug_log:
+                debug_log.write(f"⚠️  Error reading log file: {e}\n")
+    else:
+        if debug_log:
+            debug_log.write(f"⚠️  No orchestrator log found\n")
     
     # Check for results files
     results_pattern = os.path.join(run_dir, '*/results/*/*/dim_*/*')
     results_dirs = glob.glob(results_pattern)
+    
+    if debug_log:
+        debug_log.write(f"Results pattern: {results_pattern}\n")
+        debug_log.write(f"Found {len(results_dirs)} result directories\n")
+    
     if results_dirs:
         status['has_results'] = True
         
@@ -178,6 +209,14 @@ def check_experiment_status(run_dir, workspace_root):
     # (The analysis phase completed successfully even if log wasn't captured)
     if status['has_metrics'] and not status['completed']:
         status['completed'] = True
+        if debug_log:
+            debug_log.write(f"✅ Marked complete based on metrics file presence\n")
+    
+    if debug_log:
+        debug_log.write(f"Final status: completed={status['completed']}, "
+                       f"has_results={status['has_results']}, "
+                       f"has_rankings={status['has_rankings']}, "
+                       f"has_metrics={status['has_metrics']}\n")
     
     return status
 
@@ -210,21 +249,39 @@ def main():
     print(f"Found {len(run_dirs)} run directories")
     print()
     
-    # Analyze each run
-    results = []
-    for run_dir in sorted(run_dirs):
-        config_info = extract_config_info(run_dir)
-        status = check_experiment_status(run_dir, workspace)
-        
-        results.append({
-            **config_info,
-            **status
-        })
+    # Open debug log
+    debug_log_path = os.path.join(workspace, f'status_check_debug_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    print(f"Writing debug log to: {debug_log_path}")
+    print()
     
-    # Summary statistics
-    completed = [r for r in results if r['completed']]
-    failed = [r for r in results if not r['completed'] and r['error']]
-    incomplete = [r for r in results if not r['completed'] and not r['error']]
+    with open(debug_log_path, 'w') as debug_log:
+        debug_log.write(f"Status Check Debug Log\n")
+        debug_log.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        debug_log.write(f"Workspace: {workspace}\n")
+        debug_log.write(f"Total run directories: {len(run_dirs)}\n")
+        
+        # Analyze each run
+        results = []
+        for run_dir in sorted(run_dirs):
+            config_info = extract_config_info(run_dir)
+            status = check_experiment_status(run_dir, workspace, debug_log)
+            
+            results.append({
+                **config_info,
+                **status
+            })
+    
+        # Summary statistics
+        completed = [r for r in results if r['completed']]
+        failed = [r for r in results if not r['completed'] and r['error']]
+        incomplete = [r for r in results if not r['completed'] and not r['error']]
+        
+        debug_log.write(f"\n{'='*80}\n")
+        debug_log.write(f"SUMMARY\n")
+        debug_log.write(f"Completed: {len(completed)}\n")
+        debug_log.write(f"Failed: {len(failed)}\n")
+        debug_log.write(f"Incomplete: {len(incomplete)}\n")
+    
     
     print("=" * 80)
     print("SUMMARY")
@@ -310,13 +367,14 @@ def main():
         import csv
         with open(output_file, 'w', newline='') as f:
             fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'n_neighbors', 'min_dist',
-                         'completed', 'has_results', 'has_rankings', 'has_metrics', 'error_type']
+                         'completed', 'has_results', 'has_rankings', 'has_metrics', 'error_type', 'log_file']
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(results)
         print()
         print("=" * 80)
         print(f"✅ Detailed report saved to: {output_file}")
+        print(f"✅ Debug log saved to: {debug_log_path}")
         print("=" * 80)
     except Exception as e:
         print(f"\n⚠️  Could not save CSV report: {e}")
