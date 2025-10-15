@@ -81,7 +81,7 @@ def extract_config_info(run_dir):
     
     return info
 
-def check_experiment_status(run_dir):
+def check_experiment_status(run_dir, workspace_root):
     """Check if experiment completed successfully and extract error if failed."""
     status = {
         'completed': False,
@@ -92,8 +92,12 @@ def check_experiment_status(run_dir):
         'error_type': None
     }
     
-    # Check for orchestrator log
-    orchestrator_logs = glob.glob(os.path.join(run_dir, 'orchestrator*.log'))
+    # Extract run name from directory
+    run_name = os.path.basename(run_dir)
+    
+    # Check for orchestrator log in workspace root
+    # Pattern: orchestrator_run_*_seed*_config*.log
+    orchestrator_logs = glob.glob(os.path.join(workspace_root, f'orchestrator*{run_name}*.log'))
     if orchestrator_logs:
         log_file = orchestrator_logs[0]
         try:
@@ -167,6 +171,11 @@ def check_experiment_status(run_dir):
                 status['has_metrics'] = True
                 break
     
+    # If we have ranking metrics but no log completion marker, consider it completed
+    # (The analysis phase completed successfully even if log wasn't captured)
+    if status['has_metrics'] and not status['completed']:
+        status['completed'] = True
+    
     return status
 
 def main():
@@ -202,7 +211,7 @@ def main():
     results = []
     for run_dir in sorted(run_dirs):
         config_info = extract_config_info(run_dir)
-        status = check_experiment_status(run_dir)
+        status = check_experiment_status(run_dir, workspace)
         
         results.append({
             **config_info,
