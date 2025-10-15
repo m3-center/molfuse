@@ -368,8 +368,18 @@ def main():
                     with open(metrics_files[0], 'r') as f:
                         reader = csv_module.DictReader(f)
                         for row in reader:
-                            if 'EF@1%' in row or 'EF@1' in row:
-                                ef_key = 'EF@1%' if 'EF@1%' in row else 'EF@1'
+                            # Try different column name variations
+                            ef_key = None
+                            if 'ef_1%' in row:
+                                ef_key = 'ef_1%'
+                            elif 'EF@1%' in row:
+                                ef_key = 'EF@1%'
+                            elif 'EF@1' in row:
+                                ef_key = 'EF@1'
+                            elif 'ef_1' in row:
+                                ef_key = 'ef_1'
+                            
+                            if ef_key:
                                 ef_value = float(row[ef_key])
                                 
                                 # Create method key with hyperparameters
