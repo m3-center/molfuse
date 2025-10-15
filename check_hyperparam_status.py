@@ -97,7 +97,10 @@ def check_experiment_status(run_dir, workspace_root):
     
     # Check for orchestrator log in workspace root
     # Pattern: orchestrator_run_*_seed*_config*.log
-    orchestrator_logs = glob.glob(os.path.join(workspace_root, f'orchestrator*{run_name}*.log'))
+    # The log name has timestamp between "run_" and "seed*", so we need to match flexibly
+    # run_seed42_config_features_pca_projection -> orchestrator_run_*_seed42_config_features_pca_projection.log
+    run_name_parts = run_name.replace('run_', '', 1)  # Remove 'run_' prefix
+    orchestrator_logs = glob.glob(os.path.join(workspace_root, f'orchestrator_run_*_{run_name_parts}.log'))
     if orchestrator_logs:
         log_file = orchestrator_logs[0]
         try:
