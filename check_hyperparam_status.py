@@ -344,6 +344,75 @@ def main():
         print(f"{key:<30} {stats['completed']:>10} {stats['failed']:>10} {stats['incomplete']:>10}")
     print()
     
+    # ============================================================================
+    # PRELIMINARY RANKING METRICS (EF@1% averaged across seeds)
+    # ============================================================================
+    if completed:
+        print("=" * 80)
+        print("PRELIMINARY RANKING METRICS (Completed Experiments Only)")
+        print("=" * 80)
+        
+        # Collect EF@1% scores for each method
+        import csv as csv_module
+        metrics_by_method = defaultdict(list)
+        
+        for r in completed:
+            # Find metrics file for this run
+            run_dir = os.path.join(workspace, r['run_dir'])
+            metrics_pattern = os.path.join(run_dir, '*/results/*/dim_*/*/\*_ranking_metrics.csv')
+            metrics_files = glob.glob(metrics_pattern)
+            
+            if metrics_files:
+                try:
+                    with open(metrics_files[0], 'r') as f:
+                        reader = csv_module.DictReader(f)
+                        for row in reader:
+                            if 'EF@1%' in row or 'EF@1' in row:
+                                ef_key = 'EF@1%' if 'EF@1%' in row else 'EF@1'
+                                ef_value = float(row[ef_key])
+                                
+                                # Create method key with hyperparameters
+                                if r['n_neighbors'] and r['min_dist']:
+                                    method_key = f"{r['representation']}-{r['dr_method']}-nn{r['n_neighbors']}-md{r['min_dist']}"
+                                else:
+                                    method_key = f"{r['representation']}-{r['dr_method']}"
+                                
+                                metrics_by_method[method_key].append(ef_value)
+                                break
+                except Exception as e:
+                    pass  # Skip if can't read metrics
+        
+        if metrics_by_method:
+            # Calculate averages and display
+            import statistics
+            results_with_metrics = []
+            
+            for method_key, ef_values in metrics_by_method.items():
+                avg_ef = statistics.mean(ef_values)
+                std_ef = statistics.stdev(ef_values) if len(ef_values) > 1 else 0.0
+                results_with_metrics.append({
+                    'method': method_key,
+                    'avg_ef': avg_ef,
+                    'std_ef': std_ef,
+                    'n_seeds': len(ef_values)
+                })
+            
+            # Sort by average EF@1% (descending)
+            results_with_metrics.sort(key=lambda x: x['avg_ef'], reverse=True)
+            
+            print(f"{'Method':<60} {'EF@1%':>15} {'N Seeds':>8}")
+            print("-" * 80)
+            for result in results_with_metrics:
+                if result['std_ef'] > 0:
+                    ef_str = f"{result['avg_ef']:.2f} ± {result['std_ef']:.2f}"
+                else:
+                    ef_str = f"{result['avg_ef']:.2f}"
+                print(f"{result['method']:<60} {ef_str:>15} {result['n_seeds']:>8}")
+            print()
+        else:
+            print("No ranking metrics found in completed experiments.")
+            print()
+    
     # Error types
     if failed:
         print("=" * 80)
