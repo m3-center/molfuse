@@ -6,10 +6,34 @@ import pandas as pd
 import logging
 from datetime import datetime
 import argparse
+import glob
 
 # Global variable for log file name, will be set by setup_logging
 log_file_name = "orchestrator_uninitialized.log" 
 log_file_name_base = f"orchestrator_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+def check_experiment_completed(workspace_base_dir, run_specific_name):
+    """
+    Check if experiment already completed by looking for ranking CSV file.
+    
+    Args:
+        workspace_base_dir: Base workspace directory
+        run_specific_name: Specific run directory name (run_seedN_config_name)
+    
+    Returns:
+        bool: True if experiment completed (ranking file exists), False otherwise
+    """
+    run_dir = os.path.join(workspace_base_dir, run_specific_name)
+    
+    if not os.path.exists(run_dir):
+        return False
+    
+    # Check for ranking CSV in results directory
+    # Pattern: TARGET/results/REPR/dim_N/METHOD/*-RANKED.csv
+    ranking_pattern = os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv")
+    ranking_files = glob.glob(ranking_pattern)
+    
+    return len(ranking_files) > 0
 
 def setup_logging(log_base_name, seed, config_name):
     """Sets up logging with seed and config name in filename."""
@@ -99,22 +123,56 @@ def get_mf_keyword_id_from_keywords_csv(mf_keywords_csv_path, canonical_mf_name)
 
 def main(config_path, random_seed_value):
     config_basename = os.path.basename(config_path).replace('.json', '')
+    
+    # Early setup of minimal logging to check completion
+    temp_log_name = f"orchestrator_check_{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{random_seed_value}_{config_basename}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)-8s - %(message)s',
+        handlers=[logging.FileHandler(temp_log_name, mode='w'), logging.StreamHandler()]
+    )
+    
+    # Load config to get workspace directory
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logging.error(f"Cannot load config {config_path}: {e}")
+        return
+    
+    gs = config['global_settings']
+    workspace_base_dir = gs['workspace_base_dir']
+    run_specific_name = f"run_seed{random_seed_value}_{config_basename}"
+    
+    # ============================================================================
+    # CHECK IF EXPERIMENT ALREADY COMPLETED - SKIP IF SO
+    # ============================================================================
+    if check_experiment_completed(workspace_base_dir, run_specific_name):
+        logging.info(f"✓ EXPERIMENT ALREADY COMPLETED: {run_specific_name}")
+        logging.info(f"  Ranking CSV file found in workspace. Skipping this run.")
+        logging.info(f"  Config: {config_path}, Seed: {random_seed_value}")
+        # Remove temp log file
+        if os.path.exists(temp_log_name):
+            os.remove(temp_log_name)
+        return  # Exit early - experiment already done
+    
+    # If not completed, proceed with full logging setup and execution
+    # Clear temp logging handlers before setting up proper logging
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        handler.close()
+    if os.path.exists(temp_log_name):
+        os.remove(temp_log_name)
+    
+    # Now set up proper logging
     setup_logging(log_file_name_base, random_seed_value, config_basename)
 
     logging.info(f"========== STARTING UMMBAS SIMILARITY EXPERIMENT REPLICATE RUN ==========")
     logging.info(f"Config: {config_path}, Random Seed: {random_seed_value}")
     
-    try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        logging.error(f"Configuration file not found: {config_path}. Aborting.")
-        return
-    except json.JSONDecodeError as e:
-        logging.error(f"Error decoding JSON config {config_path}: {e}. Aborting.")
-        return
-
-    gs = config['global_settings']
+    # Config already loaded during completion check above
+    # Just need to continue with execution
     affinity_cutoff = gs.get("affinity_cutoff_nM")
     workspace_base_dir = gs['workspace_base_dir']
     

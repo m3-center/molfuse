@@ -5,23 +5,31 @@ Phase 1: Tyro Dimensionality × Hyperparameter Sweep
 
 Generates configs for:
 - Features-PCA: 2D, 5D, 10D
-- Features-UMAP-Euclidean: 2D, 5D, 10D with hyperparameters
-- Fingerprints-PCA: 2D only
-- Fingerprints-UMAP-Jaccard: 2D only with hyperparameters
+- Features-UMAP-Euclidean: 2D, 5D, 10D with REFINED hyperparameters
+  - Option B: n_neighbors={3, 5, 10, 20}, min_dist={0.0, 0.001, 0.005, 0.01, 0.1}
+  - Skips already-completed experiments automatically
+- Fingerprints-PCA: 2D only (KEPT - still running)
+- Fingerprints-UMAP-Jaccard: 2D only with hyperparameters (KEPT - still running)
 """
 
 import json
 import os
+import glob
 from itertools import product
 
 # Configuration
 OUTPUT_DIR = "hyperparam_configs_v3_phase1"
 BASE_CONFIG_PATH = "experiment_config.json"
+WORKSPACE_DIR = "experiment_workspace_v3_phase1"
 SEEDS = [42, 43, 44, 45, 46]
 
-# UMAP hyperparameters (same for all dimensions)
-N_NEIGHBORS = [10, 20, 100, 500]
-MIN_DIST = [0.01, 0.1, 0.5]
+# REFINED UMAP hyperparameters for FEATURES (Option B - focused on small nn + tight packing)
+FEATURES_N_NEIGHBORS = [3, 5, 10, 20]
+FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]
+
+# ORIGINAL UMAP hyperparameters for FINGERPRINTS (keep unchanged - still running)
+FINGERPRINTS_N_NEIGHBORS = [10, 20, 100, 500]
+FINGERPRINTS_MIN_DIST = [0.01, 0.1, 0.5]
 
 # Dimensions
 FEATURE_DIMS = [2, 5, 10]
@@ -43,6 +51,41 @@ def load_base_config():
     """Load base experiment configuration."""
     with open(BASE_CONFIG_PATH, 'r') as f:
         return json.load(f)
+
+
+def check_experiment_completed(representation, dr_method, dimension, seed, n_neighbors=None, min_dist=None):
+    """
+    Check if experiment already completed by looking for ranking CSV file.
+    
+    Returns:
+        bool: True if experiment completed (ranking file exists), False otherwise
+    """
+    if not os.path.exists(WORKSPACE_DIR):
+        return False
+    
+    # Build expected run directory name pattern
+    if dr_method.lower() == 'pca':
+        run_pattern = f"run_seed{seed}_*tyro*{representation}*pca*dim{dimension}*"
+    else:  # UMAP
+        metric = "euclidean" if representation == "features" else "jaccard"
+        run_pattern = f"run_seed{seed}_*tyro*{representation}*umap*{metric}*dim{dimension}*nn{n_neighbors}*md{min_dist}*"
+    
+    # Find matching run directories
+    run_dirs = glob.glob(os.path.join(WORKSPACE_DIR, run_pattern))
+    
+    if not run_dirs:
+        return False
+    
+    # Check for ranking CSV in results directory
+    # Pattern: TARGET/results/REPR/dim_N/METHOD/*-RANKED.csv
+    for run_dir in run_dirs:
+        ranking_pattern = os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv")
+        ranking_files = glob.glob(ranking_pattern)
+        
+        if ranking_files:
+            return True  # Found completed experiment
+    
+    return False
 
 
 def create_pca_config(representation, dimension, seed, base_config):
@@ -98,26 +141,45 @@ def create_umap_config(representation, metric, dimension, n_neighbors, min_dist,
 def main():
     """Generate all Phase 1 configuration files."""
     print("="*80)
-    print("UMMBAS v3.0 - Phase 1 Config Generator")
+    print("UMMBAS v3.0 - Phase 1 Config Generator (REFINED)")
     print("="*80)
+    print()
+    print("FEATURES: Option B hyperparameters")
+    print(f"  n_neighbors: {FEATURES_N_NEIGHBORS}")
+    print(f"  min_dist:    {FEATURES_MIN_DIST}")
+    print()
+    print("FINGERPRINTS: Original hyperparameters (unchanged)")
+    print(f"  n_neighbors: {FINGERPRINTS_N_NEIGHBORS}")
+    print(f"  min_dist:    {FINGERPRINTS_MIN_DIST}")
     print()
     
     # Create output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"Output directory: {OUTPUT_DIR}")
+    print(f"Workspace directory (for skip check): {WORKSPACE_DIR}")
     print()
     
     # Load base config
     base_config = load_base_config()
     
     config_count = 0
+    skipped_count = 0
     
     # ========================================================================
     # FEATURES - PCA (2D, 5D, 10D)
     # ========================================================================
     print("Generating Features-PCA configs...")
+    features_pca_created = 0
+    features_pca_skipped = 0
+    
     for dim in FEATURE_DIMS:
         for seed in SEEDS:
+            # Check if already completed
+            if check_experiment_completed("features", "pca", dim, seed):
+                features_pca_skipped += 1
+                skipped_count += 1
+                continue
+            
             config = create_pca_config("features", dim, seed, base_config)
             filename = f"config_tyro_features_pca_dim{dim}_seed{seed}.json"
             filepath = os.path.join(OUTPUT_DIR, filename)
@@ -126,14 +188,24 @@ def main():
                 json.dump(config, f, indent=2)
             
             config_count += 1
+            features_pca_created += 1
     
-    print(f"  Created {len(FEATURE_DIMS) * len(SEEDS)} configs")
+    print(f"  Created: {features_pca_created}, Skipped (completed): {features_pca_skipped}")
     
     # ========================================================================
-    # FEATURES - UMAP-Euclidean (2D, 5D, 10D × hyperparameters)
+    # FEATURES - UMAP-Euclidean (2D, 5D, 10D × REFINED hyperparameters)
     # ========================================================================
-    print("Generating Features-UMAP-Euclidean configs...")
-    for dim, nn, md, seed in product(FEATURE_DIMS, N_NEIGHBORS, MIN_DIST, SEEDS):
+    print("Generating Features-UMAP-Euclidean configs (REFINED)...")
+    features_umap_created = 0
+    features_umap_skipped = 0
+    
+    for dim, nn, md, seed in product(FEATURE_DIMS, FEATURES_N_NEIGHBORS, FEATURES_MIN_DIST, SEEDS):
+        # Check if already completed
+        if check_experiment_completed("features", "umap", dim, seed, nn, md):
+            features_umap_skipped += 1
+            skipped_count += 1
+            continue
+        
         config = create_umap_config("features", "euclidean", dim, nn, md, seed, base_config)
         filename = f"config_tyro_features_umap_euclidean_dim{dim}_nn{nn}_md{md}_seed{seed}.json"
         filepath = os.path.join(OUTPUT_DIR, filename)
@@ -142,15 +214,25 @@ def main():
             json.dump(config, f, indent=2)
         
         config_count += 1
+        features_umap_created += 1
     
-    print(f"  Created {len(FEATURE_DIMS) * len(N_NEIGHBORS) * len(MIN_DIST) * len(SEEDS)} configs")
+    print(f"  Created: {features_umap_created}, Skipped (completed): {features_umap_skipped}")
     
     # ========================================================================
-    # FINGERPRINTS - PCA (2D only)
+    # FINGERPRINTS - PCA (2D only) - KEEP UNCHANGED
     # ========================================================================
-    print("Generating Fingerprints-PCA configs...")
+    print("Generating Fingerprints-PCA configs (UNCHANGED)...")
+    fingerprints_pca_created = 0
+    fingerprints_pca_skipped = 0
+    
     for dim in FINGERPRINT_DIMS:
         for seed in SEEDS:
+            # Check if already completed
+            if check_experiment_completed("fingerprints", "pca", dim, seed):
+                fingerprints_pca_skipped += 1
+                skipped_count += 1
+                continue
+            
             config = create_pca_config("fingerprints", dim, seed, base_config)
             filename = f"config_tyro_fingerprints_pca_dim{dim}_seed{seed}.json"
             filepath = os.path.join(OUTPUT_DIR, filename)
@@ -159,14 +241,24 @@ def main():
                 json.dump(config, f, indent=2)
             
             config_count += 1
+            fingerprints_pca_created += 1
     
-    print(f"  Created {len(FINGERPRINT_DIMS) * len(SEEDS)} configs")
+    print(f"  Created: {fingerprints_pca_created}, Skipped (completed): {fingerprints_pca_skipped}")
     
     # ========================================================================
-    # FINGERPRINTS - UMAP-Jaccard (2D only × hyperparameters)
+    # FINGERPRINTS - UMAP-Jaccard (2D only × hyperparameters) - KEEP UNCHANGED
     # ========================================================================
-    print("Generating Fingerprints-UMAP-Jaccard configs...")
-    for dim, nn, md, seed in product(FINGERPRINT_DIMS, N_NEIGHBORS, MIN_DIST, SEEDS):
+    print("Generating Fingerprints-UMAP-Jaccard configs (UNCHANGED)...")
+    fingerprints_umap_created = 0
+    fingerprints_umap_skipped = 0
+    
+    for dim, nn, md, seed in product(FINGERPRINT_DIMS, FINGERPRINTS_N_NEIGHBORS, FINGERPRINTS_MIN_DIST, SEEDS):
+        # Check if already completed
+        if check_experiment_completed("fingerprints", "umap", dim, seed, nn, md):
+            fingerprints_umap_skipped += 1
+            skipped_count += 1
+            continue
+        
         config = create_umap_config("fingerprints", "jaccard", dim, nn, md, seed, base_config)
         filename = f"config_tyro_fingerprints_umap_jaccard_dim{dim}_nn{nn}_md{md}_seed{seed}.json"
         filepath = os.path.join(OUTPUT_DIR, filename)
@@ -175,25 +267,45 @@ def main():
             json.dump(config, f, indent=2)
         
         config_count += 1
+        fingerprints_umap_created += 1
     
-    print(f"  Created {len(FINGERPRINT_DIMS) * len(N_NEIGHBORS) * len(MIN_DIST) * len(SEEDS)} configs")
+    print(f"  Created: {fingerprints_umap_created}, Skipped (completed): {fingerprints_umap_skipped}")
     
     # ========================================================================
     # Summary
     # ========================================================================
+    total_expected_features = (
+        len(FEATURE_DIMS) * len(SEEDS) +  # PCA
+        len(FEATURE_DIMS) * len(FEATURES_N_NEIGHBORS) * len(FEATURES_MIN_DIST) * len(SEEDS)  # UMAP
+    )
+    total_expected_fingerprints = (
+        len(FINGERPRINT_DIMS) * len(SEEDS) +  # PCA
+        len(FINGERPRINT_DIMS) * len(FINGERPRINTS_N_NEIGHBORS) * len(FINGERPRINTS_MIN_DIST) * len(SEEDS)  # UMAP
+    )
+    total_expected = total_expected_features + total_expected_fingerprints
+    
     print()
     print("="*80)
     print("SUMMARY")
     print("="*80)
-    print(f"Total configs generated: {config_count}")
+    print(f"NEW configs generated:    {config_count}")
+    print(f"SKIPPED (completed):      {skipped_count}")
+    print(f"TOTAL expected:           {total_expected}")
     print()
-    print("Breakdown:")
-    print(f"  Features-PCA:               {len(FEATURE_DIMS) * len(SEEDS)}")
-    print(f"  Features-UMAP-Euclidean:    {len(FEATURE_DIMS) * len(N_NEIGHBORS) * len(MIN_DIST) * len(SEEDS)}")
-    print(f"  Fingerprints-PCA:           {len(FINGERPRINT_DIMS) * len(SEEDS)}")
-    print(f"  Fingerprints-UMAP-Jaccard:  {len(FINGERPRINT_DIMS) * len(N_NEIGHBORS) * len(MIN_DIST) * len(SEEDS)}")
+    print("Breakdown (Created / Skipped):")
+    print(f"  Features-PCA:               {features_pca_created:3d} / {features_pca_skipped:3d}")
+    print(f"  Features-UMAP-Euclidean:    {features_umap_created:3d} / {features_umap_skipped:3d}")
+    print(f"  Fingerprints-PCA:           {fingerprints_pca_created:3d} / {fingerprints_pca_skipped:3d}")
+    print(f"  Fingerprints-UMAP-Jaccard:  {fingerprints_umap_created:3d} / {fingerprints_umap_skipped:3d}")
     print()
-    print(f"Expected total runs: {config_count}")
+    print("Expected total experiments:")
+    print(f"  Features:      {total_expected_features}")
+    print(f"  Fingerprints:  {total_expected_fingerprints}")
+    print(f"  GRAND TOTAL:   {total_expected}")
+    print()
+    print("Grid sizes:")
+    print(f"  Features-UMAP:      {len(FEATURES_N_NEIGHBORS)} nn × {len(FEATURES_MIN_DIST)} md = {len(FEATURES_N_NEIGHBORS) * len(FEATURES_MIN_DIST)} combinations")
+    print(f"  Fingerprints-UMAP:  {len(FINGERPRINTS_N_NEIGHBORS)} nn × {len(FINGERPRINTS_MIN_DIST)} md = {len(FINGERPRINTS_N_NEIGHBORS) * len(FINGERPRINTS_MIN_DIST)} combinations")
     print("="*80)
 
 
