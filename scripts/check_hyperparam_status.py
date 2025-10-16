@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for faster rendering
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm  # Progress bars
 
 def extract_config_info(run_dir):
     """Extract configuration info from run directory name or config file."""
@@ -36,13 +37,19 @@ def extract_config_info(run_dir):
         'representation': None,
         'dr_method': None,
         'n_neighbors': None,
-        'min_dist': None
+        'min_dist': None,
+        'dim': None  # Add dimensionality extraction
     }
     
     # Extract seed
     for part in parts:
         if part.startswith('seed'):
             info['seed'] = part.replace('seed', '')
+    
+    # Extract dimensionality (dim2, dim5, dim10, etc.)
+    for part in parts:
+        if part.startswith('dim') and len(part) > 3:
+            info['dim'] = part[3:]  # Extract number after 'dim'
     
     # Extract representation
     if 'features' in run_name:
@@ -81,6 +88,11 @@ def extract_config_info(run_dir):
                     info['dr_method'] = method_config.get('short_name', info['dr_method'])
                     info['n_neighbors'] = method_config.get('n_neighbors', info['n_neighbors'])
                     info['min_dist'] = method_config.get('min_dist', info['min_dist'])
+                    # Extract dimensionality from config if not already found
+                    if not info['dim']:
+                        simspace_dim = config.get('global_settings', {}).get('simspace_dim')
+                        if simspace_dim:
+                            info['dim'] = str(simspace_dim)
         except:
             pass
     
@@ -282,7 +294,12 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
     figures_dir = os.path.join(output_dir, 'figures')
     os.makedirs(figures_dir, exist_ok=True)
     
-    for seed in sorted(by_seed.keys()):
+    # Add progress bar for figure generation
+    seeds_to_plot = sorted(by_seed.keys())
+    pbar = tqdm(seeds_to_plot, desc="Generating figures", unit="seed")
+    
+    for seed in pbar:
+        pbar.set_description(f"Generating figures for seed {seed}")
         seed_experiments = by_seed[seed]
         
         # Find PCA and best UMAP experiments for this seed
@@ -304,11 +321,11 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
         
         if not pca_exp or not umap_exp:
             # Debug: show what experiments we found
-            print(f"⚠️  Skipping seed {seed}: Missing PCA or UMAP experiment")
-            print(f"    Found {len(seed_experiments)} experiments for this seed:")
+            tqdm.write(f"⚠️  Skipping seed {seed}: Missing PCA or UMAP experiment")
+            tqdm.write(f"    Found {len(seed_experiments)} experiments for this seed:")
             for exp in seed_experiments:
-                print(f"      - {exp['representation']}-{exp['dr_method']} (nn={exp.get('n_neighbors')}, md={exp.get('min_dist')})")
-            print(f"    Looking for: features-PCA and features-UMAP (nn={best_umap_method.get('n_neighbors')}, md={best_umap_method.get('min_dist')})")
+                tqdm.write(f"      - {exp['representation']}-{exp['dr_method']} (nn={exp.get('n_neighbors')}, md={exp.get('min_dist')})")
+            tqdm.write(f"    Looking for: features-PCA and features-UMAP (nn={best_umap_method.get('n_neighbors')}, md={best_umap_method.get('min_dist')})")
             continue
         
         # Load similarity space coordinates
@@ -316,7 +333,7 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
         umap_coords = load_similarity_space(workspace, umap_exp)
         
         if pca_coords is None or umap_coords is None:
-            print(f"⚠️  Skipping seed {seed}: Could not load coordinates")
+            tqdm.write(f"⚠️  Skipping seed {seed}: Could not load coordinates")
             continue
         
         # Create figure with 2 subplots (use Agg backend for faster non-interactive rendering)
@@ -340,9 +357,8 @@ def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output
         # Force garbage collection to prevent memory buildup
         import gc
         gc.collect()
-        
-        print(f"✅ Saved figure for seed {seed}: {output_path}")
     
+    pbar.close()
     print(f"\n✅ Visualization complete! Figures saved to: {figures_dir}\n")
 
 def load_similarity_space(workspace, experiment):
@@ -556,9 +572,10 @@ def main():
         debug_log.write(f"Workspace: {workspace}\n")
         debug_log.write(f"Total run directories: {len(run_dirs)}\n")
         
-        # Analyze each run
+        # Analyze each run with progress bar
         results = []
-        for run_dir in sorted(run_dirs):
+        print("Checking experiment status...")
+        for run_dir in tqdm(sorted(run_dirs), desc="Analyzing experiments", unit="exp"):
             config_info = extract_config_info(run_dir)
             status = check_experiment_status(run_dir, workspace, debug_log)
             
@@ -617,11 +634,12 @@ def main():
         print("PRELIMINARY RANKING METRICS (Completed Experiments Only)")
         print("=" * 80)
         
-        # Collect EF@1% scores for each method
+        # Collect EF@1% scores for each method, organized by dimensionality
         import csv as csv_module
-        metrics_by_method = defaultdict(list)
+        metrics_by_method_and_dim = defaultdict(lambda: defaultdict(list))
         
-        for r in completed:
+        print("\nCollecting metrics from experiment results...")
+        for r in tqdm(completed, desc="Reading metrics files", unit="exp"):
             # Find metrics file for this run
             run_dir = os.path.join(workspace, r['run_dir'])
             # Pattern: TARGET/results/REPR/dim_N/METHOD/*_ranking_metrics.csv
@@ -647,51 +665,87 @@ def main():
                             if ef_key:
                                 ef_value = float(row[ef_key])
                                 
+                                # Get dimensionality
+                                dim = r.get('dim', 'unknown')
+                                
                                 # Create method key with hyperparameters
                                 if r['n_neighbors'] and r['min_dist']:
                                     method_key = f"{r['representation']}-{r['dr_method']}-nn{r['n_neighbors']}-md{r['min_dist']}"
                                 else:
                                     method_key = f"{r['representation']}-{r['dr_method']}"
                                 
-                                metrics_by_method[method_key].append(ef_value)
+                                metrics_by_method_and_dim[dim][method_key].append(ef_value)
                                 break
                 except Exception as e:
                     pass  # Skip if can't read metrics
         
-        if metrics_by_method:
-            # Calculate averages and display
+        print()  # Newline after progress bar
+        
+        if metrics_by_method_and_dim:
+            # Calculate averages and display BY DIMENSIONALITY
             import statistics
-            results_with_metrics = []
             
-            for method_key, ef_values in metrics_by_method.items():
-                avg_ef = statistics.mean(ef_values)
-                std_ef = statistics.stdev(ef_values) if len(ef_values) > 1 else 0.0
-                results_with_metrics.append({
-                    'method': method_key,
-                    'avg_ef': avg_ef,
-                    'std_ef': std_ef,
-                    'n_seeds': len(ef_values)
-                })
+            # Get all unique dimensions and sort them
+            all_dims = sorted(metrics_by_method_and_dim.keys(), 
+                            key=lambda x: int(x) if x.isdigit() else 999)
             
-            # Sort by average EF@1% (descending)
-            results_with_metrics.sort(key=lambda x: x['avg_ef'], reverse=True)
+            for dim in all_dims:
+                print(f"\n{'='*80}")
+                print(f"DIMENSIONALITY: {dim}D")
+                print(f"{'='*80}")
+                
+                metrics_by_method = metrics_by_method_and_dim[dim]
+                results_with_metrics = []
+                
+                for method_key, ef_values in metrics_by_method.items():
+                    avg_ef = statistics.mean(ef_values)
+                    std_ef = statistics.stdev(ef_values) if len(ef_values) > 1 else 0.0
+                    results_with_metrics.append({
+                        'method': method_key,
+                        'avg_ef': avg_ef,
+                        'std_ef': std_ef,
+                        'n_seeds': len(ef_values),
+                        'dim': dim
+                    })
+                
+                # Sort by average EF@1% (descending)
+                results_with_metrics.sort(key=lambda x: x['avg_ef'], reverse=True)
+                
+                print(f"{'Method':<60} {'EF@1%':>15} {'N Seeds':>8}")
+                print("-" * 80)
+                for result in results_with_metrics:
+                    if result['std_ef'] > 0:
+                        ef_str = f"{result['avg_ef']:.2f} ± {result['std_ef']:.2f}"
+                    else:
+                        ef_str = f"{result['avg_ef']:.2f}"
+                    print(f"{result['method']:<60} {ef_str:>15} {result['n_seeds']:>8}")
             
-            print(f"{'Method':<60} {'EF@1%':>15} {'N Seeds':>8}")
-            print("-" * 80)
-            for result in results_with_metrics:
-                if result['std_ef'] > 0:
-                    ef_str = f"{result['avg_ef']:.2f} ± {result['std_ef']:.2f}"
-                else:
-                    ef_str = f"{result['avg_ef']:.2f}"
-                print(f"{result['method']:<60} {ef_str:>15} {result['n_seeds']:>8}")
-            print()
+            print()  # Final newline
             
             # ========================================================================
             # GENERATE VISUALIZATION FIGURES
             # ========================================================================
-            # Find best UMAP method from features representation
+            # Find best UMAP method from features representation (across all dims)
+            # Collect all results across all dimensions for finding best UMAP
+            all_results_with_metrics = []
+            for dim in all_dims:
+                metrics_by_method = metrics_by_method_and_dim[dim]
+                for method_key, ef_values in metrics_by_method.items():
+                    import statistics
+                    avg_ef = statistics.mean(ef_values)
+                    std_ef = statistics.stdev(ef_values) if len(ef_values) > 1 else 0.0
+                    all_results_with_metrics.append({
+                        'method': method_key,
+                        'avg_ef': avg_ef,
+                        'std_ef': std_ef,
+                        'n_seeds': len(ef_values),
+                        'dim': dim
+                    })
+            
+            all_results_with_metrics.sort(key=lambda x: x['avg_ef'], reverse=True)
+            
             best_umap = None
-            for result in results_with_metrics:
+            for result in all_results_with_metrics:
                 method = result['method']
                 if 'features' in method and 'UMAP' in method:
                     # Parse method string to extract details
@@ -799,7 +853,7 @@ def main():
     try:
         import csv
         with open(output_file, 'w', newline='') as f:
-            fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'n_neighbors', 'min_dist',
+            fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'dim', 'n_neighbors', 'min_dist',
                          'completed', 'has_results', 'has_rankings', 'has_metrics', 'error_type', 'log_file']
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
