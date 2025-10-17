@@ -107,6 +107,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
         'has_results': False,
         'has_rankings': False,
         'has_metrics': False,
+        'running': False,
         'error': None,
         'error_type': None,
         'log_file': None
@@ -250,7 +251,8 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                 debug_log.write(f"❌ Task failure detected in log\n")
                     
                     # Check for other fatal errors (that stopped execution)
-                    elif 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
+                    # Use more precise matching to avoid false positives (e.g., "WARNING" contains "ERROR")
+                    elif ' ERROR ' in log_content or ' Error:' in log_content or 'Traceback' in log_content:
                         # Extract error information
                         lines = log_content.split('\n')
                         error_lines = []
@@ -270,7 +272,8 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                     debug_log.write(f"  ℹ️  CUDA warning IGNORED: {line.strip()[:80]}\n")
                                 continue
                             
-                            if 'ERROR' in line or 'Error' in line:
+                            # More precise ERROR matching with word boundaries
+                            if ' ERROR ' in line or ' Error:' in line or line.strip().startswith('ERROR') or line.strip().endswith('Error'):
                                 error_lines.append(line.strip())
                             elif 'Traceback' in line:
                                 in_traceback = True
@@ -316,6 +319,19 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
         else:
             if debug_log:
                 debug_log.write(f"⚠️  No orchestrator log found - experiment may be running\n")
+    
+    # ============================================================================
+    # STEP 3: Determine if experiment is RUNNING (not completed, not failed)
+    # ============================================================================
+    # An experiment is "running" if:
+    # - Not completed (no metrics files)
+    # - Has a log file (started)
+    # - No error detected (not failed)
+    if not status['completed'] and status['log_file'] and not status['error_type']:
+        status['running'] = True
+        if debug_log:
+            debug_log.write(f"🔄 Marked as RUNNING (log exists, no errors, not completed)\n")
+    
     else:
         # Even if completed, record which log file corresponds to this run
         run_name_parts = run_name.replace('run_', '', 1)
@@ -388,12 +404,14 @@ def main():
     
         # Summary statistics
         completed = [r for r in results if r['completed']]
-        failed = [r for r in results if not r['completed'] and r['error']]
-        incomplete = [r for r in results if not r['completed'] and not r['error']]
+        running = [r for r in results if r.get('running', False)]
+        failed = [r for r in results if not r['completed'] and not r.get('running', False) and r['error']]
+        incomplete = [r for r in results if not r['completed'] and not r.get('running', False) and not r['error']]
         
         debug_log.write(f"\n{'='*80}\n")
         debug_log.write(f"SUMMARY\n")
         debug_log.write(f"Completed: {len(completed)}\n")
+        debug_log.write(f"Running: {len(running)}\n")
         debug_log.write(f"Failed: {len(failed)}\n")
         debug_log.write(f"Incomplete: {len(incomplete)}\n")
     
@@ -403,8 +421,9 @@ def main():
     print("=" * 80)
     print(f"Total experiments:      {len(results)}")
     print(f"✅ Completed:           {len(completed)} ({len(completed)/len(results)*100:.1f}%)")
+    print(f"🔄 Running:             {len(running)} ({len(running)/len(results)*100:.1f}%)")
     print(f"❌ Failed with error:   {len(failed)} ({len(failed)/len(results)*100:.1f}%)")
-    print(f"⏳ Incomplete/Running:  {len(incomplete)} ({len(incomplete)/len(results)*100:.1f}%)")
+    print(f"⏳ Incomplete (no log): {len(incomplete)} ({len(incomplete)/len(results)*100:.1f}%)")
     print()
     
     # Group by representation and method
@@ -580,6 +599,20 @@ def main():
         output_dir = workspace
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
+    # Running experiments
+    if running:
+        print("=" * 80)
+        print("RUNNING EXPERIMENTS")
+        print("=" * 80)
+        print(f"Found {len(running)} experiments currently running:\n")
+        for exp in running[:10]:  # Show first 10
+            print(f"  • {exp['dr_method']} ({exp['representation']}) - seed {exp['seed']}")
+            if exp.get('log_file'):
+                print(f"    Log: {exp['log_file']}")
+        if len(running) > 10:
+            print(f"\n  ... and {len(running) - 10} more running experiments")
+        print()
+    
     # Error types
     if failed:
         print("=" * 80)
@@ -645,7 +678,7 @@ def main():
         import csv
         with open(output_file, 'w', newline='') as f:
             fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'dim', 'n_neighbors', 'min_dist',
-                         'completed', 'has_results', 'has_rankings', 'has_metrics', 'error_type', 'log_file']
+                         'completed', 'running', 'has_results', 'has_rankings', 'has_metrics', 'error_type', 'log_file']
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(results)
