@@ -519,7 +519,8 @@ def main():
                                 dim = r.get('dim', 'unknown')
                                 
                                 # Create method key with hyperparameters
-                                if r['n_neighbors'] and r['min_dist']:
+                                # Note: Use 'is not None' to handle min_dist=0.0 (which is falsy but valid)
+                                if r['n_neighbors'] is not None and r['min_dist'] is not None:
                                     method_key = f"{r['representation']}-{r['dr_method']}-nn{r['n_neighbors']}-md{r['min_dist']}"
                                 else:
                                     method_key = f"{r['representation']}-{r['dr_method']}"
