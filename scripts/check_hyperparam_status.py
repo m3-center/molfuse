@@ -235,12 +235,25 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                 debug_log.write(f"❌ OOM Error detected in log\n")
                     
                     # Check for FAILED messages (generic failure)
+                    # BUT skip CUDA-related "failed" messages (e.g., "failed to initialize")
                     elif ' FAILED ' in log_content or ' failed ' in log_content_lower:
                         lines = log_content.split('\n')
                         error_lines = []
-                        # Find lines with FAILED
+                        # Find lines with FAILED, but skip CUDA warnings
                         for i, line in enumerate(lines):
-                            if ' failed ' in line.lower():
+                            line_lower = line.lower()
+                            if ' failed ' in line_lower:
+                                # Check if this is a CUDA warning
+                                is_cuda_warning = (
+                                    ('cuda' in line_lower or 'gpu' in line_lower) and
+                                    ('failed to initialize' in line_lower or 'not found' in line_lower or 'warning' in line_lower)
+                                )
+                                
+                                if is_cuda_warning:
+                                    if debug_log:
+                                        debug_log.write(f"  ℹ️  CUDA 'failed' warning IGNORED: {line.strip()[:80]}\n")
+                                    continue
+                                
                                 # Capture context around error (3 lines before, 3 after)
                                 start = max(0, i - 3)
                                 end = min(len(lines), i + 4)
@@ -250,7 +263,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                         if error_lines:
                             status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
                             status['error_type'] = 'Task Failed'
-                            status['error_detection_reason'] = 'Found " FAILED " or " failed " in log'
+                            status['error_detection_reason'] = 'Found " FAILED " or " failed " in log (non-CUDA)'
                             if debug_log:
                                 debug_log.write(f"❌ Task failure detected in log\n")
                     
