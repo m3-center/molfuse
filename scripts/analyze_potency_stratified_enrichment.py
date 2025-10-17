@@ -547,6 +547,27 @@ def create_summary_table(df_results):
     return summary
 
 
+# =============================================================================
+# PLOTTING HELPER FUNCTIONS
+# =============================================================================
+def save_figure(fig, output_dir, basename, dpi=300):
+    """Save figure in both PNG and PDF formats.
+    
+    Args:
+        fig: matplotlib figure object
+        output_dir: directory to save figures
+        basename: base filename (without extension)
+        dpi: resolution for PNG (default: 300)
+    """
+    png_path = os.path.join(output_dir, f'{basename}.png')
+    pdf_path = os.path.join(output_dir, f'{basename}.pdf')
+    
+    fig.savefig(png_path, dpi=dpi, bbox_inches='tight')
+    fig.savefig(pdf_path, format='pdf', bbox_inches='tight')
+    
+    logging.info(f"  Saved: {basename}.png and {basename}.pdf")
+
+
 def plot_pca_vs_umap_comparison(df_results, output_dir):
     """Compare PCA vs UMAP performance across potency tiers.
     
@@ -712,10 +733,82 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'pca_vs_umap_by_tier.png'), dpi=300, bbox_inches='tight')
+    save_figure(fig, output_dir, 'pca_vs_umap_by_tier')
     plt.close()
     
-    logging.info("PCA vs UMAP comparison plot saved")
+    # =========================================================================
+    # NEW: Generate dimension-separated versions of the same plot
+    # =========================================================================
+    dimensions = sorted(df_methods['dimension'].unique())
+    for dim in dimensions:
+        df_dim = df_methods[df_methods['dimension'] == dim]
+        
+        if df_dim.empty:
+            continue
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        x = np.arange(len(TIER_ORDER))
+        n_configs = len(configs_to_compare)
+        width = 0.8 / n_configs
+        
+        config_idx = 0
+        for config_key, config_info in configs_to_compare.items():
+            df_config = df_dim[
+                (df_dim['dr_method'] == config_info['method']) &
+                (df_dim['representation'] == config_info['repr'])
+            ]
+            
+            if df_config.empty:
+                continue
+            
+            label = config_info['label']
+            if config_info['filter_params'] is not None and isinstance(config_info['filter_params'], tuple):
+                nn, md = config_info['filter_params']
+                label += f"\n(nn={nn}, md={md})"
+            
+            means = []
+            stds = []
+            for tier in TIER_ORDER:
+                ef_col = f'{tier}_EF'
+                if ef_col in df_config.columns:
+                    means.append(df_config[ef_col].mean())
+                    stds.append(df_config[ef_col].std())
+                else:
+                    means.append(0)
+                    stds.append(0)
+            
+            offset = (config_idx - n_configs/2) * width + width/2
+            bars = ax.bar(x + offset, means, width, yerr=stds,
+                         label=label, alpha=0.8, capsize=4,
+                         color=colors[config_idx % len(colors)])
+            
+            for bar, mean_val in zip(bars, means):
+                if not np.isnan(mean_val) and mean_val > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                           f'{mean_val:.1f}', ha='center', va='bottom', fontsize=8)
+            
+            config_idx += 1
+        
+        ax.set_xlabel('Potency Tier', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Mean Enrichment Factor @ 1%', fontsize=12, fontweight='bold')
+        ax.set_title(f'Method-Representation Comparison: Potency-Stratified Enrichment\n(Dimensionality: {dim}D, UMAP: Best Hyperparameters Only)',
+                    fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        
+        tier_labels = [f"{tier}\n({POTENCY_TIERS[tier][0]}-{POTENCY_TIERS[tier][1]} nM)" 
+                       for tier in TIER_ORDER]
+        ax.set_xticklabels(tier_labels)
+        
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        save_figure(fig, output_dir, f'pca_vs_umap_by_tier_dim{dim}')
+        plt.close()
+    
+    logging.info("PCA vs UMAP comparison plots saved (all dimensions + dimension-separated)")
+
 
 
 def plot_dimensionality_impact(df_results, output_dir):
@@ -774,8 +867,7 @@ def plot_dimensionality_impact(df_results, output_dir):
     plt.suptitle('Impact of Dimensionality on Potency-Stratified Enrichment',
                 fontsize=14, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'dimensionality_impact_by_tier.png'), 
-               dpi=300, bbox_inches='tight')
+    save_figure(fig, output_dir, 'dimensionality_impact_by_tier')
     plt.close()
     
     # Plot 2: Heatmap showing method×dimension×tier performance
@@ -830,8 +922,7 @@ def plot_dimensionality_impact(df_results, output_dir):
         ax.set_ylabel('Method-Dimension', fontsize=12, fontweight='bold')
         
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'method_dimension_tier_heatmap.png'), 
-                   dpi=300, bbox_inches='tight')
+        save_figure(fig, output_dir, 'method_dimension_tier_heatmap')
         plt.close()
     
     # Plot 3: Dimensionality preference by tier (does optimal dim change by tier?)
@@ -870,8 +961,7 @@ def plot_dimensionality_impact(df_results, output_dir):
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'optimal_dimensionality_by_tier.png'), 
-               dpi=300, bbox_inches='tight')
+    save_figure(fig, output_dir, 'optimal_dimensionality_by_tier')
     plt.close()
     
     logging.info("Dimensionality impact plots saved")
@@ -950,8 +1040,51 @@ def plot_stratified_comparison(df_results, output_dir):
             plt.suptitle('Potency-Stratified Enrichment: Impact of n_neighbors', 
                         fontsize=14, fontweight='bold')
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'stratified_ef_by_nn.png'), dpi=300, bbox_inches='tight')
+            save_figure(fig, output_dir, 'stratified_ef_by_nn')
             plt.close()
+            
+            # Generate dimension-separated versions
+            for dim in sorted(df_umap['dimension'].unique()):
+                df_dim = df_plot[df_plot['dimension'] == dim]
+                
+                if df_dim.empty:
+                    continue
+                
+                nn_values_dim = sorted(df_dim['n_neighbors'].unique())
+                fig, axes = plt.subplots(1, len(nn_values_dim), 
+                                         figsize=(5*len(nn_values_dim), 5),
+                                         sharey=True)
+                
+                if len(nn_values_dim) == 1:
+                    axes = [axes]
+                
+                for idx, nn in enumerate(nn_values_dim):
+                    ax = axes[idx]
+                    df_subset = df_dim[df_dim['n_neighbors'] == nn]
+                    
+                    tier_means = df_subset.groupby('Tier')['EF@1%'].mean()
+                    
+                    bars = ax.bar(TIER_ORDER, [tier_means.get(t, 0) for t in TIER_ORDER],
+                                 color=[TIER_COLORS[t] for t in TIER_ORDER])
+                    
+                    ax.set_title(f'n_neighbors = {nn}', fontweight='bold')
+                    ax.set_xlabel('Potency Tier')
+                    if idx == 0:
+                        ax.set_ylabel('Mean Enrichment Factor @ 1%')
+                    ax.grid(axis='y', alpha=0.3)
+                    
+                    for bar in bars:
+                        height = bar.get_height()
+                        if not np.isnan(height):
+                            ax.text(bar.get_x() + bar.get_width()/2., height,
+                                   f'{height:.1f}',
+                                   ha='center', va='bottom', fontsize=9)
+                
+                plt.suptitle(f'Potency-Stratified Enrichment: Impact of n_neighbors (Dim {dim}D)', 
+                            fontsize=14, fontweight='bold')
+                plt.tight_layout()
+                save_figure(fig, output_dir, f'stratified_ef_by_nn_dim{dim}')
+                plt.close()
             
             # Plot 2: Percent Found by Tier
             fig, ax = plt.subplots(figsize=(10, 6))
@@ -977,8 +1110,41 @@ def plot_stratified_comparison(df_results, output_dir):
             ax.grid(axis='y', alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'stratified_percent_found.png'), dpi=300, bbox_inches='tight')
+            save_figure(fig, output_dir, 'stratified_percent_found')
             plt.close()
+            
+            # Generate dimension-separated versions
+            for dim in sorted(df_umap['dimension'].unique()):
+                df_dim = df_umap[df_umap['dimension'] == dim]
+                
+                if df_dim.empty:
+                    continue
+                
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                x = np.arange(len(TIER_ORDER))
+                width = 0.15
+                
+                nn_values_dim = sorted(df_dim['n_neighbors'].unique())
+                for idx, nn in enumerate(nn_values_dim):
+                    df_subset = df_dim[df_dim['n_neighbors'] == nn]
+                    means = [df_subset[f'{tier}_percent_found'].mean() for tier in TIER_ORDER]
+                    
+                    offset = (idx - len(nn_values_dim)/2) * width + width/2
+                    ax.bar(x + offset, means, width, label=f'nn={nn}')
+                
+                ax.set_xlabel('Potency Tier', fontweight='bold')
+                ax.set_ylabel('% of Tier Found in Top 1%', fontweight='bold')
+                ax.set_title(f'Potency-Stratified Recovery: Percent of Each Tier Found (Dim {dim}D)', 
+                            fontsize=14, fontweight='bold')
+                ax.set_xticks(x)
+                ax.set_xticklabels(TIER_ORDER)
+                ax.legend(title='n_neighbors', loc='upper right')
+                ax.grid(axis='y', alpha=0.3)
+                
+                plt.tight_layout()
+                save_figure(fig, output_dir, f'stratified_percent_found_dim{dim}')
+                plt.close()
     
     # 3. Scatter plot: Overall EF vs High-Potent EF
     if 'Overall_EF' in df_results.columns and 'High_EF' in df_results.columns:
@@ -1009,9 +1175,42 @@ def plot_stratified_comparison(df_results, output_dir):
             ax.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'quality_vs_quantity_tradeoff.png'), 
-                       dpi=300, bbox_inches='tight')
+            save_figure(fig, output_dir, 'quality_vs_quantity_tradeoff')
             plt.close()
+            
+            # Generate dimension-separated versions
+            for dim in sorted(scatter_data['dimension'].unique()):
+                df_dim = scatter_data[scatter_data['dimension'] == dim]
+                
+                if df_dim.empty:
+                    continue
+                
+                fig, ax = plt.subplots(figsize=(8, 8))
+                
+                # Color by n_neighbors if available
+                if 'n_neighbors' in df_dim.columns:
+                    for nn in sorted(df_dim['n_neighbors'].unique()):
+                        df_nn = df_dim[df_dim['n_neighbors'] == nn]
+                        ax.scatter(df_nn['Overall_EF'], df_nn['High_EF'], 
+                                  label=f'nn={nn}', alpha=0.6, s=100)
+                else:
+                    ax.scatter(df_dim['Overall_EF'], df_dim['High_EF'], 
+                              alpha=0.6, s=100)
+                
+                # Add diagonal line
+                max_val = max(df_dim['Overall_EF'].max(), df_dim['High_EF'].max())
+                ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.3, label='Equal')
+                
+                ax.set_xlabel('Overall EF@1%', fontweight='bold')
+                ax.set_ylabel('High-Potent EF@1%', fontweight='bold')
+                ax.set_title(f'Quality vs. Quantity Trade-off (Dim {dim}D):\nHigh-Potent vs Overall Enrichment',
+                            fontsize=14, fontweight='bold')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                
+                plt.tight_layout()
+                save_figure(fig, output_dir, f'quality_vs_quantity_tradeoff_dim{dim}')
+                plt.close()
     
     logging.info(f"Plots saved to {output_dir}")
 
