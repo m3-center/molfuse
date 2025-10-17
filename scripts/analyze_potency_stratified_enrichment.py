@@ -702,7 +702,12 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
     ax.set_title('Method-Representation Comparison: Potency-Stratified Enrichment\n(UMAP: Best Hyperparameters Only)',
                 fontsize=14, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(TIER_ORDER)
+    
+    # Add potency ranges to x-axis labels
+    tier_labels = [f"{tier}\n({POTENCY_TIERS[tier][0]}-{POTENCY_TIERS[tier][1]} nM)" 
+                   for tier in TIER_ORDER]
+    ax.set_xticklabels(tier_labels)
+    
     ax.legend(loc='upper right', fontsize=9)
     ax.grid(axis='y', alpha=0.3)
     
@@ -710,57 +715,7 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
     plt.savefig(os.path.join(output_dir, 'pca_vs_umap_by_tier.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Plot 2: Detailed comparison with error bars (side by side) - all method-representation pairs
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
-    
-    box_colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12']
-    
-    for idx, tier in enumerate(TIER_ORDER):
-        ax = axes[idx]
-        ef_col = f'{tier}_EF'
-        
-        # Box plot for each method-representation combination
-        data_to_plot = []
-        labels = []
-        colors_list = []
-        
-        for config_key, config_info in configs_to_compare.items():
-            df_config = df_methods[
-                (df_methods['dr_method'] == config_info['method']) &
-                (df_methods['representation'] == config_info['repr'])
-            ]
-            
-            if not df_config.empty and ef_col in df_config.columns:
-                values = df_config[ef_col].dropna()
-                if len(values) > 0:
-                    data_to_plot.append(values)
-                    labels.append(config_info['short_label'])
-                    colors_list.append(box_colors[len(data_to_plot) - 1])
-        
-        if data_to_plot:
-            bp = ax.boxplot(data_to_plot, tick_labels=labels, patch_artist=True,
-                           showmeans=True, meanline=True)
-            
-            # Color boxes
-            for patch, color in zip(bp['boxes'], colors_list):
-                patch.set_facecolor(color)
-                patch.set_alpha(0.7)
-        
-        ax.set_title(f'{tier} Potency\n({POTENCY_TIERS[tier][0]}-{POTENCY_TIERS[tier][1]} nM)',
-                    fontweight='bold')
-        ax.set_xlabel('Method', fontsize=10)
-        if idx == 0:
-            ax.set_ylabel('Enrichment Factor @ 1%', fontweight='bold')
-        ax.grid(axis='y', alpha=0.3)
-        ax.tick_params(axis='x', rotation=45, labelsize=8)
-    
-    plt.suptitle('Method-Representation Comparison: Distribution Across Potency Tiers\n(UMAP: Best Hyperparameters Only)',
-                fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'pca_vs_umap_distributions.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    logging.info("PCA vs UMAP comparison plots saved")
+    logging.info("PCA vs UMAP comparison plot saved")
 
 
 def plot_dimensionality_impact(df_results, output_dir):
