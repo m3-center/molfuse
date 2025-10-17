@@ -254,9 +254,16 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                         debug_log.write(f"  ℹ️  CUDA 'failed' warning IGNORED: {line.strip()[:80]}\n")
                                     continue
                                 
-                                # Capture context around error (3 lines before, 3 after)
-                                start = max(0, i - 3)
-                                end = min(len(lines), i + 4)
+                                # For "calc failed" or "calculation failed", capture more context (10 lines before)
+                                # to see the actual exception
+                                if 'calc failed' in line_lower or 'calculation failed' in line_lower:
+                                    start = max(0, i - 10)
+                                    end = min(len(lines), i + 4)
+                                else:
+                                    # Standard failure - 3 lines context
+                                    start = max(0, i - 3)
+                                    end = min(len(lines), i + 4)
+                                
                                 error_lines = lines[start:end]
                                 break
                         
