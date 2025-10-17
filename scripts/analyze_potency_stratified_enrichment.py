@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+"""
+Potency-Stratified Enrichment Analysis for Phase 1 Experiments
+
+This script analyzes enrichment performance broken down by ligand potency tiers to reveal
+quantity vs. quality trade-offs in hyperparameter selection. Traditional EF@1% treats all
+actives equally, but a 100 nM ligand (drug-like) is vastly more valuable than a 100,000 nM
+ligand (weak binder).
+
+**Potency Tiers:**
+- High Potent: 0.1-100 nM (drug-like, clinically relevant)
+- Medium Potent: 100-1,000 nM (moderate affinity)
+- Weak Potent: 1,000-100,000 nM (marginal, likely promiscuous)
+
+**Key Insights:**
+- nn=10 might show high overall EF@1% by enriching many weak binders
+- nn=20 might show lower overall EF@1% but enrich fewer, highly potent binders
+- For drug discovery, nn=20 would be superior despite appearing worse by traditional metrics
+
+Usage:
+    # Analyze all completed runs in workspace
+    python scripts/analyze_potency_stratified_enrichment.py \\
+        --workspace_dir experiment_workspace_v3_phase1 \\
+        --output_dir potency_analysis_results
+
+    # Analyze specific seed or configuration
+    python scripts/analyze_potency_stratified_enrichment.py \\
+        --workspace_dir experiment_workspace_v3_phase1 \\
+        --seed 42 \\
+        --output_dir potency_analysis_results/seed42
+
+    # Quick summary only (no detailed plots)
+    python scripts/analyze_potency_stratified_enrichment.py \\
+        --workspace_dir experiment_workspace_v3_phase1 \\
+        --output_dir potency_analysis_results \\
+        --summary_only
+"""
+
+import os
+import sys
+import json
+import glob
+import argparse
+import logging
+from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for HPC
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)-8s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+
+# Potency tier definitions (in nM)
+POTENCY_TIERS = {
+    'High': (0.1, 100),          # Drug-like, clinically relevant
+    'Medium': (100, 1000),       # Moderate affinity
+    'Weak': (1000, 100000)       # Marginal, likely promiscuous
+}
+
+TIER_ORDER = ['High', 'Medium', 'Weak']
+TIER_COLORS = {'High': '#2ecc71', 'Medium': '#f39c12', 'Weak': '#e74c3c'}
+
+
+def parse_run_config(run_config_path):
+    """Extract configuration details from run_config.json."""
+    try:
+        with open(run_config_path, 'r') as f:
+            config = json.load(f)
+        
+        dr_methods = config.get('dimensionality_reduction_methods', {})
+        if not dr_methods:
+            return None
+        
+        dr_key = list(dr_methods.keys())[0]
+        dr_config = dr_methods[dr_key]
+        
+        info = {
+            'seed': config.get('random_seed'),
+            'target': config.get('targets', [{}])[0].get('id_name'),
+            'representation': config.get('representations', [None])[0],
+            'dr_method': dr_config.get('short_name'),
+            'dimension': config.get('global_settings', {}).get('simspace_dim'),
+            'n_neighbors': dr_config.get('n_neighbors'),
+            'min_dist': dr_config.get('min_dist'),
+            'affinity_cutoff': config.get('global_settings', {}).get('affinity_cutoff_nM', 100000)
+        }
+        return info
+    except Exception as e:
+        logging.debug(f"Could not parse config from {run_config_path}: {e}")
+        return None
+
+
+def find_ranked_file(run_dir):
+    """Find the ranked CSV file in the run directory."""
+    # Pattern: TARGET/results/REPR/dim_N/METHOD/*-RANKED.csv
+    pattern = os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv")
+    ranked_files = glob.glob(pattern)
+    
+    if ranked_files:
+        return ranked_files[0]  # Return first match
+    return None
+
+
+def classify_by_potency(affinity_nM):
+    """Classify a compound by its potency tier based on affinity."""
+    if pd.isna(affinity_nM) or affinity_nM <= 0:
+        return None
+    
+    for tier, (low, high) in POTENCY_TIERS.items():
+        if low <= affinity_nM <= high:
+            return tier
+    
+    # Outside all tiers
+    if affinity_nM < POTENCY_TIERS['High'][0]:
+        return 'High'  # Ultra-potent, group with High
+    elif affinity_nM > POTENCY_TIERS['Weak'][1]:
+        return None  # Too weak, exclude from analysis
+    
+    return None
+
+
+def calculate_stratified_enrichment(ranked_df, top_percent=0.01):
+    """
+    Calculate enrichment metrics stratified by potency tier.
+    
+    Args:
+        ranked_df: DataFrame with 'RANKING', 'TYPE', and 'Standard Value (nM)' columns
+        top_percent: Fraction for enrichment calculation (default 1%)
+    
+    Returns:
+        Dictionary with enrichment metrics per tier
+    """
+    # Filter to only actives
+    actives_df = ranked_df[ranked_df['TYPE'] == 'HELDOUT_ACTIVE'].copy()
+    
+    if actives_df.empty:
+        return None
+    
+    # Add potency tier classification
+    actives_df['Potency_Tier'] = actives_df['Standard Value (nM)'].apply(classify_by_potency)
+    
+    # Count actives per tier
+    tier_counts = actives_df['Potency_Tier'].value_counts()
+    
+    # Calculate enrichment for each tier
+    total_compounds = len(ranked_df)
+    top_n = int(np.ceil(top_percent * total_compounds))
+    
+    if top_n == 0:
+        return None
+    
+    results = {}
+    
+    for tier in TIER_ORDER:
+        tier_actives_total = tier_counts.get(tier, 0)
+        
+        if tier_actives_total == 0:
+            results[tier] = {
+                'total': 0,
+                'in_top': 0,
+                'ef': np.nan,
+                'percent_found': np.nan
+            }
+            continue
+        
+        # Find how many of this tier are in top X%
+        tier_actives_df = actives_df[actives_df['Potency_Tier'] == tier]
+        tier_in_top = (tier_actives_df['RANKING'] <= top_n).sum()
+        
+        # Calculate enrichment factor for this tier
+        ef_observed = tier_in_top / top_n
+        ef_random = tier_actives_total / total_compounds
+        ef = ef_observed / ef_random if ef_random > 0 else np.nan
+        
+        # Calculate percent of tier found
+        percent_found = (tier_in_top / tier_actives_total) * 100
+        
+        results[tier] = {
+            'total': tier_actives_total,
+            'in_top': tier_in_top,
+            'ef': ef,
+            'percent_found': percent_found
+        }
+    
+    # Calculate overall metrics for comparison
+    total_actives = len(actives_df)
+    actives_in_top = (actives_df['RANKING'] <= top_n).sum()
+    overall_ef = (actives_in_top / top_n) / (total_actives / total_compounds)
+    
+    results['Overall'] = {
+        'total': total_actives,
+        'in_top': actives_in_top,
+        'ef': overall_ef,
+        'percent_found': (actives_in_top / total_actives) * 100
+    }
+    
+    return results
+
+
+def load_affinity_data(run_dir, target_id):
+    """Load affinity data from source files."""
+    # Try to find detailed active distances file which should have affinity data
+    pattern = os.path.join(run_dir, f"{target_id}/results/*/dim_*/*/*detailed_active_distances.csv")
+    distance_files = glob.glob(pattern)
+    
+    if distance_files:
+        try:
+            df = pd.read_csv(distance_files[0])
+            if 'Standard Value (nM)' in df.columns and 'MOLECULE ID' in df.columns:
+                return df[['MOLECULE ID', 'Standard Value (nM)']]
+        except Exception as e:
+            logging.debug(f"Error loading affinity from {distance_files[0]}: {e}")
+    
+    # Try to find in the prepared data directory
+    pattern = os.path.join(run_dir, f"{target_id}/prepared_data/*_heldout_target_actives.csv")
+    active_files = glob.glob(pattern)
+    
+    if active_files:
+        try:
+            df = pd.read_csv(active_files[0])
+            # Map common column names
+            mol_id_col = None
+            affinity_col = None
+            
+            if 'Compound ChEMBL ID' in df.columns:
+                mol_id_col = 'Compound ChEMBL ID'
+            elif 'MOLECULE ID' in df.columns:
+                mol_id_col = 'MOLECULE ID'
+            
+            if 'Standard Value (nM)' in df.columns:
+                affinity_col = 'Standard Value (nM)'
+            elif 'standard_value' in df.columns:
+                affinity_col = 'standard_value'
+            
+            if mol_id_col and affinity_col:
+                result_df = df[[mol_id_col, affinity_col]].copy()
+                result_df.columns = ['MOLECULE ID', 'Standard Value (nM)']
+                return result_df
+        except Exception as e:
+            logging.debug(f"Error loading affinity from {active_files[0]}: {e}")
+    
+    return None
+
+
+def analyze_single_run(run_dir):
+    """Analyze a single experimental run."""
+    run_name = os.path.basename(run_dir)
+    
+    # Parse configuration
+    config_path = os.path.join(run_dir, 'run_config.json')
+    if not os.path.exists(config_path):
+        logging.debug(f"No config found for {run_name}")
+        return None
+    
+    config_info = parse_run_config(config_path)
+    if not config_info:
+        return None
+    
+    # Find ranked file
+    ranked_file = find_ranked_file(run_dir)
+    if not ranked_file:
+        logging.debug(f"No ranked file found for {run_name}")
+        return None
+    
+    # Load ranked data
+    try:
+        ranked_df = pd.read_csv(ranked_file)
+    except Exception as e:
+        logging.warning(f"Error loading {ranked_file}: {e}")
+        return None
+    
+    # Check required columns
+    required_cols = ['RANKING', 'TYPE', 'MOLECULE ID']
+    if not all(col in ranked_df.columns for col in required_cols):
+        logging.warning(f"Missing required columns in {ranked_file}")
+        return None
+    
+    # Load affinity data if not already in ranked file
+    if 'Standard Value (nM)' not in ranked_df.columns:
+        logging.debug(f"No affinity data in ranked file, attempting to load from source...")
+        affinity_df = load_affinity_data(run_dir, config_info['target'])
+        
+        if affinity_df is not None:
+            # Merge affinity data with ranked data
+            ranked_df = ranked_df.merge(affinity_df, on='MOLECULE ID', how='left')
+            logging.debug(f"Successfully merged affinity data for {run_name}")
+        else:
+            logging.debug(f"Could not load affinity data for {run_name}")
+            return None
+    
+    # Verify we have affinity data for actives
+    actives_with_affinity = ranked_df[
+        (ranked_df['TYPE'] == 'HELDOUT_ACTIVE') & 
+        (ranked_df['Standard Value (nM)'].notna())
+    ]
+    
+    if len(actives_with_affinity) == 0:
+        logging.debug(f"No actives with affinity data in {run_name}")
+        return None
+    
+    # Calculate stratified enrichment
+    enrichment = calculate_stratified_enrichment(ranked_df, top_percent=0.01)
+    if not enrichment:
+        return None
+    
+    # Combine config info with enrichment results
+    result = config_info.copy()
+    result['run_dir'] = run_name
+    result['ranked_file'] = ranked_file
+    
+    for tier in TIER_ORDER + ['Overall']:
+        if tier in enrichment:
+            result[f'{tier}_total'] = enrichment[tier]['total']
+            result[f'{tier}_in_top'] = enrichment[tier]['in_top']
+            result[f'{tier}_EF'] = enrichment[tier]['ef']
+            result[f'{tier}_percent_found'] = enrichment[tier]['percent_found']
+    
+    return result
+
+
+def scan_workspace(workspace_dir, seed_filter=None):
+    """Scan workspace directory for completed runs."""
+    logging.info(f"Scanning workspace: {workspace_dir}")
+    
+    # Find all run directories
+    run_pattern = os.path.join(workspace_dir, "run_seed*")
+    run_dirs = glob.glob(run_pattern)
+    
+    if seed_filter is not None:
+        run_dirs = [d for d in run_dirs if f"seed{seed_filter}" in os.path.basename(d)]
+    
+    logging.info(f"Found {len(run_dirs)} run directories")
+    
+    results = []
+    for run_dir in tqdm(run_dirs, desc="Analyzing runs"):
+        result = analyze_single_run(run_dir)
+        if result:
+            results.append(result)
+    
+    logging.info(f"Successfully analyzed {len(results)} runs")
+    return pd.DataFrame(results)
+
+
+def create_summary_table(df_results):
+    """Create summary table comparing configurations."""
+    if df_results.empty:
+        return pd.DataFrame()
+    
+    # Group by configuration (method, dimension, hyperparameters)
+    group_cols = ['representation', 'dr_method', 'dimension', 'n_neighbors', 'min_dist']
+    group_cols = [col for col in group_cols if col in df_results.columns]
+    
+    # Calculate mean and std for each metric
+    agg_dict = {}
+    for tier in TIER_ORDER + ['Overall']:
+        ef_col = f'{tier}_EF'
+        pct_col = f'{tier}_percent_found'
+        total_col = f'{tier}_total'
+        
+        if ef_col in df_results.columns:
+            agg_dict[f'{tier}_EF_mean'] = (ef_col, 'mean')
+            agg_dict[f'{tier}_EF_std'] = (ef_col, 'std')
+        if pct_col in df_results.columns:
+            agg_dict[f'{tier}_pct_mean'] = (pct_col, 'mean')
+        if total_col in df_results.columns:
+            agg_dict[f'{tier}_total_mean'] = (total_col, 'mean')
+    
+    summary = df_results.groupby(group_cols).agg(**agg_dict).reset_index()
+    
+    # Sort by overall EF
+    if 'Overall_EF_mean' in summary.columns:
+        summary = summary.sort_values('Overall_EF_mean', ascending=False)
+    
+    return summary
+
+
+def plot_stratified_comparison(df_results, output_dir):
+    """Create comparison plots for stratified enrichment."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    if df_results.empty:
+        logging.warning("No results to plot")
+        return
+    
+    # 1. Enrichment Factor by Tier - Grouped by Method/Hyperparameter
+    logging.info("Generating stratified enrichment plots...")
+    
+    # Focus on UMAP with different n_neighbors
+    if 'n_neighbors' in df_results.columns:
+        df_umap = df_results[df_results['dr_method'].str.contains('UMAP', na=False)].copy()
+        
+        if not df_umap.empty:
+            # Create plot data
+            plot_data = []
+            for tier in TIER_ORDER:
+                ef_col = f'{tier}_EF'
+                if ef_col in df_umap.columns:
+                    for _, row in df_umap.iterrows():
+                        plot_data.append({
+                            'Tier': tier,
+                            'EF@1%': row[ef_col],
+                            'n_neighbors': row['n_neighbors'],
+                            'min_dist': row['min_dist'],
+                            'dimension': row['dimension'],
+                            'config': f"nn={row['n_neighbors']}, md={row['min_dist']}"
+                        })
+            
+            df_plot = pd.DataFrame(plot_data)
+            
+            # Plot 1: EF by tier, faceted by n_neighbors
+            fig, axes = plt.subplots(1, len(df_umap['n_neighbors'].unique()), 
+                                     figsize=(5*len(df_umap['n_neighbors'].unique()), 5),
+                                     sharey=True)
+            
+            if len(df_umap['n_neighbors'].unique()) == 1:
+                axes = [axes]
+            
+            for idx, nn in enumerate(sorted(df_umap['n_neighbors'].unique())):
+                ax = axes[idx]
+                df_subset = df_plot[df_plot['n_neighbors'] == nn]
+                
+                # Group by tier and calculate mean
+                tier_means = df_subset.groupby('Tier')['EF@1%'].mean()
+                
+                bars = ax.bar(TIER_ORDER, [tier_means.get(t, 0) for t in TIER_ORDER],
+                             color=[TIER_COLORS[t] for t in TIER_ORDER])
+                
+                ax.set_title(f'n_neighbors = {nn}', fontweight='bold')
+                ax.set_xlabel('Potency Tier')
+                if idx == 0:
+                    ax.set_ylabel('Mean Enrichment Factor @ 1%')
+                ax.grid(axis='y', alpha=0.3)
+                
+                # Add value labels on bars
+                for bar in bars:
+                    height = bar.get_height()
+                    if not np.isnan(height):
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'{height:.1f}',
+                               ha='center', va='bottom', fontsize=9)
+            
+            plt.suptitle('Potency-Stratified Enrichment: Impact of n_neighbors', 
+                        fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, 'stratified_ef_by_nn.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Plot 2: Percent Found by Tier
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            x = np.arange(len(TIER_ORDER))
+            width = 0.15
+            
+            nn_values = sorted(df_umap['n_neighbors'].unique())
+            for idx, nn in enumerate(nn_values):
+                df_subset = df_umap[df_umap['n_neighbors'] == nn]
+                means = [df_subset[f'{tier}_percent_found'].mean() for tier in TIER_ORDER]
+                
+                offset = (idx - len(nn_values)/2) * width + width/2
+                ax.bar(x + offset, means, width, label=f'nn={nn}')
+            
+            ax.set_xlabel('Potency Tier', fontweight='bold')
+            ax.set_ylabel('% of Tier Found in Top 1%', fontweight='bold')
+            ax.set_title('Potency-Stratified Recovery: Percent of Each Tier Found', 
+                        fontsize=14, fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(TIER_ORDER)
+            ax.legend(title='n_neighbors', loc='upper right')
+            ax.grid(axis='y', alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, 'stratified_percent_found.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+    
+    # 3. Scatter plot: Overall EF vs High-Potent EF
+    if 'Overall_EF' in df_results.columns and 'High_EF' in df_results.columns:
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        scatter_data = df_results.dropna(subset=['Overall_EF', 'High_EF'])
+        
+        if not scatter_data.empty:
+            # Color by n_neighbors if available
+            if 'n_neighbors' in scatter_data.columns:
+                for nn in sorted(scatter_data['n_neighbors'].unique()):
+                    df_nn = scatter_data[scatter_data['n_neighbors'] == nn]
+                    ax.scatter(df_nn['Overall_EF'], df_nn['High_EF'], 
+                              label=f'nn={nn}', alpha=0.6, s=100)
+            else:
+                ax.scatter(scatter_data['Overall_EF'], scatter_data['High_EF'], 
+                          alpha=0.6, s=100)
+            
+            # Add diagonal line (where Overall = High-Potent)
+            max_val = max(scatter_data['Overall_EF'].max(), scatter_data['High_EF'].max())
+            ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.3, label='Equal')
+            
+            ax.set_xlabel('Overall EF@1%', fontweight='bold')
+            ax.set_ylabel('High-Potent EF@1%', fontweight='bold')
+            ax.set_title('Quality vs. Quantity Trade-off:\nHigh-Potent vs Overall Enrichment',
+                        fontsize=14, fontweight='bold')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, 'quality_vs_quantity_tradeoff.png'), 
+                       dpi=300, bbox_inches='tight')
+            plt.close()
+    
+    logging.info(f"Plots saved to {output_dir}")
+
+
+def generate_report(df_results, summary_df, output_dir):
+    """Generate text report with key findings."""
+    report_path = os.path.join(output_dir, 'potency_stratified_report.txt')
+    
+    with open(report_path, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("POTENCY-STRATIFIED ENRICHMENT ANALYSIS REPORT\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total runs analyzed: {len(df_results)}\n\n")
+        
+        f.write("-" * 80 + "\n")
+        f.write("POTENCY TIER DEFINITIONS\n")
+        f.write("-" * 80 + "\n")
+        for tier, (low, high) in POTENCY_TIERS.items():
+            f.write(f"  {tier:12s}: {low:>8.1f} - {high:>8.1f} nM\n")
+        f.write("\n")
+        
+        if not summary_df.empty:
+            f.write("-" * 80 + "\n")
+            f.write("TOP CONFIGURATIONS BY OVERALL ENRICHMENT\n")
+            f.write("-" * 80 + "\n\n")
+            
+            # Show top 10 configs
+            top_n = min(10, len(summary_df))
+            for idx, row in summary_df.head(top_n).iterrows():
+                f.write(f"Rank {idx+1}:\n")
+                
+                # Config details
+                if 'dr_method' in row:
+                    f.write(f"  Method: {row['dr_method']}")
+                if 'dimension' in row:
+                    f.write(f", Dim: {row['dimension']}")
+                if 'n_neighbors' in row and pd.notna(row['n_neighbors']):
+                    f.write(f", nn: {row['n_neighbors']}")
+                if 'min_dist' in row and pd.notna(row['min_dist']):
+                    f.write(f", md: {row['min_dist']}")
+                f.write("\n")
+                
+                # Enrichment by tier
+                f.write(f"  Enrichment Factors (mean ± std):\n")
+                for tier in TIER_ORDER + ['Overall']:
+                    ef_mean_col = f'{tier}_EF_mean'
+                    ef_std_col = f'{tier}_EF_std'
+                    if ef_mean_col in row and pd.notna(row[ef_mean_col]):
+                        ef_mean = row[ef_mean_col]
+                        ef_std = row.get(ef_std_col, np.nan)
+                        if pd.notna(ef_std):
+                            f.write(f"    {tier:12s}: {ef_mean:6.2f} ± {ef_std:5.2f}\n")
+                        else:
+                            f.write(f"    {tier:12s}: {ef_mean:6.2f}\n")
+                f.write("\n")
+            
+            f.write("-" * 80 + "\n")
+            f.write("KEY FINDINGS\n")
+            f.write("-" * 80 + "\n\n")
+            
+            # Identify quality vs quantity trade-offs
+            if 'Overall_EF_mean' in summary_df.columns and 'High_EF_mean' in summary_df.columns:
+                # Find config with best High-Potent EF
+                best_high_idx = summary_df['High_EF_mean'].idxmax()
+                best_high_row = summary_df.loc[best_high_idx]
+                
+                # Find config with best Overall EF
+                best_overall_idx = summary_df['Overall_EF_mean'].idxmax()
+                best_overall_row = summary_df.loc[best_overall_idx]
+                
+                if best_high_idx != best_overall_idx:
+                    f.write("⚠️  QUALITY vs QUANTITY TRADE-OFF DETECTED:\n\n")
+                    
+                    f.write("Best for HIGH-POTENT enrichment:\n")
+                    if 'n_neighbors' in best_high_row:
+                        f.write(f"  Config: nn={best_high_row['n_neighbors']}, ")
+                        f.write(f"md={best_high_row.get('min_dist', 'N/A')}\n")
+                    f.write(f"  High-Potent EF: {best_high_row['High_EF_mean']:.2f}\n")
+                    f.write(f"  Overall EF: {best_high_row['Overall_EF_mean']:.2f}\n\n")
+                    
+                    f.write("Best for OVERALL enrichment:\n")
+                    if 'n_neighbors' in best_overall_row:
+                        f.write(f"  Config: nn={best_overall_row['n_neighbors']}, ")
+                        f.write(f"md={best_overall_row.get('min_dist', 'N/A')}\n")
+                    f.write(f"  High-Potent EF: {best_overall_row['High_EF_mean']:.2f}\n")
+                    f.write(f"  Overall EF: {best_overall_row['Overall_EF_mean']:.2f}\n\n")
+                    
+                    f.write("RECOMMENDATION: For drug discovery, prioritize the configuration\n")
+                    f.write("with best High-Potent enrichment to find therapeutically relevant\n")
+                    f.write("compounds, even if overall EF is slightly lower.\n\n")
+                else:
+                    f.write("✓ Best overall configuration also excels at High-Potent enrichment.\n\n")
+        
+        f.write("=" * 80 + "\n")
+    
+    logging.info(f"Report saved to {report_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Potency-Stratified Enrichment Analysis",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    
+    parser.add_argument('--workspace_dir', required=True,
+                       help='Path to experiment workspace directory')
+    parser.add_argument('--output_dir', required=True,
+                       help='Output directory for analysis results')
+    parser.add_argument('--seed', type=int,
+                       help='Analyze only specific seed (optional)')
+    parser.add_argument('--summary_only', action='store_true',
+                       help='Generate summary only, skip detailed plots')
+    
+    args = parser.parse_args()
+    
+    # Validate inputs
+    if not os.path.exists(args.workspace_dir):
+        logging.error(f"Workspace directory not found: {args.workspace_dir}")
+        sys.exit(1)
+    
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Setup file logging
+    log_file = os.path.join(args.output_dir, 'analysis.log')
+    file_handler = logging.FileHandler(log_file, mode='w')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s'))
+    logging.getLogger().addHandler(file_handler)
+    
+    logging.info("=" * 80)
+    logging.info("POTENCY-STRATIFIED ENRICHMENT ANALYSIS")
+    logging.info("=" * 80)
+    logging.info(f"Workspace: {args.workspace_dir}")
+    logging.info(f"Output: {args.output_dir}")
+    if args.seed:
+        logging.info(f"Filtering by seed: {args.seed}")
+    
+    # Scan workspace and analyze runs
+    df_results = scan_workspace(args.workspace_dir, seed_filter=args.seed)
+    
+    if df_results.empty:
+        logging.error("No results found. Check workspace path and data availability.")
+        sys.exit(1)
+    
+    # Save detailed results
+    results_file = os.path.join(args.output_dir, 'stratified_enrichment_detailed.csv')
+    df_results.to_csv(results_file, index=False)
+    logging.info(f"Detailed results saved to {results_file}")
+    
+    # Create summary table
+    summary_df = create_summary_table(df_results)
+    if not summary_df.empty:
+        summary_file = os.path.join(args.output_dir, 'stratified_enrichment_summary.csv')
+        summary_df.to_csv(summary_file, index=False)
+        logging.info(f"Summary table saved to {summary_file}")
+    
+    # Generate plots (unless summary_only)
+    if not args.summary_only:
+        plot_dir = os.path.join(args.output_dir, 'plots')
+        plot_stratified_comparison(df_results, plot_dir)
+    
+    # Generate report
+    generate_report(df_results, summary_df, args.output_dir)
+    
+    logging.info("=" * 80)
+    logging.info("Analysis complete!")
+    logging.info(f"Results in: {args.output_dir}")
+    logging.info("=" * 80)
+
+
+if __name__ == '__main__':
+    main()
