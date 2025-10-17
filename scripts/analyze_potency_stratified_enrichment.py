@@ -45,6 +45,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import pandas as pd
@@ -492,8 +493,15 @@ def analyze_single_run(run_dir, verbose=False):
     return result
 
 
-def scan_workspace(workspace_dir, seed_filter=None, verbose_sample=True):
-    """Scan workspace directory for completed runs."""
+def scan_workspace(workspace_dir, seed_filter=None, verbose_sample=True, n_jobs=None):
+    """Scan workspace directory for completed runs.
+    
+    Args:
+        workspace_dir: Path to experiment workspace
+        seed_filter: Optional seed number to filter by
+        verbose_sample: Whether to analyze first run verbosely
+        n_jobs: Number of parallel jobs (default: all available CPUs)
+    """
     logging.info(f"Scanning workspace: {workspace_dir}")
     
     # Find all run directories
@@ -505,8 +513,11 @@ def scan_workspace(workspace_dir, seed_filter=None, verbose_sample=True):
     
     logging.info(f"Found {len(run_dirs)} run directories")
     
+    if not run_dirs:
+        return pd.DataFrame()
+    
     # Analyze first run with verbose output for debugging
-    if run_dirs and verbose_sample:
+    if verbose_sample:
         logging.info(f"Attempting to analyze first run with verbose output: {os.path.basename(run_dirs[0])}")
         first_result = analyze_single_run(run_dirs[0], verbose=True)
         if first_result:
@@ -514,14 +525,32 @@ def scan_workspace(workspace_dir, seed_filter=None, verbose_sample=True):
         else:
             logging.warning("✗ First run could not be analyzed. Check the warnings above.")
     
+    # Determine number of parallel jobs
+    if n_jobs is None:
+        n_jobs = max(1, cpu_count() - 1)  # Leave one CPU free
+    
+    logging.info(f"Analyzing {len(run_dirs)} runs using {n_jobs} parallel workers...")
+    
+    # Parallelize the analysis using multiprocessing
     results = []
-    for run_dir in tqdm(run_dirs, desc="Analyzing runs"):
-        result = analyze_single_run(run_dir, verbose=False)
-        if result:
-            results.append(result)
+    with Pool(processes=n_jobs) as pool:
+        # Use imap for progress bar compatibility
+        for result in tqdm(pool.imap(analyze_single_run_wrapper, run_dirs), 
+                          total=len(run_dirs), 
+                          desc="Analyzing runs"):
+            if result:
+                results.append(result)
     
     logging.info(f"Successfully analyzed {len(results)} runs")
     return pd.DataFrame(results)
+
+
+def analyze_single_run_wrapper(run_dir):
+    """Wrapper for analyze_single_run to work with multiprocessing.
+    
+    This wrapper is needed because multiprocessing requires picklable functions.
+    """
+    return analyze_single_run(run_dir, verbose=False)
 
 
 def create_summary_table(df_results):
@@ -1545,6 +1574,8 @@ def main():
                        help='Analyze only specific seed (optional)')
     parser.add_argument('--summary_only', action='store_true',
                        help='Generate summary only, skip detailed plots')
+    parser.add_argument('--n_jobs', type=int, default=None,
+                       help='Number of parallel workers (default: use all available CPUs - 1)')
     
     args = parser.parse_args()
     
@@ -1569,9 +1600,11 @@ def main():
     logging.info(f"Output: {args.output_dir}")
     if args.seed:
         logging.info(f"Filtering by seed: {args.seed}")
+    if args.n_jobs:
+        logging.info(f"Parallel workers: {args.n_jobs}")
     
     # Scan workspace and analyze runs
-    df_results = scan_workspace(args.workspace_dir, seed_filter=args.seed)
+    df_results = scan_workspace(args.workspace_dir, seed_filter=args.seed, n_jobs=args.n_jobs)
     
     if df_results.empty:
         logging.error("No results found. Check workspace path and data availability.")
