@@ -714,12 +714,13 @@ def main():
             # Build unique key for this experiment configuration
             method = exp['dr_method']
             input_type = exp['representation']
+            dim = exp.get('dim', 'unknown')
             
-            # Hyperparameters
+            # Hyperparameters (including dimensionality)
             if exp.get('n_neighbors') and exp.get('min_dist') is not None:
-                hyperparams = f"nn={exp['n_neighbors']}, md={exp['min_dist']}"
+                hyperparams = f"dim={dim}, nn={exp['n_neighbors']}, md={exp['min_dist']}"
             elif exp.get('dim'):
-                hyperparams = f"dim={exp['dim']}"
+                hyperparams = f"dim={dim}"
             else:
                 hyperparams = "-"
             
@@ -740,8 +741,8 @@ def main():
             print(f"Found {len(persistent_failures)} experiment configurations that failed across ≥3 seeds\n")
             
             # Header
-            print(f"{'Method':<20} {'Input':<15} {'Hyperparams':<25} {'#Seeds':<8} {'Primary Error':<30} {'Example Log'}")
-            print("-" * 140)
+            print(f"{'Method':<20} {'Input':<15} {'Hyperparams (dim, nn, md)':<35} {'#Seeds':<8} {'Primary Error':<30} {'Example Log'}")
+            print("-" * 150)
             
             for config, info in sorted(persistent_failures.items(), 
                                       key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -757,7 +758,7 @@ def main():
                 # Example log file (first one)
                 example_log = info['log_files'][0] if info['log_files'] else "-"
                 
-                print(f"{method:<20} {input_type:<15} {hyperparams:<25} {n_failed_seeds:<8} {primary_error_truncated:<30} {example_log}")
+                print(f"{method:<20} {input_type:<15} {hyperparams:<35} {n_failed_seeds:<8} {primary_error_truncated:<30} {example_log}")
             
             print()
         else:
