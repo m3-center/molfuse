@@ -210,26 +210,69 @@ def calculate_stratified_enrichment(ranked_df, top_percent=0.01):
 
 def load_affinity_data(run_dir, target_id):
     """Load affinity data from source files."""
-    # Try to find detailed active distances file which should have affinity data
-    pattern = os.path.join(run_dir, f"{target_id}/results/*/dim_*/*/*detailed_active_distances.csv")
-    distance_files = glob.glob(pattern)
+    
+    # Strategy 1: Try detailed active distances file
+    pattern1 = os.path.join(run_dir, f"{target_id}/results/*/dim_*/*/*detailed_active_distances.csv")
+    distance_files = glob.glob(pattern1)
     
     if distance_files:
         try:
             df = pd.read_csv(distance_files[0])
-            if 'Standard Value (nM)' in df.columns and 'MOLECULE ID' in df.columns:
-                return df[['MOLECULE ID', 'Standard Value (nM)']]
+            if 'Standard Value (nM)' in df.columns:
+                mol_id_col = 'MOLECULE ID' if 'MOLECULE ID' in df.columns else 'Compound ChEMBL ID'
+                if mol_id_col in df.columns:
+                    result_df = df[[mol_id_col, 'Standard Value (nM)']].copy()
+                    result_df.columns = ['MOLECULE ID', 'Standard Value (nM)']
+                    return result_df
         except Exception as e:
             logging.debug(f"Error loading affinity from {distance_files[0]}: {e}")
     
-    # Try to find in the prepared data directory
-    pattern = os.path.join(run_dir, f"{target_id}/prepared_data/*_heldout_target_actives.csv")
-    active_files = glob.glob(pattern)
+    # Strategy 2: Try prepared data directory (without target_id prefix)
+    pattern2 = os.path.join(run_dir, "*/prepared_data/*_heldout_target_actives.csv")
+    active_files = glob.glob(pattern2)
     
     if active_files:
         try:
             df = pd.read_csv(active_files[0])
             # Map common column names
+            mol_id_col = None
+            affinity_col = None
+            
+            if 'Compound ChEMBL ID' in df.columns:
+                mol_id_col = 'Compound ChEMBL ID'
+            elif 'MOLECULE ID' in df.columns:
+                mol_id_col = 'MOLECULE ID'
+            elif 'molecule_chembl_id' in df.columns:
+                mol_id_col = 'molecule_chembl_id'
+            
+            if 'Standard Value (nM)' in df.columns:
+                affinity_col = 'Standard Value (nM)'
+            elif 'standard_value' in df.columns:
+                affinity_col = 'standard_value'
+            elif 'pchembl_value' in df.columns:
+                # Convert pChEMBL back to nM
+                df_copy = df.copy()
+                df_copy['Standard Value (nM)'] = 10 ** (9 - df_copy['pchembl_value'])
+                affinity_col = 'Standard Value (nM)'
+            
+            if mol_id_col and affinity_col:
+                result_df = df[[mol_id_col, affinity_col]].copy()
+                result_df.columns = ['MOLECULE ID', 'Standard Value (nM)']
+                # Convert to numeric, coercing errors
+                result_df['Standard Value (nM)'] = pd.to_numeric(
+                    result_df['Standard Value (nM)'], errors='coerce'
+                )
+                return result_df
+        except Exception as e:
+            logging.debug(f"Error loading affinity from {active_files[0]}: {e}")
+    
+    # Strategy 3: Try with target_id prefix
+    pattern3 = os.path.join(run_dir, f"{target_id}/prepared_data/*_heldout_target_actives.csv")
+    active_files = glob.glob(pattern3)
+    
+    if active_files:
+        try:
+            df = pd.read_csv(active_files[0])
             mol_id_col = None
             affinity_col = None
             
@@ -246,6 +289,9 @@ def load_affinity_data(run_dir, target_id):
             if mol_id_col and affinity_col:
                 result_df = df[[mol_id_col, affinity_col]].copy()
                 result_df.columns = ['MOLECULE ID', 'Standard Value (nM)']
+                result_df['Standard Value (nM)'] = pd.to_numeric(
+                    result_df['Standard Value (nM)'], errors='coerce'
+                )
                 return result_df
         except Exception as e:
             logging.debug(f"Error loading affinity from {active_files[0]}: {e}")
@@ -253,24 +299,28 @@ def load_affinity_data(run_dir, target_id):
     return None
 
 
-def analyze_single_run(run_dir):
+def analyze_single_run(run_dir, verbose=False):
     """Analyze a single experimental run."""
     run_name = os.path.basename(run_dir)
     
     # Parse configuration
     config_path = os.path.join(run_dir, 'run_config.json')
     if not os.path.exists(config_path):
-        logging.debug(f"No config found for {run_name}")
+        if verbose:
+            logging.warning(f"No config found for {run_name}")
         return None
     
     config_info = parse_run_config(config_path)
     if not config_info:
+        if verbose:
+            logging.warning(f"Could not parse config for {run_name}")
         return None
     
     # Find ranked file
     ranked_file = find_ranked_file(run_dir)
     if not ranked_file:
-        logging.debug(f"No ranked file found for {run_name}")
+        if verbose:
+            logging.warning(f"No ranked file found for {run_name}")
         return None
     
     # Load ranked data
@@ -282,21 +332,28 @@ def analyze_single_run(run_dir):
     
     # Check required columns
     required_cols = ['RANKING', 'TYPE', 'MOLECULE ID']
-    if not all(col in ranked_df.columns for col in required_cols):
-        logging.warning(f"Missing required columns in {ranked_file}")
+    missing_cols = [col for col in required_cols if col not in ranked_df.columns]
+    if missing_cols:
+        if verbose:
+            logging.warning(f"Missing columns in {ranked_file}: {missing_cols}")
+            logging.warning(f"Available columns: {list(ranked_df.columns)}")
         return None
     
     # Load affinity data if not already in ranked file
     if 'Standard Value (nM)' not in ranked_df.columns:
-        logging.debug(f"No affinity data in ranked file, attempting to load from source...")
+        if verbose:
+            logging.info(f"No affinity data in ranked file, attempting to load from source...")
         affinity_df = load_affinity_data(run_dir, config_info['target'])
         
         if affinity_df is not None:
             # Merge affinity data with ranked data
+            before_merge = len(ranked_df)
             ranked_df = ranked_df.merge(affinity_df, on='MOLECULE ID', how='left')
-            logging.debug(f"Successfully merged affinity data for {run_name}")
+            if verbose:
+                logging.info(f"Successfully merged affinity data for {run_name} ({len(ranked_df)} rows)")
         else:
-            logging.debug(f"Could not load affinity data for {run_name}")
+            if verbose:
+                logging.warning(f"Could not load affinity data for {run_name}")
             return None
     
     # Verify we have affinity data for actives
@@ -306,7 +363,9 @@ def analyze_single_run(run_dir):
     ]
     
     if len(actives_with_affinity) == 0:
-        logging.debug(f"No actives with affinity data in {run_name}")
+        if verbose:
+            n_actives = (ranked_df['TYPE'] == 'HELDOUT_ACTIVE').sum()
+            logging.warning(f"No actives with affinity data in {run_name} ({n_actives} total actives)")
         return None
     
     # Calculate stratified enrichment
@@ -329,7 +388,7 @@ def analyze_single_run(run_dir):
     return result
 
 
-def scan_workspace(workspace_dir, seed_filter=None):
+def scan_workspace(workspace_dir, seed_filter=None, verbose_sample=True):
     """Scan workspace directory for completed runs."""
     logging.info(f"Scanning workspace: {workspace_dir}")
     
@@ -342,9 +401,18 @@ def scan_workspace(workspace_dir, seed_filter=None):
     
     logging.info(f"Found {len(run_dirs)} run directories")
     
+    # Analyze first run with verbose output for debugging
+    if run_dirs and verbose_sample:
+        logging.info(f"Attempting to analyze first run with verbose output: {os.path.basename(run_dirs[0])}")
+        first_result = analyze_single_run(run_dirs[0], verbose=True)
+        if first_result:
+            logging.info("✓ First run analyzed successfully!")
+        else:
+            logging.warning("✗ First run could not be analyzed. Check the warnings above.")
+    
     results = []
     for run_dir in tqdm(run_dirs, desc="Analyzing runs"):
-        result = analyze_single_run(run_dir)
+        result = analyze_single_run(run_dir, verbose=False)
         if result:
             results.append(result)
     
