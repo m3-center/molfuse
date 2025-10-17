@@ -548,7 +548,10 @@ def create_summary_table(df_results):
 
 
 def plot_pca_vs_umap_comparison(df_results, output_dir):
-    """Compare PCA vs UMAP performance across potency tiers."""
+    """Compare PCA vs UMAP performance across potency tiers.
+    
+    For UMAP, selects only the best hyperparameters for each representation type.
+    """
     logging.info("Generating PCA vs UMAP comparison plots...")
     
     # Create method-representation combinations
@@ -558,45 +561,101 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
         axis=1
     )
     
+    # For UMAP, identify best hyperparameters for each representation
+    # Best = highest mean High-potent EF (most important for quality)
+    best_umap_configs = {}
+    
+    # UMAP-Euclidean with features
+    df_umap_euc = df_results[
+        (df_results['dr_method'] == 'UMAP-Euclidean') &
+        (df_results['representation'] == 'features')
+    ]
+    if not df_umap_euc.empty and 'n_neighbors' in df_umap_euc.columns:
+        # Group by hyperparameters and find best config
+        hyperparam_cols = [c for c in ['n_neighbors', 'min_dist'] if c in df_umap_euc.columns]
+        if hyperparam_cols:
+            grouped = df_umap_euc.groupby(hyperparam_cols)['High_EF'].mean()
+            if not grouped.empty:
+                best_params = grouped.idxmax()
+                best_umap_configs['UMAP-Euclidean-features'] = best_params
+                logging.info(f"Best UMAP-Euclidean (features): {best_params}")
+    
+    # UMAP-Jaccard with fingerprints
+    df_umap_jac = df_results[
+        (df_results['dr_method'] == 'UMAP-Jaccard') &
+        (df_results['representation'] == 'fingerprints')
+    ]
+    if not df_umap_jac.empty and 'n_neighbors' in df_umap_jac.columns:
+        # Group by hyperparameters and find best config
+        hyperparam_cols = [c for c in ['n_neighbors', 'min_dist'] if c in df_umap_jac.columns]
+        if hyperparam_cols:
+            grouped = df_umap_jac.groupby(hyperparam_cols)['High_EF'].mean()
+            if not grouped.empty:
+                best_params = grouped.idxmax()
+                best_umap_configs['UMAP-Jaccard-fingerprints'] = best_params
+                logging.info(f"Best UMAP-Jaccard (fingerprints): {best_params}")
+    
     # Define the configurations to compare
     configs_to_compare = {
         'PCA-features': {
             'method': 'PCA', 
             'repr': 'features', 
             'label': 'PCA (Features)',
-            'short_label': 'PCA-feat'
+            'short_label': 'PCA-feat',
+            'filter_params': None
         },
         'PCA-fingerprints': {
             'method': 'PCA', 
             'repr': 'fingerprints', 
             'label': 'PCA (Fingerprints)',
-            'short_label': 'PCA-fing'
+            'short_label': 'PCA-fing',
+            'filter_params': None
         },
         'UMAP-Euclidean-features': {
             'method': 'UMAP-Euclidean', 
             'repr': 'features', 
             'label': 'UMAP-Euclidean (Features)',
-            'short_label': 'UMAP-Euc'
+            'short_label': 'UMAP-Euc',
+            'filter_params': best_umap_configs.get('UMAP-Euclidean-features')
         },
         'UMAP-Jaccard-fingerprints': {
             'method': 'UMAP-Jaccard', 
             'repr': 'fingerprints', 
             'label': 'UMAP-Jaccard (Fingerprints)',
-            'short_label': 'UMAP-Jac'
+            'short_label': 'UMAP-Jac',
+            'filter_params': best_umap_configs.get('UMAP-Jaccard-fingerprints')
         }
     }
     
     # Filter to only the configurations we want
-    df_methods = df_results[
-        df_results.apply(
-            lambda row: f"{row['dr_method']}-{row.get('representation', '')}" in configs_to_compare,
-            axis=1
-        )
-    ].copy()
+    df_methods_list = []
+    for config_key, config_info in configs_to_compare.items():
+        df_config = df_results[
+            (df_results['dr_method'] == config_info['method']) &
+            (df_results['representation'] == config_info['repr'])
+        ]
+        
+        # Apply hyperparameter filtering for UMAP
+        if config_info['filter_params'] is not None:
+            if isinstance(config_info['filter_params'], tuple):
+                # Multiple hyperparameters
+                n_neighbors, min_dist = config_info['filter_params']
+                df_config = df_config[
+                    (df_config['n_neighbors'] == n_neighbors) &
+                    (df_config['min_dist'] == min_dist)
+                ]
+            else:
+                # Single hyperparameter (shouldn't happen but handle it)
+                df_config = df_config[df_config['n_neighbors'] == config_info['filter_params']]
+        
+        if not df_config.empty:
+            df_methods_list.append(df_config)
     
-    if df_methods.empty:
+    if not df_methods_list:
         logging.warning("No matching method-representation combinations found for comparison")
         return
+    
+    df_methods = pd.concat(df_methods_list, ignore_index=True)
     
     # Plot 1: Mean EF by tier for all method-representation combinations
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -616,12 +675,18 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
         if df_config.empty:
             continue
         
+        # Create label with hyperparameters for UMAP
+        label = config_info['label']
+        if config_info['filter_params'] is not None and isinstance(config_info['filter_params'], tuple):
+            nn, md = config_info['filter_params']
+            label += f"\n(nn={nn}, md={md})"
+        
         means = [df_config[f'{tier}_EF'].mean() for tier in TIER_ORDER]
         stds = [df_config[f'{tier}_EF'].std() for tier in TIER_ORDER]
         
         offset = (config_idx - n_configs/2 + 0.5) * width
         bars = ax.bar(x + offset, means, width, yerr=stds, 
-                     label=config_info['label'], alpha=0.8, capsize=4,
+                     label=label, alpha=0.8, capsize=4,
                      color=colors[config_idx % len(colors)])
         
         # Add value labels
@@ -634,11 +699,11 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
     
     ax.set_xlabel('Potency Tier', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Enrichment Factor @ 1%', fontsize=12, fontweight='bold')
-    ax.set_title('Method-Representation Comparison: Potency-Stratified Enrichment',
+    ax.set_title('Method-Representation Comparison: Potency-Stratified Enrichment\n(UMAP: Best Hyperparameters Only)',
                 fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(TIER_ORDER)
-    ax.legend(loc='upper right', fontsize=10)
+    ax.legend(loc='upper right', fontsize=9)
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
@@ -689,7 +754,7 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
         ax.grid(axis='y', alpha=0.3)
         ax.tick_params(axis='x', rotation=45, labelsize=8)
     
-    plt.suptitle('Method-Representation Comparison: Distribution Across Potency Tiers',
+    plt.suptitle('Method-Representation Comparison: Distribution Across Potency Tiers\n(UMAP: Best Hyperparameters Only)',
                 fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'pca_vs_umap_distributions.png'), dpi=300, bbox_inches='tight')
@@ -1053,8 +1118,49 @@ def generate_report(df_results, summary_df, output_dir):
             f.write("KEY FINDINGS\n")
             f.write("-" * 80 + "\n\n")
             
-            # Method-Representation comparison
-            f.write("1. Method-Representation Performance by Potency Tier:\n\n")
+            # Identify best UMAP hyperparameters first
+            f.write("BEST UMAP HYPERPARAMETERS (by High-Potent EF):\n\n")
+            
+            # UMAP-Euclidean with features
+            df_umap_euc = df_results[
+                (df_results['dr_method'] == 'UMAP-Euclidean') &
+                (df_results['representation'] == 'features')
+            ]
+            if not df_umap_euc.empty and 'n_neighbors' in df_umap_euc.columns:
+                hyperparam_cols = [c for c in ['n_neighbors', 'min_dist'] if c in df_umap_euc.columns]
+                if hyperparam_cols:
+                    grouped = df_umap_euc.groupby(hyperparam_cols)['High_EF'].mean()
+                    if not grouped.empty:
+                        best_params = grouped.idxmax()
+                        best_ef = grouped.max()
+                        if isinstance(best_params, tuple):
+                            nn, md = best_params
+                            f.write(f"  UMAP-Euclidean (features):  nn={nn}, min_dist={md} → High-EF={best_ef:.2f}\n")
+                        else:
+                            f.write(f"  UMAP-Euclidean (features):  nn={best_params} → High-EF={best_ef:.2f}\n")
+            
+            # UMAP-Jaccard with fingerprints
+            df_umap_jac = df_results[
+                (df_results['dr_method'] == 'UMAP-Jaccard') &
+                (df_results['representation'] == 'fingerprints')
+            ]
+            if not df_umap_jac.empty and 'n_neighbors' in df_umap_jac.columns:
+                hyperparam_cols = [c for c in ['n_neighbors', 'min_dist'] if c in df_umap_jac.columns]
+                if hyperparam_cols:
+                    grouped = df_umap_jac.groupby(hyperparam_cols)['High_EF'].mean()
+                    if not grouped.empty:
+                        best_params = grouped.idxmax()
+                        best_ef = grouped.max()
+                        if isinstance(best_params, tuple):
+                            nn, md = best_params
+                            f.write(f"  UMAP-Jaccard (fingerprints): nn={nn}, min_dist={md} → High-EF={best_ef:.2f}\n")
+                        else:
+                            f.write(f"  UMAP-Jaccard (fingerprints): nn={best_params} → High-EF={best_ef:.2f}\n")
+            f.write("\n")
+            
+            # Method-Representation comparison (using best UMAP hyperparameters)
+            f.write("1. Method-Representation Performance by Potency Tier:\n")
+            f.write("   (Note: UMAP results show BEST hyperparameters only)\n\n")
             
             # Define the configurations to compare
             configs_to_compare = {
@@ -1063,6 +1169,23 @@ def generate_report(df_results, summary_df, output_dir):
                 'umap_euc': {'method': 'UMAP-Euclidean', 'repr': 'features', 'label': 'UMAP-Euclidean-features'},
                 'umap_jac': {'method': 'UMAP-Jaccard', 'repr': 'fingerprints', 'label': 'UMAP-Jaccard-fingerprints'}
             }
+            
+            # Get best UMAP configs for filtering
+            best_umap_euc_params = None
+            if not df_umap_euc.empty and 'n_neighbors' in df_umap_euc.columns:
+                hyperparam_cols = [c for c in ['n_neighbors', 'min_dist'] if c in df_umap_euc.columns]
+                if hyperparam_cols:
+                    grouped = df_umap_euc.groupby(hyperparam_cols)['High_EF'].mean()
+                    if not grouped.empty:
+                        best_umap_euc_params = grouped.idxmax()
+            
+            best_umap_jac_params = None
+            if not df_umap_jac.empty and 'n_neighbors' in df_umap_jac.columns:
+                hyperparam_cols = [c for c in ['n_neighbors', 'min_dist'] if c in df_umap_jac.columns]
+                if hyperparam_cols:
+                    grouped = df_umap_jac.groupby(hyperparam_cols)['High_EF'].mean()
+                    if not grouped.empty:
+                        best_umap_jac_params = grouped.idxmax()
             
             for tier in TIER_ORDER:
                 ef_col = f'{tier}_EF'
@@ -1073,7 +1196,25 @@ def generate_report(df_results, summary_df, output_dir):
                     config_data = df_results[
                         (df_results['dr_method'] == config_info['method']) &
                         (df_results['representation'] == config_info['repr'])
-                    ][ef_col]
+                    ]
+                    
+                    # Filter UMAP by best hyperparameters
+                    if config_key == 'umap_euc' and best_umap_euc_params is not None:
+                        if isinstance(best_umap_euc_params, tuple):
+                            nn, md = best_umap_euc_params
+                            config_data = config_data[
+                                (config_data['n_neighbors'] == nn) &
+                                (config_data['min_dist'] == md)
+                            ]
+                    elif config_key == 'umap_jac' and best_umap_jac_params is not None:
+                        if isinstance(best_umap_jac_params, tuple):
+                            nn, md = best_umap_jac_params
+                            config_data = config_data[
+                                (config_data['n_neighbors'] == nn) &
+                                (config_data['min_dist'] == md)
+                            ]
+                    
+                    config_data = config_data[ef_col]
                     
                     if not config_data.empty:
                         mean_ef = config_data.mean()
