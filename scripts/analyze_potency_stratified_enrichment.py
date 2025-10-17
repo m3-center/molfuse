@@ -85,15 +85,25 @@ def parse_run_config(run_config_path):
         dr_key = list(dr_methods.keys())[0]
         dr_config = dr_methods[dr_key]
         
+        # Extract dimension - try both simspace_dim and simspace_dims_to_test
+        global_settings = config.get('global_settings', {})
+        dimension = global_settings.get('simspace_dim')
+        
+        # If simspace_dim not found, try simspace_dims_to_test (which is a list)
+        if dimension is None:
+            dims_to_test = global_settings.get('simspace_dims_to_test', [])
+            if dims_to_test:
+                dimension = dims_to_test[0]  # Take first dimension from list
+        
         info = {
             'seed': config.get('random_seed'),
             'target': config.get('targets', [{}])[0].get('id_name'),
             'representation': config.get('representations', [None])[0],
             'dr_method': dr_config.get('short_name'),
-            'dimension': config.get('global_settings', {}).get('simspace_dim'),
+            'dimension': dimension,
             'n_neighbors': dr_config.get('n_neighbors'),
             'min_dist': dr_config.get('min_dist'),
-            'affinity_cutoff': config.get('global_settings', {}).get('affinity_cutoff_nM', 100000)
+            'affinity_cutoff': global_settings.get('affinity_cutoff_nM', 100000)
         }
         return info
     except Exception as e:
