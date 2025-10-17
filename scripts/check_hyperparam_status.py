@@ -16,13 +16,11 @@ import sys
 import json
 import glob
 import argparse
+import csv
+import shutil
+import statistics
 from collections import defaultdict
 from datetime import datetime
-import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend for faster rendering
-import matplotlib.pyplot as plt
-import numpy as np
 from tqdm import tqdm  # Progress bars
 
 def extract_config_info(run_dir):
@@ -192,9 +190,29 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
             try:
                 with open(log_file, 'r') as f:
                     log_content = f.read()
+                    log_content_lower = log_content.lower()
                     
-                    # Check for fatal errors (that stopped execution)
-                    if 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
+                    # Check for OOM errors (case-insensitive)
+                    if 'oom' in log_content_lower or 'out of memory' in log_content_lower or 'memoryerror' in log_content_lower:
+                        lines = log_content.split('\n')
+                        error_lines = []
+                        # Find lines around OOM error
+                        for i, line in enumerate(lines):
+                            if 'oom' in line.lower() or 'out of memory' in line.lower() or 'memoryerror' in line.lower():
+                                # Capture context around error (5 lines before, 5 after)
+                                start = max(0, i - 5)
+                                end = min(len(lines), i + 6)
+                                error_lines = lines[start:end]
+                                break
+                        
+                        if error_lines:
+                            status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
+                            status['error_type'] = 'Out of Memory (OOM)'
+                            if debug_log:
+                                debug_log.write(f"❌ OOM Error detected in log\n")
+                    
+                    # Check for other fatal errors (that stopped execution)
+                    elif 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
                         # Extract error information
                         lines = log_content.split('\n')
                         error_lines = []
@@ -229,9 +247,6 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                     status['error_type'] = 'Missing Scaler File'
                                 else:
                                     status['error_type'] = 'File Not Found'
-                            elif 'memoryerror' in error_text or 'out of memory' in error_text:
-                                status['error'] = '\n'.join(error_lines[-10:])
-                                status['error_type'] = 'Out of Memory'
                             elif 'valueerror' in error_text:
                                 status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Value Error'
@@ -267,270 +282,6 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                        f"error_type={status['error_type']}\n")
     
     return status
-
-def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output_dir):
-    """Generate scatter plots comparing PCA vs best UMAP for each seed.
-    
-    Args:
-        workspace: Workspace directory path
-        completed_results: List of completed experiment results
-        best_umap_method: Dict with best UMAP method info
-        output_dir: Output directory for figures
-    """
-    # Group results by seed
-    by_seed = defaultdict(list)
-    for r in completed_results:
-        if r['seed']:
-            by_seed[r['seed']].append(r)
-    
-    print(f"\n{'='*80}")
-    print(f"GENERATING VISUALIZATION FIGURES")
-    print(f"{'='*80}")
-    print(f"Output directory: {output_dir}")
-    print(f"Best UMAP method: {best_umap_method['method']}")
-    print(f"Seeds to visualize: {sorted(by_seed.keys())}")
-    print()
-    
-    figures_dir = os.path.join(output_dir, 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    
-    # Add progress bar for figure generation
-    seeds_to_plot = sorted(by_seed.keys())
-    pbar = tqdm(seeds_to_plot, desc="Generating figures", unit="seed")
-    
-    for seed in pbar:
-        pbar.set_description(f"Generating figures for seed {seed}")
-        seed_experiments = by_seed[seed]
-        
-        # Find PCA and best UMAP experiments for this seed
-        pca_exp = None
-        umap_exp = None
-        
-        for exp in seed_experiments:
-            # Find features-PCA experiment
-            if exp['representation'] == 'features' and exp['dr_method'] == 'PCA':
-                pca_exp = exp
-            
-            # Find best UMAP experiment (matching method from best_umap_method)
-            # More flexible matching - just check that UMAP is in method name and hyperparams match
-            if (exp['representation'] == 'features' and 
-                'UMAP' in exp.get('dr_method', '') and
-                str(exp.get('n_neighbors', '')) == str(best_umap_method.get('n_neighbors', '')) and
-                str(exp.get('min_dist', '')) == str(best_umap_method.get('min_dist', ''))):
-                umap_exp = exp
-        
-        if not pca_exp or not umap_exp:
-            # Debug: show what experiments we found
-            tqdm.write(f"⚠️  Skipping seed {seed}: Missing PCA or UMAP experiment")
-            tqdm.write(f"    Found {len(seed_experiments)} experiments for this seed:")
-            for exp in seed_experiments:
-                tqdm.write(f"      - {exp['representation']}-{exp['dr_method']} (nn={exp.get('n_neighbors')}, md={exp.get('min_dist')})")
-            tqdm.write(f"    Looking for: features-PCA and features-UMAP (nn={best_umap_method.get('n_neighbors')}, md={best_umap_method.get('min_dist')})")
-            continue
-        
-        # Load similarity space coordinates
-        pca_coords = load_similarity_space(workspace, pca_exp)
-        umap_coords = load_similarity_space(workspace, umap_exp)
-        
-        if pca_coords is None or umap_coords is None:
-            tqdm.write(f"⚠️  Skipping seed {seed}: Could not load coordinates")
-            continue
-        
-        # Create figure with 2 subplots (use Agg backend for faster non-interactive rendering)
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-        
-        # Plot PCA
-        plot_similarity_space(ax1, pca_coords, f"PCA (Seed {seed})")
-        
-        # Plot UMAP
-        umap_title = f"UMAP (nn={umap_exp['n_neighbors']}, md={umap_exp['min_dist']}, Seed {seed})"
-        plot_similarity_space(ax2, umap_coords, umap_title)
-        
-        plt.tight_layout()
-        
-        # Save figure with optimized settings
-        output_path = os.path.join(figures_dir, f'seed{seed}_pca_vs_umap.png')
-        plt.savefig(output_path, dpi=150, bbox_inches='tight', 
-                   facecolor='white', edgecolor='none')
-        plt.close(fig)  # Explicitly close the figure to free memory
-        
-        # Force garbage collection to prevent memory buildup
-        import gc
-        gc.collect()
-    
-    pbar.close()
-    print(f"\n✅ Visualization complete! Figures saved to: {figures_dir}\n")
-
-def load_similarity_space(workspace, experiment):
-    """Load similarity space coordinates and metadata for an experiment.
-    
-    Returns:
-        DataFrame with columns: ['coord_1', 'coord_2', 'category', 'molecule_id']
-        or None if loading fails
-    """
-    run_dir = os.path.join(workspace, experiment['run_dir'])
-    
-    # Find similarity space CSV file
-    # Pattern: TARGET/similarity_spaces/REPR/dim_N/*_similarity_space.csv
-    simspace_pattern = os.path.join(run_dir, '*/similarity_spaces/*/dim_*/*_similarity_space.csv')
-    simspace_files = glob.glob(simspace_pattern)
-    
-    if not simspace_files:
-        print(f"⚠️  No similarity space files found with pattern: {simspace_pattern}")
-        # Try alternative patterns to debug
-        alt_pattern1 = os.path.join(run_dir, '*/results/*/dim_*/*/*_similarity_space.csv')
-        alt_files1 = glob.glob(alt_pattern1)
-        if alt_files1:
-            print(f"    Found files in results directory: {alt_files1[0]}")
-            simspace_files = alt_files1
-        else:
-            # Try to find any similarity space CSV files
-            any_simspace_pattern = os.path.join(run_dir, '**/*_similarity_space.csv')
-            any_simspace = glob.glob(any_simspace_pattern, recursive=True)
-            if any_simspace:
-                print(f"    Found similarity space file elsewhere: {any_simspace[0]}")
-                simspace_files = any_simspace
-    
-    if not simspace_files:
-        return None
-    
-    try:
-        df = pd.read_csv(simspace_files[0], low_memory=False)
-        
-        # Identify coordinate columns (usually dim_1, dim_2 or similar)
-        coord_cols = [col for col in df.columns if 'dim' in col.lower() or 'coord' in col.lower() or 'component' in col.lower()]
-        if len(coord_cols) < 2:
-            # Try numeric columns
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            coord_cols = numeric_cols[:2] if len(numeric_cols) >= 2 else []
-        
-        if len(coord_cols) < 2:
-            print(f"⚠️  Could not identify coordinate columns in {simspace_files[0]}")
-            return None
-        
-        # Rename coordinate columns to standard names
-        df_viz = pd.DataFrame()
-        df_viz['coord_1'] = df[coord_cols[0]]
-        df_viz['coord_2'] = df[coord_cols[1]]
-        
-        # Identify molecule categories
-        # Strategy: Look for columns indicating molecule type or dataset
-        if 'molecule_id' in df.columns:
-            df_viz['molecule_id'] = df['molecule_id']
-        elif 'SMILES' in df.columns:
-            df_viz['molecule_id'] = df['SMILES']
-        else:
-            df_viz['molecule_id'] = df.index
-        
-        # Categorize molecules: ZINC (decoys), MF (molecular function), TARGETS (actives)
-        # Check for explicit category column
-        if 'category' in df.columns:
-            df_viz['category'] = df['category']
-        elif 'dataset' in df.columns:
-            df_viz['category'] = df['dataset']
-        elif 'source' in df.columns:
-            df_viz['category'] = df['source']
-        elif 'is_active' in df.columns:
-            # Binary active/inactive
-            df_viz['category'] = df['is_active'].apply(lambda x: 'TARGET' if x else 'ZINC')
-        elif 'label' in df.columns:
-            df_viz['category'] = df['label']
-        else:
-            # Try to infer from molecule IDs or other columns
-            # Look for columns with ZINC, MF, TARGET keywords
-            potential_cat_cols = [col for col in df.columns if any(kw in col.lower() for kw in ['zinc', 'mf', 'target', 'active', 'decoy'])]
-            if potential_cat_cols:
-                df_viz['category'] = df[potential_cat_cols[0]]
-            else:
-                # Default: assume all are ZINC (decoys)
-                df_viz['category'] = 'ZINC'
-                print(f"⚠️  Could not identify category column, assuming all ZINC")
-        
-        return df_viz
-        
-    except Exception as e:
-        print(f"⚠️  Error loading similarity space from {simspace_files[0]}: {e}")
-        return None
-
-def plot_similarity_space(ax, df, title):
-    """Plot similarity space coordinates with different colors for categories.
-    Optimized for performance with large datasets.
-    """
-    # Define colors for each category
-    color_map = {
-        'ZINC': '#3498db',      # Blue
-        'MF': '#2ecc71',        # Green
-        'TARGET': '#e74c3c',    # Red
-        'TARGETS': '#e74c3c',   # Red (plural)
-        'ACTIVE': '#e74c3c',    # Red (alternative name)
-        'DECOY': '#3498db',     # Blue (alternative name)
-        'INACTIVE': '#3498db'   # Blue (alternative name)
-    }
-    
-    # Normalize category names
-    df['category_norm'] = df['category'].astype(str).str.upper()
-    
-    # Plot each category separately, but in optimal order (largest first, targets last)
-    categories = df['category_norm'].unique()
-    
-    # Sort categories by size (largest first) but keep TARGETS for last (on top)
-    category_order = []
-    target_categories = []
-    for category in categories:
-        if category in ['TARGET', 'TARGETS', 'ACTIVE']:
-            target_categories.append(category)
-        else:
-            category_order.append(category)
-    
-    # Sort non-target categories by count (descending)
-    category_counts = df['category_norm'].value_counts()
-    category_order.sort(key=lambda x: category_counts.get(x, 0), reverse=True)
-    
-    # Add targets at the end (so they plot on top)
-    category_order.extend(target_categories)
-    
-    for category in category_order:
-        mask = df['category_norm'] == category
-        subset = df[mask]
-        
-        # Get color for this category
-        color = color_map.get(category, '#95a5a6')  # Gray as default
-        
-        # Set alpha and size based on category
-        if category in ['TARGET', 'TARGETS', 'ACTIVE']:
-            alpha = 0.8
-            size = 50
-            zorder = 3  # Plot on top
-            label = 'TARGETS'
-            rasterized = False  # Keep targets as vectors for clarity
-        elif category in ['MF']:
-            alpha = 0.5
-            size = 20
-            zorder = 2
-            label = 'MF Cloud'
-            rasterized = True  # Rasterize large point clouds for performance
-        else:  # ZINC/DECOY/INACTIVE
-            alpha = 0.3
-            size = 15
-            zorder = 1  # Plot on bottom
-            label = 'ZINC Decoys'
-            rasterized = True  # Rasterize large point clouds for performance
-        
-        # Use more efficient scatter plotting with rasterization for large datasets
-        ax.scatter(subset['coord_1'].values, subset['coord_2'].values, 
-                  c=color, alpha=alpha, s=size, 
-                  label=label, zorder=zorder, edgecolors='none',
-                  rasterized=rasterized)
-    
-    ax.set_xlabel('Dimension 1', fontsize=12)
-    ax.set_ylabel('Dimension 2', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    
-    # Add legend (avoid duplicates)
-    handles, labels = ax.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax.legend(by_label.values(), by_label.keys(), loc='best', framealpha=0.9)
 
 def main():
     parser = argparse.ArgumentParser(description='Check hyperparameter sweep status')
@@ -764,23 +515,10 @@ def main():
                             best_umap['min_dist'] = part[2:]
                     break
             
-            if best_umap:
-                # Create output directory for this run
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_dir = os.path.join(workspace, f'status_check_outputs_{timestamp}')
-                os.makedirs(output_dir, exist_ok=True)
-                
-                # Generate visualizations
-                try:
-                    visualize_pca_vs_umap(workspace, completed, best_umap, output_dir)
-                except Exception as e:
-                    print(f"⚠️  Error generating visualizations: {e}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                print("⚠️  No UMAP experiments found for visualization")
-                output_dir = workspace  # Fallback to workspace directory
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Create output directory for this run
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = os.path.join(workspace, f'status_check_outputs_{timestamp}')
+            os.makedirs(output_dir, exist_ok=True)
         else:
             print("No ranking metrics found in completed experiments.")
             print()
