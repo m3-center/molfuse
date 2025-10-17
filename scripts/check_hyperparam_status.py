@@ -694,6 +694,50 @@ def main():
                 print(f"\n  ... and {len(experiments) - 5} more with same error type")
     
     # ============================================================================
+    # COMPLETE LIST OF FAILED EXPERIMENTS (ONE LINE PER EXPERIMENT)
+    # ============================================================================
+    if failed:
+        print("=" * 80)
+        print("COMPLETE LIST OF FAILED EXPERIMENTS (for easy restart)")
+        print("=" * 80)
+        print(f"Total failed: {len(failed)}\n")
+        
+        # Header
+        print(f"{'Method':<20} {'Input':<15} {'Hyperparams':<25} {'Seed':<6} {'Error Type':<30} {'Config/Log'}")
+        print("-" * 140)
+        
+        for exp in sorted(failed, key=lambda x: (x['dr_method'], x['representation'], x['seed'])):
+            # Build method name
+            method = exp['dr_method']
+            
+            # Input type
+            input_type = exp['representation']
+            
+            # Hyperparameters (if UMAP)
+            if exp.get('n_neighbors') and exp.get('min_dist') is not None:
+                hyperparams = f"nn={exp['n_neighbors']}, md={exp['min_dist']}"
+            elif exp.get('dim'):
+                hyperparams = f"dim={exp['dim']}"
+            else:
+                hyperparams = "-"
+            
+            # Seed
+            seed = str(exp['seed'])
+            
+            # Error type (truncated if too long)
+            error_type = exp['error_type'][:28] if exp['error_type'] else "Unknown"
+            
+            # Config/log file (extract from run_dir or log_file)
+            if exp.get('log_file'):
+                config_file = exp['log_file']
+            else:
+                config_file = os.path.basename(exp['run_dir'])
+            
+            print(f"{method:<20} {input_type:<15} {hyperparams:<25} {seed:<6} {error_type:<30} {config_file}")
+        
+        print()
+    
+    # ============================================================================
     # EXPORT RESULTS AND ORGANIZE OUTPUT
     # ============================================================================
     # Create output directory if not already created
