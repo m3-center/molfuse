@@ -192,8 +192,27 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                     log_content = f.read()
                     log_content_lower = log_content.lower()
                     
-                    # Check for OOM errors (case-insensitive)
-                    if 'oom' in log_content_lower or 'out of memory' in log_content_lower or 'memoryerror' in log_content_lower:
+                    # Check for return code -9 (SIGKILL - usually OOM)
+                    if 'return code -9' in log_content_lower or 'failed with return code -9' in log_content_lower:
+                        lines = log_content.split('\n')
+                        error_lines = []
+                        # Find lines with return code -9
+                        for i, line in enumerate(lines):
+                            if 'return code -9' in line.lower():
+                                # Capture context around error (5 lines before, 5 after)
+                                start = max(0, i - 5)
+                                end = min(len(lines), i + 6)
+                                error_lines = lines[start:end]
+                                break
+                        
+                        if error_lines:
+                            status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
+                            status['error_type'] = 'Process Killed (return code -9, likely OOM)'
+                            if debug_log:
+                                debug_log.write(f"❌ Process killed (return code -9) detected - likely OOM\n")
+                    
+                    # Check for explicit OOM errors
+                    elif 'oom' in log_content_lower or 'out of memory' in log_content_lower or 'memoryerror' in log_content_lower:
                         lines = log_content.split('\n')
                         error_lines = []
                         # Find lines around OOM error
@@ -210,6 +229,25 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                             status['error_type'] = 'Out of Memory (OOM)'
                             if debug_log:
                                 debug_log.write(f"❌ OOM Error detected in log\n")
+                    
+                    # Check for FAILED messages (generic failure)
+                    elif ' FAILED ' in log_content or ' failed ' in log_content_lower:
+                        lines = log_content.split('\n')
+                        error_lines = []
+                        # Find lines with FAILED
+                        for i, line in enumerate(lines):
+                            if ' failed ' in line.lower():
+                                # Capture context around error (3 lines before, 3 after)
+                                start = max(0, i - 3)
+                                end = min(len(lines), i + 4)
+                                error_lines = lines[start:end]
+                                break
+                        
+                        if error_lines:
+                            status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
+                            status['error_type'] = 'Task Failed'
+                            if debug_log:
+                                debug_log.write(f"❌ Task failure detected in log\n")
                     
                     # Check for other fatal errors (that stopped execution)
                     elif 'ERROR' in log_content or 'Error' in log_content or 'Traceback' in log_content:
