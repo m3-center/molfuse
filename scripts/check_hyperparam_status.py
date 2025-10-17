@@ -291,8 +291,8 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                             if 'cuda' in error_text or 'gpu' in error_text or 'numba.cuda' in error_text:
                                 if debug_log:
                                     debug_log.write(f"⚠️  CUDA warning detected but IGNORED (fallback to CPU)\n")
-                                # Don't set error status for CUDA warnings
-                                pass
+                                # Don't set error status for CUDA warnings - explicitly clear error_lines
+                                error_lines = []
                             elif 'filenotfounderror' in error_text or 'no such file' in error_text:
                                 status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
                                 if 'model' in error_text:
@@ -307,7 +307,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                             elif 'keyerror' in error_text:
                                 status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Key Error'
-                            else:
+                            elif error_lines:  # Only set error if we still have error lines after filtering
                                 status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Other Error'
                             
