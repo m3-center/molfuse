@@ -673,7 +673,7 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
                     colors_list.append(box_colors[len(data_to_plot) - 1])
         
         if data_to_plot:
-            bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True,
+            bp = ax.boxplot(data_to_plot, tick_labels=labels, patch_artist=True,
                            showmeans=True, meanline=True)
             
             # Color boxes
@@ -706,10 +706,15 @@ def plot_dimensionality_impact(df_results, output_dir):
         logging.warning("No dimension data found")
         return
     
+    # Get valid dimensions (excluding None/NaN)
+    dimensions = sorted([d for d in df_results['dimension'].unique() if d is not None and not pd.isna(d)])
+    
+    if len(dimensions) == 0:
+        logging.warning("No valid dimension data found")
+        return
+    
     # Plot 1: EF by dimension for each potency tier
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-    
-    dimensions = sorted(df_results['dimension'].unique())
     
     for idx, tier in enumerate(TIER_ORDER):
         ax = axes[idx]
