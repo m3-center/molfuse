@@ -822,7 +822,10 @@ def plot_pca_vs_umap_comparison(df_results, output_dir):
 
 
 def plot_dimensionality_impact(df_results, output_dir):
-    """Analyze impact of dimensionality on potency-stratified enrichment."""
+    """Analyze impact of dimensionality on potency-stratified enrichment.
+    
+    For UMAP, only uses the best hyperparameters for each representation type.
+    """
     logging.info("Generating dimensionality impact plots...")
     
     if 'dimension' not in df_results.columns:
@@ -836,24 +839,91 @@ def plot_dimensionality_impact(df_results, output_dir):
         logging.warning("No valid dimension data found")
         return
     
-    # Plot 1: EF by dimension for each potency tier
+    # =========================================================================
+    # BEST UMAP HYPERPARAMETER SELECTION (same as plot_pca_vs_umap_comparison)
+    # =========================================================================
+    best_umap_configs = {}
+    
+    # Find best UMAP-Euclidean (features) hyperparameters
+    df_umap_euc = df_results[
+        (df_results['dr_method'] == 'UMAP-Euclidean') & 
+        (df_results['representation'] == 'features')
+    ]
+    if not df_umap_euc.empty and 'n_neighbors' in df_umap_euc.columns and 'High_EF' in df_umap_euc.columns:
+        grouped = df_umap_euc.groupby(['n_neighbors', 'min_dist'])['High_EF'].mean()
+        if not grouped.empty:
+            best_params = grouped.idxmax()
+            best_umap_configs['UMAP-Euclidean-features'] = best_params
+            logging.info(f"Best UMAP-Euclidean (features) for dimensionality plot: {best_params}")
+    
+    # Find best UMAP-Jaccard (fingerprints) hyperparameters
+    df_umap_jac = df_results[
+        (df_results['dr_method'] == 'UMAP-Jaccard') & 
+        (df_results['representation'] == 'fingerprints')
+    ]
+    if not df_umap_jac.empty and 'n_neighbors' in df_umap_jac.columns and 'High_EF' in df_umap_jac.columns:
+        grouped = df_umap_jac.groupby(['n_neighbors', 'min_dist'])['High_EF'].mean()
+        if not grouped.empty:
+            best_params = grouped.idxmax()
+            best_umap_configs['UMAP-Jaccard-fingerprints'] = best_params
+            logging.info(f"Best UMAP-Jaccard (fingerprints) for dimensionality plot: {best_params}")
+    
+    # Filter df_results to include only best UMAP hyperparameters
+    df_filtered_list = []
+    
+    # Add all PCA results
+    df_pca = df_results[df_results['dr_method'] == 'PCA']
+    if not df_pca.empty:
+        df_filtered_list.append(df_pca)
+    
+    # Add best UMAP-Euclidean (features)
+    if 'UMAP-Euclidean-features' in best_umap_configs:
+        nn, md = best_umap_configs['UMAP-Euclidean-features']
+        df_best_umap_euc = df_results[
+            (df_results['dr_method'] == 'UMAP-Euclidean') &
+            (df_results['representation'] == 'features') &
+            (df_results['n_neighbors'] == nn) &
+            (df_results['min_dist'] == md)
+        ]
+        if not df_best_umap_euc.empty:
+            df_filtered_list.append(df_best_umap_euc)
+    
+    # Add best UMAP-Jaccard (fingerprints)
+    if 'UMAP-Jaccard-fingerprints' in best_umap_configs:
+        nn, md = best_umap_configs['UMAP-Jaccard-fingerprints']
+        df_best_umap_jac = df_results[
+            (df_results['dr_method'] == 'UMAP-Jaccard') &
+            (df_results['representation'] == 'fingerprints') &
+            (df_results['n_neighbors'] == nn) &
+            (df_results['min_dist'] == md)
+        ]
+        if not df_best_umap_jac.empty:
+            df_filtered_list.append(df_best_umap_jac)
+    
+    if not df_filtered_list:
+        logging.warning("No data after filtering for best hyperparameters")
+        return
+    
+    df_filtered = pd.concat(df_filtered_list, ignore_index=True)
+    
+    # Plot 1: EF by dimension for each potency tier (BEST HYPERPARAMETERS ONLY)
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
     
     for idx, tier in enumerate(TIER_ORDER):
         ax = axes[idx]
         ef_col = f'{tier}_EF'
         
-        if ef_col not in df_results.columns:
+        if ef_col not in df_filtered.columns:
             continue
         
         # Separate PCA and UMAP
         for method in ['PCA', 'UMAP']:
             if method == 'PCA':
-                df_method = df_results[df_results['dr_method'] == 'PCA']
+                df_method = df_filtered[df_filtered['dr_method'] == 'PCA']
                 marker, color, label = 'o', '#3498db', 'PCA'
             else:
-                df_method = df_results[df_results['dr_method'].str.contains('UMAP', na=False)]
-                marker, color, label = 's', '#e74c3c', 'UMAP'
+                df_method = df_filtered[df_filtered['dr_method'].str.contains('UMAP', na=False)]
+                marker, color, label = 's', '#e74c3c', 'UMAP (Best Params)'
             
             if df_method.empty:
                 continue
@@ -874,22 +944,22 @@ def plot_dimensionality_impact(df_results, output_dir):
         ax.legend()
         ax.grid(True, alpha=0.3)
     
-    plt.suptitle('Impact of Dimensionality on Potency-Stratified Enrichment',
+    plt.suptitle('Impact of Dimensionality on Potency-Stratified Enrichment\n(UMAP: Best Hyperparameters Only)',
                 fontsize=14, fontweight='bold')
     plt.tight_layout()
     save_figure(fig, output_dir, 'dimensionality_impact_by_tier')
     plt.close()
     
-    # Plot 2: Heatmap showing method×dimension×tier performance
+    # Plot 2: Heatmap showing method×dimension×tier performance (BEST HYPERPARAMETERS ONLY)
     methods_for_heatmap = []
     for method in ['PCA', 'UMAP']:
         for dim in dimensions:
             if method == 'PCA':
-                df_subset = df_results[(df_results['dr_method'] == 'PCA') & 
-                                      (df_results['dimension'] == dim)]
+                df_subset = df_filtered[(df_filtered['dr_method'] == 'PCA') & 
+                                      (df_filtered['dimension'] == dim)]
             else:
-                df_subset = df_results[(df_results['dr_method'].str.contains('UMAP', na=False)) & 
-                                      (df_results['dimension'] == dim)]
+                df_subset = df_filtered[(df_filtered['dr_method'].str.contains('UMAP', na=False)) & 
+                                      (df_filtered['dimension'] == dim)]
             
             if not df_subset.empty:
                 row_data = {'Method': method, 'Dim': dim}
@@ -926,7 +996,7 @@ def plot_dimensionality_impact(df_results, output_dir):
                     text = ax.text(j, i, f'{val:.1f}',
                                  ha="center", va="center", color="black", fontsize=10)
         
-        ax.set_title('Method × Dimensionality × Potency Tier Performance',
+        ax.set_title('Method × Dimensionality × Potency Tier Performance\n(UMAP: Best Hyperparameters Only)',
                     fontsize=14, fontweight='bold')
         ax.set_xlabel('Potency Tier', fontsize=12, fontweight='bold')
         ax.set_ylabel('Method-Dimension', fontsize=12, fontweight='bold')
@@ -935,7 +1005,7 @@ def plot_dimensionality_impact(df_results, output_dir):
         save_figure(fig, output_dir, 'method_dimension_tier_heatmap')
         plt.close()
     
-    # Plot 3: Dimensionality preference by tier (does optimal dim change by tier?)
+    # Plot 3: Dimensionality preference by tier - using BEST HYPERPARAMETERS ONLY
     fig, ax = plt.subplots(figsize=(12, 6))
     
     x = np.arange(len(dimensions))
@@ -943,12 +1013,12 @@ def plot_dimensionality_impact(df_results, output_dir):
     
     for idx, tier in enumerate(TIER_ORDER):
         ef_col = f'{tier}_EF'
-        if ef_col not in df_results.columns:
+        if ef_col not in df_filtered.columns:
             continue
         
         means = []
         for dim in dimensions:
-            dim_data = df_results[df_results['dimension'] == dim][ef_col]
+            dim_data = df_filtered[df_filtered['dimension'] == dim][ef_col]
             means.append(dim_data.mean() if not dim_data.empty else 0)
         
         offset = (idx - 1) * width
@@ -962,8 +1032,8 @@ def plot_dimensionality_impact(df_results, output_dir):
                        f'{mean_val:.1f}', ha='center', va='bottom', fontsize=8)
     
     ax.set_xlabel('Dimensionality', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Mean EF@1% (All Methods)', fontsize=12, fontweight='bold')
-    ax.set_title('Optimal Dimensionality by Potency Tier',
+    ax.set_ylabel('Mean EF@1% (PCA + Best UMAP)', fontsize=12, fontweight='bold')
+    ax.set_title('Optimal Dimensionality by Potency Tier\n(UMAP: Best Hyperparameters Only)',
                 fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{d}D' for d in dimensions])
