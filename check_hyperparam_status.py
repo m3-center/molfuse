@@ -18,6 +18,12 @@ import glob
 import argparse
 from collections import defaultdict
 from datetime import datetime
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for faster rendering
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm  # Progress bars
 
 def extract_config_info(run_dir):
     """Extract configuration info from run directory name or config file."""
@@ -31,13 +37,19 @@ def extract_config_info(run_dir):
         'representation': None,
         'dr_method': None,
         'n_neighbors': None,
-        'min_dist': None
+        'min_dist': None,
+        'dim': None  # Add dimensionality extraction
     }
     
     # Extract seed
     for part in parts:
         if part.startswith('seed'):
             info['seed'] = part.replace('seed', '')
+    
+    # Extract dimensionality (dim2, dim5, dim10, etc.)
+    for part in parts:
+        if part.startswith('dim') and len(part) > 3:
+            info['dim'] = part[3:]  # Extract number after 'dim'
     
     # Extract representation
     if 'features' in run_name:
@@ -76,6 +88,11 @@ def extract_config_info(run_dir):
                     info['dr_method'] = method_config.get('short_name', info['dr_method'])
                     info['n_neighbors'] = method_config.get('n_neighbors', info['n_neighbors'])
                     info['min_dist'] = method_config.get('min_dist', info['min_dist'])
+                    # Extract dimensionality from config if not already found
+                    if not info['dim']:
+                        simspace_dim = config.get('global_settings', {}).get('simspace_dim')
+                        if simspace_dim:
+                            info['dim'] = str(simspace_dim)
         except:
             pass
     
@@ -107,12 +124,16 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
     # ============================================================================
     # STEP 1: Check for output files (PRIMARY success indicator)
     # ============================================================================
-    results_pattern = os.path.join(run_dir, '*/results/*/*/dim_*/*')
+    # Pattern: run_seed*/TARGET/results/REPR/dim_N/METHOD/
+    # Example: run_seed46.../TyrosineProteinKinaseABL1_P00519/results/features/dim_2/PCA/
+    results_pattern = os.path.join(run_dir, '*/results/*/dim_*/*')
     results_dirs = glob.glob(results_pattern)
     
     if debug_log:
         debug_log.write(f"Results pattern: {results_pattern}\n")
         debug_log.write(f"Found {len(results_dirs)} result directories\n")
+        if results_dirs:
+            debug_log.write(f"Example: {results_dirs[0]}\n")
     
     if results_dirs:
         status['has_results'] = True
@@ -191,11 +212,17 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                     in_traceback = False
                         
                         if error_lines:
-                            status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
-                            
-                            # Categorize error type (ignore CUDA warnings if job completed)
+                            # Categorize error type
                             error_text = ' '.join(error_lines).lower()
-                            if 'filenotfounderror' in error_text or 'no such file' in error_text:
+                            
+                            # IGNORE CUDA errors - they are warnings, code falls back to CPU
+                            if 'cuda' in error_text or 'gpu' in error_text or 'numba.cuda' in error_text:
+                                if debug_log:
+                                    debug_log.write(f"⚠️  CUDA warning detected but IGNORED (fallback to CPU)\n")
+                                # Don't set error status for CUDA warnings
+                                pass
+                            elif 'filenotfounderror' in error_text or 'no such file' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
                                 if 'model' in error_text:
                                     status['error_type'] = 'Missing Model File'
                                 elif 'scaler' in error_text:
@@ -203,19 +230,19 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                 else:
                                     status['error_type'] = 'File Not Found'
                             elif 'memoryerror' in error_text or 'out of memory' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Out of Memory'
                             elif 'valueerror' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Value Error'
                             elif 'keyerror' in error_text:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Key Error'
-                            elif 'cuda' in error_text or 'gpu' in error_text:
-                                # Only mark as CUDA error if it actually failed
-                                # (CUDA warnings with CPU fallback are OK)
-                                status['error_type'] = 'GPU/CUDA Error'
                             else:
+                                status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Other Error'
                             
-                            if debug_log:
+                            if status['error_type'] and debug_log:
                                 debug_log.write(f"❌ Error detected in log: {status['error_type']}\n")
             except Exception as e:
                 if debug_log:
@@ -240,6 +267,270 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                        f"error_type={status['error_type']}\n")
     
     return status
+
+def visualize_pca_vs_umap(workspace, completed_results, best_umap_method, output_dir):
+    """Generate scatter plots comparing PCA vs best UMAP for each seed.
+    
+    Args:
+        workspace: Workspace directory path
+        completed_results: List of completed experiment results
+        best_umap_method: Dict with best UMAP method info
+        output_dir: Output directory for figures
+    """
+    # Group results by seed
+    by_seed = defaultdict(list)
+    for r in completed_results:
+        if r['seed']:
+            by_seed[r['seed']].append(r)
+    
+    print(f"\n{'='*80}")
+    print(f"GENERATING VISUALIZATION FIGURES")
+    print(f"{'='*80}")
+    print(f"Output directory: {output_dir}")
+    print(f"Best UMAP method: {best_umap_method['method']}")
+    print(f"Seeds to visualize: {sorted(by_seed.keys())}")
+    print()
+    
+    figures_dir = os.path.join(output_dir, 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    
+    # Add progress bar for figure generation
+    seeds_to_plot = sorted(by_seed.keys())
+    pbar = tqdm(seeds_to_plot, desc="Generating figures", unit="seed")
+    
+    for seed in pbar:
+        pbar.set_description(f"Generating figures for seed {seed}")
+        seed_experiments = by_seed[seed]
+        
+        # Find PCA and best UMAP experiments for this seed
+        pca_exp = None
+        umap_exp = None
+        
+        for exp in seed_experiments:
+            # Find features-PCA experiment
+            if exp['representation'] == 'features' and exp['dr_method'] == 'PCA':
+                pca_exp = exp
+            
+            # Find best UMAP experiment (matching method from best_umap_method)
+            # More flexible matching - just check that UMAP is in method name and hyperparams match
+            if (exp['representation'] == 'features' and 
+                'UMAP' in exp.get('dr_method', '') and
+                str(exp.get('n_neighbors', '')) == str(best_umap_method.get('n_neighbors', '')) and
+                str(exp.get('min_dist', '')) == str(best_umap_method.get('min_dist', ''))):
+                umap_exp = exp
+        
+        if not pca_exp or not umap_exp:
+            # Debug: show what experiments we found
+            tqdm.write(f"⚠️  Skipping seed {seed}: Missing PCA or UMAP experiment")
+            tqdm.write(f"    Found {len(seed_experiments)} experiments for this seed:")
+            for exp in seed_experiments:
+                tqdm.write(f"      - {exp['representation']}-{exp['dr_method']} (nn={exp.get('n_neighbors')}, md={exp.get('min_dist')})")
+            tqdm.write(f"    Looking for: features-PCA and features-UMAP (nn={best_umap_method.get('n_neighbors')}, md={best_umap_method.get('min_dist')})")
+            continue
+        
+        # Load similarity space coordinates
+        pca_coords = load_similarity_space(workspace, pca_exp)
+        umap_coords = load_similarity_space(workspace, umap_exp)
+        
+        if pca_coords is None or umap_coords is None:
+            tqdm.write(f"⚠️  Skipping seed {seed}: Could not load coordinates")
+            continue
+        
+        # Create figure with 2 subplots (use Agg backend for faster non-interactive rendering)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        
+        # Plot PCA
+        plot_similarity_space(ax1, pca_coords, f"PCA (Seed {seed})")
+        
+        # Plot UMAP
+        umap_title = f"UMAP (nn={umap_exp['n_neighbors']}, md={umap_exp['min_dist']}, Seed {seed})"
+        plot_similarity_space(ax2, umap_coords, umap_title)
+        
+        plt.tight_layout()
+        
+        # Save figure with optimized settings
+        output_path = os.path.join(figures_dir, f'seed{seed}_pca_vs_umap.png')
+        plt.savefig(output_path, dpi=150, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
+        plt.close(fig)  # Explicitly close the figure to free memory
+        
+        # Force garbage collection to prevent memory buildup
+        import gc
+        gc.collect()
+    
+    pbar.close()
+    print(f"\n✅ Visualization complete! Figures saved to: {figures_dir}\n")
+
+def load_similarity_space(workspace, experiment):
+    """Load similarity space coordinates and metadata for an experiment.
+    
+    Returns:
+        DataFrame with columns: ['coord_1', 'coord_2', 'category', 'molecule_id']
+        or None if loading fails
+    """
+    run_dir = os.path.join(workspace, experiment['run_dir'])
+    
+    # Find similarity space CSV file
+    # Pattern: TARGET/similarity_spaces/REPR/dim_N/*_similarity_space.csv
+    simspace_pattern = os.path.join(run_dir, '*/similarity_spaces/*/dim_*/*_similarity_space.csv')
+    simspace_files = glob.glob(simspace_pattern)
+    
+    if not simspace_files:
+        print(f"⚠️  No similarity space files found with pattern: {simspace_pattern}")
+        # Try alternative patterns to debug
+        alt_pattern1 = os.path.join(run_dir, '*/results/*/dim_*/*/*_similarity_space.csv')
+        alt_files1 = glob.glob(alt_pattern1)
+        if alt_files1:
+            print(f"    Found files in results directory: {alt_files1[0]}")
+            simspace_files = alt_files1
+        else:
+            # Try to find any similarity space CSV files
+            any_simspace_pattern = os.path.join(run_dir, '**/*_similarity_space.csv')
+            any_simspace = glob.glob(any_simspace_pattern, recursive=True)
+            if any_simspace:
+                print(f"    Found similarity space file elsewhere: {any_simspace[0]}")
+                simspace_files = any_simspace
+    
+    if not simspace_files:
+        return None
+    
+    try:
+        df = pd.read_csv(simspace_files[0], low_memory=False)
+        
+        # Identify coordinate columns (usually dim_1, dim_2 or similar)
+        coord_cols = [col for col in df.columns if 'dim' in col.lower() or 'coord' in col.lower() or 'component' in col.lower()]
+        if len(coord_cols) < 2:
+            # Try numeric columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            coord_cols = numeric_cols[:2] if len(numeric_cols) >= 2 else []
+        
+        if len(coord_cols) < 2:
+            print(f"⚠️  Could not identify coordinate columns in {simspace_files[0]}")
+            return None
+        
+        # Rename coordinate columns to standard names
+        df_viz = pd.DataFrame()
+        df_viz['coord_1'] = df[coord_cols[0]]
+        df_viz['coord_2'] = df[coord_cols[1]]
+        
+        # Identify molecule categories
+        # Strategy: Look for columns indicating molecule type or dataset
+        if 'molecule_id' in df.columns:
+            df_viz['molecule_id'] = df['molecule_id']
+        elif 'SMILES' in df.columns:
+            df_viz['molecule_id'] = df['SMILES']
+        else:
+            df_viz['molecule_id'] = df.index
+        
+        # Categorize molecules: ZINC (decoys), MF (molecular function), TARGETS (actives)
+        # Check for explicit category column
+        if 'category' in df.columns:
+            df_viz['category'] = df['category']
+        elif 'dataset' in df.columns:
+            df_viz['category'] = df['dataset']
+        elif 'source' in df.columns:
+            df_viz['category'] = df['source']
+        elif 'is_active' in df.columns:
+            # Binary active/inactive
+            df_viz['category'] = df['is_active'].apply(lambda x: 'TARGET' if x else 'ZINC')
+        elif 'label' in df.columns:
+            df_viz['category'] = df['label']
+        else:
+            # Try to infer from molecule IDs or other columns
+            # Look for columns with ZINC, MF, TARGET keywords
+            potential_cat_cols = [col for col in df.columns if any(kw in col.lower() for kw in ['zinc', 'mf', 'target', 'active', 'decoy'])]
+            if potential_cat_cols:
+                df_viz['category'] = df[potential_cat_cols[0]]
+            else:
+                # Default: assume all are ZINC (decoys)
+                df_viz['category'] = 'ZINC'
+                print(f"⚠️  Could not identify category column, assuming all ZINC")
+        
+        return df_viz
+        
+    except Exception as e:
+        print(f"⚠️  Error loading similarity space from {simspace_files[0]}: {e}")
+        return None
+
+def plot_similarity_space(ax, df, title):
+    """Plot similarity space coordinates with different colors for categories.
+    Optimized for performance with large datasets.
+    """
+    # Define colors for each category
+    color_map = {
+        'ZINC': '#3498db',      # Blue
+        'MF': '#2ecc71',        # Green
+        'TARGET': '#e74c3c',    # Red
+        'TARGETS': '#e74c3c',   # Red (plural)
+        'ACTIVE': '#e74c3c',    # Red (alternative name)
+        'DECOY': '#3498db',     # Blue (alternative name)
+        'INACTIVE': '#3498db'   # Blue (alternative name)
+    }
+    
+    # Normalize category names
+    df['category_norm'] = df['category'].astype(str).str.upper()
+    
+    # Plot each category separately, but in optimal order (largest first, targets last)
+    categories = df['category_norm'].unique()
+    
+    # Sort categories by size (largest first) but keep TARGETS for last (on top)
+    category_order = []
+    target_categories = []
+    for category in categories:
+        if category in ['TARGET', 'TARGETS', 'ACTIVE']:
+            target_categories.append(category)
+        else:
+            category_order.append(category)
+    
+    # Sort non-target categories by count (descending)
+    category_counts = df['category_norm'].value_counts()
+    category_order.sort(key=lambda x: category_counts.get(x, 0), reverse=True)
+    
+    # Add targets at the end (so they plot on top)
+    category_order.extend(target_categories)
+    
+    for category in category_order:
+        mask = df['category_norm'] == category
+        subset = df[mask]
+        
+        # Get color for this category
+        color = color_map.get(category, '#95a5a6')  # Gray as default
+        
+        # Set alpha and size based on category
+        if category in ['TARGET', 'TARGETS', 'ACTIVE']:
+            alpha = 0.8
+            size = 50
+            zorder = 3  # Plot on top
+            label = 'TARGETS'
+            rasterized = False  # Keep targets as vectors for clarity
+        elif category in ['MF']:
+            alpha = 0.5
+            size = 20
+            zorder = 2
+            label = 'MF Cloud'
+            rasterized = True  # Rasterize large point clouds for performance
+        else:  # ZINC/DECOY/INACTIVE
+            alpha = 0.3
+            size = 15
+            zorder = 1  # Plot on bottom
+            label = 'ZINC Decoys'
+            rasterized = True  # Rasterize large point clouds for performance
+        
+        # Use more efficient scatter plotting with rasterization for large datasets
+        ax.scatter(subset['coord_1'].values, subset['coord_2'].values, 
+                  c=color, alpha=alpha, s=size, 
+                  label=label, zorder=zorder, edgecolors='none',
+                  rasterized=rasterized)
+    
+    ax.set_xlabel('Dimension 1', fontsize=12)
+    ax.set_ylabel('Dimension 2', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    # Add legend (avoid duplicates)
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys(), loc='best', framealpha=0.9)
 
 def main():
     parser = argparse.ArgumentParser(description='Check hyperparameter sweep status')
@@ -281,9 +572,10 @@ def main():
         debug_log.write(f"Workspace: {workspace}\n")
         debug_log.write(f"Total run directories: {len(run_dirs)}\n")
         
-        # Analyze each run
+        # Analyze each run with progress bar
         results = []
-        for run_dir in sorted(run_dirs):
+        print("Checking experiment status...")
+        for run_dir in tqdm(sorted(run_dirs), desc="Analyzing experiments", unit="exp"):
             config_info = extract_config_info(run_dir)
             status = check_experiment_status(run_dir, workspace, debug_log)
             
@@ -334,6 +626,171 @@ def main():
         print(f"{key:<30} {stats['completed']:>10} {stats['failed']:>10} {stats['incomplete']:>10}")
     print()
     
+    # ============================================================================
+    # PRELIMINARY RANKING METRICS (EF@1% averaged across seeds)
+    # ============================================================================
+    if completed:
+        print("=" * 80)
+        print("PRELIMINARY RANKING METRICS (Completed Experiments Only)")
+        print("=" * 80)
+        
+        # Collect EF@1% scores for each method, organized by dimensionality
+        import csv as csv_module
+        metrics_by_method_and_dim = defaultdict(lambda: defaultdict(list))
+        
+        print("\nCollecting metrics from experiment results...")
+        for r in tqdm(completed, desc="Reading metrics files", unit="exp"):
+            # Find metrics file for this run
+            run_dir = os.path.join(workspace, r['run_dir'])
+            # Pattern: TARGET/results/REPR/dim_N/METHOD/*_ranking_metrics.csv
+            metrics_pattern = os.path.join(run_dir, '*/results/*/dim_*/*/*_ranking_metrics.csv')
+            metrics_files = glob.glob(metrics_pattern)
+            
+            if metrics_files:
+                try:
+                    with open(metrics_files[0], 'r') as f:
+                        reader = csv_module.DictReader(f)
+                        for row in reader:
+                            # Try different column name variations
+                            ef_key = None
+                            if 'ef_1%' in row:
+                                ef_key = 'ef_1%'
+                            elif 'EF@1%' in row:
+                                ef_key = 'EF@1%'
+                            elif 'EF@1' in row:
+                                ef_key = 'EF@1'
+                            elif 'ef_1' in row:
+                                ef_key = 'ef_1'
+                            
+                            if ef_key:
+                                ef_value = float(row[ef_key])
+                                
+                                # Get dimensionality
+                                dim = r.get('dim', 'unknown')
+                                
+                                # Create method key with hyperparameters
+                                if r['n_neighbors'] and r['min_dist']:
+                                    method_key = f"{r['representation']}-{r['dr_method']}-nn{r['n_neighbors']}-md{r['min_dist']}"
+                                else:
+                                    method_key = f"{r['representation']}-{r['dr_method']}"
+                                
+                                metrics_by_method_and_dim[dim][method_key].append(ef_value)
+                                break
+                except Exception as e:
+                    pass  # Skip if can't read metrics
+        
+        print()  # Newline after progress bar
+        
+        if metrics_by_method_and_dim:
+            # Calculate averages and display BY DIMENSIONALITY
+            import statistics
+            
+            # Get all unique dimensions and sort them
+            all_dims = sorted(metrics_by_method_and_dim.keys(), 
+                            key=lambda x: int(x) if x.isdigit() else 999)
+            
+            for dim in all_dims:
+                print(f"\n{'='*80}")
+                print(f"DIMENSIONALITY: {dim}D")
+                print(f"{'='*80}")
+                
+                metrics_by_method = metrics_by_method_and_dim[dim]
+                results_with_metrics = []
+                
+                for method_key, ef_values in metrics_by_method.items():
+                    avg_ef = statistics.mean(ef_values)
+                    std_ef = statistics.stdev(ef_values) if len(ef_values) > 1 else 0.0
+                    results_with_metrics.append({
+                        'method': method_key,
+                        'avg_ef': avg_ef,
+                        'std_ef': std_ef,
+                        'n_seeds': len(ef_values),
+                        'dim': dim
+                    })
+                
+                # Sort by average EF@1% (descending)
+                results_with_metrics.sort(key=lambda x: x['avg_ef'], reverse=True)
+                
+                print(f"{'Method':<60} {'EF@1%':>15} {'N Seeds':>8}")
+                print("-" * 80)
+                for result in results_with_metrics:
+                    if result['std_ef'] > 0:
+                        ef_str = f"{result['avg_ef']:.2f} ± {result['std_ef']:.2f}"
+                    else:
+                        ef_str = f"{result['avg_ef']:.2f}"
+                    print(f"{result['method']:<60} {ef_str:>15} {result['n_seeds']:>8}")
+            
+            print()  # Final newline
+            
+            # ========================================================================
+            # GENERATE VISUALIZATION FIGURES
+            # ========================================================================
+            # Find best UMAP method from features representation (across all dims)
+            # Collect all results across all dimensions for finding best UMAP
+            all_results_with_metrics = []
+            for dim in all_dims:
+                metrics_by_method = metrics_by_method_and_dim[dim]
+                for method_key, ef_values in metrics_by_method.items():
+                    import statistics
+                    avg_ef = statistics.mean(ef_values)
+                    std_ef = statistics.stdev(ef_values) if len(ef_values) > 1 else 0.0
+                    all_results_with_metrics.append({
+                        'method': method_key,
+                        'avg_ef': avg_ef,
+                        'std_ef': std_ef,
+                        'n_seeds': len(ef_values),
+                        'dim': dim
+                    })
+            
+            all_results_with_metrics.sort(key=lambda x: x['avg_ef'], reverse=True)
+            
+            best_umap = None
+            for result in all_results_with_metrics:
+                method = result['method']
+                if 'features' in method and 'UMAP' in method:
+                    # Parse method string to extract details
+                    parts = method.split('-')
+                    best_umap = {
+                        'method': method,
+                        'representation': 'features',
+                        'dr_method': parts[1] if len(parts) > 1 else 'UMAP',
+                        'avg_ef': result['avg_ef']
+                    }
+                    # Extract hyperparameters
+                    for part in parts:
+                        if part.startswith('nn'):
+                            best_umap['n_neighbors'] = part[2:]
+                        elif part.startswith('md'):
+                            best_umap['min_dist'] = part[2:]
+                    break
+            
+            if best_umap:
+                # Create output directory for this run
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_dir = os.path.join(workspace, f'status_check_outputs_{timestamp}')
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Generate visualizations
+                try:
+                    visualize_pca_vs_umap(workspace, completed, best_umap, output_dir)
+                except Exception as e:
+                    print(f"⚠️  Error generating visualizations: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("⚠️  No UMAP experiments found for visualization")
+                output_dir = workspace  # Fallback to workspace directory
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        else:
+            print("No ranking metrics found in completed experiments.")
+            print()
+            output_dir = workspace
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    else:
+        # No completed experiments
+        output_dir = workspace
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     # Error types
     if failed:
         print("=" * 80)
@@ -382,20 +839,39 @@ def main():
             if len(experiments) > 5:
                 print(f"\n  ... and {len(experiments) - 5} more with same error type")
     
+    # ============================================================================
+    # EXPORT RESULTS AND ORGANIZE OUTPUT
+    # ============================================================================
+    # Create output directory if not already created
+    if 'output_dir' not in locals():
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(workspace, f'status_check_outputs_{timestamp}')
+        os.makedirs(output_dir, exist_ok=True)
+    
     # Export to CSV
-    output_file = os.path.join(workspace, f'status_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+    output_file = os.path.join(output_dir, f'status_report_{timestamp}.csv')
     try:
         import csv
         with open(output_file, 'w', newline='') as f:
-            fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'n_neighbors', 'min_dist',
+            fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'dim', 'n_neighbors', 'min_dist',
                          'completed', 'has_results', 'has_rankings', 'has_metrics', 'error_type', 'log_file']
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(results)
         print()
         print("=" * 80)
+        print(f"OUTPUT FILES")
+        print("=" * 80)
         print(f"✅ Detailed report saved to: {output_file}")
-        print(f"✅ Debug log saved to: {debug_log_path}")
+        
+        # Move debug log to output directory
+        import shutil
+        new_debug_log_path = os.path.join(output_dir, f'status_check_debug_{timestamp}.log')
+        if os.path.exists(debug_log_path):
+            shutil.move(debug_log_path, new_debug_log_path)
+            print(f"✅ Debug log saved to: {new_debug_log_path}")
+        
+        print(f"✅ All outputs saved to: {output_dir}")
         print("=" * 80)
     except Exception as e:
         print(f"\n⚠️  Could not save CSV report: {e}")
