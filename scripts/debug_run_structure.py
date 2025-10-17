@@ -18,8 +18,17 @@ def inspect_run_directory(run_dir):
     print(f"Config file exists: {os.path.exists(config_path)}")
     
     # Look for ranked files
-    ranked_pattern = os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv")
-    ranked_files = glob.glob(ranked_pattern)
+    ranked_patterns = [
+        os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv"),
+        os.path.join(run_dir, "*/results/*/dim_*/*/*-FEATURES.csv"),
+        os.path.join(run_dir, "*/results/*/dim_*/*/*-FINGERPRINTS.csv"),
+    ]
+    ranked_files = []
+    for pattern in ranked_patterns:
+        ranked_files.extend(glob.glob(pattern))
+    # Filter out metrics files
+    ranked_files = [f for f in ranked_files if 'metrics' not in f.lower() and 'distances' not in f.lower()]
+    
     print(f"\nRanked files found: {len(ranked_files)}")
     if ranked_files:
         print(f"  First: {ranked_files[0]}")
@@ -29,6 +38,8 @@ def inspect_run_directory(run_dir):
             df = pd.read_csv(ranked_files[0], nrows=5)
             print(f"  Columns: {list(df.columns)}")
             print(f"  Has 'Standard Value (nM)': {'Standard Value (nM)' in df.columns}")
+            print(f"  Has 'RANKING': {'RANKING' in df.columns}")
+            print(f"  Has 'TYPE': {'TYPE' in df.columns}")
             print(f"  Sample data:")
             print(df.head(2))
         except Exception as e:
@@ -58,6 +69,21 @@ def inspect_run_directory(run_dir):
             print(f"  Columns: {list(df.columns)}")
             affinity_cols = [c for c in df.columns if 'value' in c.lower() or 'affinity' in c.lower() or 'pchembl' in c.lower()]
             print(f"  Affinity-related columns: {affinity_cols}")
+        except Exception as e:
+            print(f"  Error reading: {e}")
+    
+    # Look for raw temp data files
+    raw_pattern = os.path.join(run_dir, "*/temp_data/*_target_ligands_for_feature_calc_raw.csv")
+    raw_files = glob.glob(raw_pattern)
+    print(f"\nRaw temp data files found: {len(raw_files)}")
+    if raw_files:
+        print(f"  First: {raw_files[0]}")
+        try:
+            df = pd.read_csv(raw_files[0], nrows=5)
+            print(f"  Columns: {list(df.columns)}")
+            affinity_cols = [c for c in df.columns if 'value' in c.lower() or 'affinity' in c.lower() or 'pchembl' in c.lower()]
+            print(f"  Affinity-related columns: {affinity_cols}")
+            print(f"  Has 'Standard Value (nM)': {'Standard Value (nM)' in df.columns}")
         except Exception as e:
             print(f"  Error reading: {e}")
     

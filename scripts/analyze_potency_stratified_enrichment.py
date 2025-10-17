@@ -103,12 +103,24 @@ def parse_run_config(run_config_path):
 
 def find_ranked_file(run_dir):
     """Find the ranked CSV file in the run directory."""
-    # Pattern: TARGET/results/REPR/dim_N/METHOD/*-RANKED.csv
-    pattern = os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv")
-    ranked_files = glob.glob(pattern)
+    # Try multiple patterns - file naming has varied
+    patterns = [
+        os.path.join(run_dir, "*/results/*/dim_*/*/*-RANKED.csv"),
+        os.path.join(run_dir, "*/results/*/dim_*/*/*-FEATURES.csv"),
+        os.path.join(run_dir, "*/results/*/dim_*/*/*-FINGERPRINTS.csv"),
+        os.path.join(run_dir, "*/results/*/dim_*/*/TYR*-*-*D-*.csv"),  # Tyro uppercase pattern
+        os.path.join(run_dir, "*/results/*/dim_*/*/PYR*-*-*D-*.csv"),  # Pyru uppercase pattern
+        os.path.join(run_dir, "*/results/*/dim_*/*/ISO*-*-*D-*.csv"),  # Iso uppercase pattern
+    ]
     
-    if ranked_files:
-        return ranked_files[0]  # Return first match
+    for pattern in patterns:
+        ranked_files = glob.glob(pattern)
+        if ranked_files:
+            # Filter out metrics files
+            for f in ranked_files:
+                if 'metrics' not in f.lower() and 'distances' not in f.lower():
+                    return f
+    
     return None
 
 
@@ -211,9 +223,52 @@ def calculate_stratified_enrichment(ranked_df, top_percent=0.01):
 def load_affinity_data(run_dir, target_id):
     """Load affinity data from source files."""
     
-    # Strategy 1: Try detailed active distances file
+    # Strategy 1: Try temp_data raw file (most likely to have affinity)
+    pattern0 = os.path.join(run_dir, "*/temp_data/*_target_ligands_for_feature_calc_raw.csv")
+    raw_files = glob.glob(pattern0)
+    
+    if raw_files:
+        try:
+            df = pd.read_csv(raw_files[0])
+            mol_id_col = None
+            affinity_col = None
+            
+            # Check for molecule ID columns
+            for col in ['Compound ChEMBL ID', 'MOLECULE ID', 'molecule_chembl_id']:
+                if col in df.columns:
+                    mol_id_col = col
+                    break
+            
+            # Check for affinity columns
+            if 'Standard Value (nM)' in df.columns:
+                affinity_col = 'Standard Value (nM)'
+            elif 'standard_value' in df.columns:
+                # Assume it's in nM
+                df['Standard Value (nM)'] = pd.to_numeric(df['standard_value'], errors='coerce')
+                affinity_col = 'Standard Value (nM)'
+            elif 'pchembl_value' in df.columns:
+                # Convert pChEMBL to nM
+                df['Standard Value (nM)'] = 10 ** (9 - pd.to_numeric(df['pchembl_value'], errors='coerce'))
+                affinity_col = 'Standard Value (nM)'
+            
+            if mol_id_col and affinity_col:
+                result_df = df[[mol_id_col, affinity_col]].copy()
+                result_df.columns = ['MOLECULE ID', 'Standard Value (nM)']
+                result_df['Standard Value (nM)'] = pd.to_numeric(
+                    result_df['Standard Value (nM)'], errors='coerce'
+                )
+                return result_df
+        except Exception as e:
+            logging.debug(f"Error loading affinity from {raw_files[0]}: {e}")
+    
+    # Strategy 2: Try detailed active distances file
     pattern1 = os.path.join(run_dir, f"{target_id}/results/*/dim_*/*/*detailed_active_distances.csv")
     distance_files = glob.glob(pattern1)
+    
+    if not distance_files:
+        # Try without target_id prefix
+        pattern1 = os.path.join(run_dir, "*/results/*/dim_*/*/*detailed_active_distances.csv")
+        distance_files = glob.glob(pattern1)
     
     if distance_files:
         try:
@@ -227,9 +282,48 @@ def load_affinity_data(run_dir, target_id):
         except Exception as e:
             logging.debug(f"Error loading affinity from {distance_files[0]}: {e}")
     
-    # Strategy 2: Try prepared data directory (without target_id prefix)
-    pattern2 = os.path.join(run_dir, "*/prepared_data/*_heldout_target_actives.csv")
-    active_files = glob.glob(pattern2)
+    # Strategy 3: Try target_ligands_calculated file
+    pattern2 = os.path.join(run_dir, "*/target_ligands_calculated/*/TyrosineProteinKinaseABL1_P00519_target_ligands_for_calc_*.csv")
+    calc_files = glob.glob(pattern2)
+    
+    if not calc_files:
+        # More general pattern
+        pattern2 = os.path.join(run_dir, "*/target_ligands_calculated/*/*_target_ligands_for_calc_*.csv")
+        calc_files = glob.glob(pattern2)
+    
+    if calc_files:
+        try:
+            df = pd.read_csv(calc_files[0])
+            mol_id_col = None
+            affinity_col = None
+            
+            for col in ['Compound ChEMBL ID', 'MOLECULE ID', 'molecule_chembl_id']:
+                if col in df.columns:
+                    mol_id_col = col
+                    break
+            
+            if 'Standard Value (nM)' in df.columns:
+                affinity_col = 'Standard Value (nM)'
+            elif 'standard_value' in df.columns:
+                df['Standard Value (nM)'] = pd.to_numeric(df['standard_value'], errors='coerce')
+                affinity_col = 'Standard Value (nM)'
+            elif 'pchembl_value' in df.columns:
+                df['Standard Value (nM)'] = 10 ** (9 - pd.to_numeric(df['pchembl_value'], errors='coerce'))
+                affinity_col = 'Standard Value (nM)'
+            
+            if mol_id_col and affinity_col:
+                result_df = df[[mol_id_col, affinity_col]].copy()
+                result_df.columns = ['MOLECULE ID', 'Standard Value (nM)']
+                result_df['Standard Value (nM)'] = pd.to_numeric(
+                    result_df['Standard Value (nM)'], errors='coerce'
+                )
+                return result_df
+        except Exception as e:
+            logging.debug(f"Error loading affinity from {calc_files[0]}: {e}")
+    
+    # Strategy 4: Try prepared data directory (without target_id prefix)
+    pattern3 = os.path.join(run_dir, "*/prepared_data/*_heldout_target_actives.csv")
+    active_files = glob.glob(pattern3)
     
     if active_files:
         try:
@@ -266,9 +360,9 @@ def load_affinity_data(run_dir, target_id):
         except Exception as e:
             logging.debug(f"Error loading affinity from {active_files[0]}: {e}")
     
-    # Strategy 3: Try with target_id prefix
-    pattern3 = os.path.join(run_dir, f"{target_id}/prepared_data/*_heldout_target_actives.csv")
-    active_files = glob.glob(pattern3)
+    # Strategy 5: Try with target_id prefix
+    pattern4 = os.path.join(run_dir, f"{target_id}/prepared_data/*_heldout_target_actives.csv")
+    active_files = glob.glob(pattern4)
     
     if active_files:
         try:
