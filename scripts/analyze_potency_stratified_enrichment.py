@@ -547,6 +547,311 @@ def create_summary_table(df_results):
     return summary
 
 
+def plot_pca_vs_umap_comparison(df_results, output_dir):
+    """Compare PCA vs UMAP performance across potency tiers."""
+    logging.info("Generating PCA vs UMAP comparison plots...")
+    
+    # Create method-representation combinations
+    df_results['method_repr'] = df_results.apply(
+        lambda row: f"{row['dr_method']}-{row['representation']}" 
+        if pd.notna(row.get('representation')) else row['dr_method'],
+        axis=1
+    )
+    
+    # Define the configurations to compare
+    configs_to_compare = {
+        'PCA-features': {
+            'method': 'PCA', 
+            'repr': 'features', 
+            'label': 'PCA (Features)',
+            'short_label': 'PCA-feat'
+        },
+        'PCA-fingerprints': {
+            'method': 'PCA', 
+            'repr': 'fingerprints', 
+            'label': 'PCA (Fingerprints)',
+            'short_label': 'PCA-fing'
+        },
+        'UMAP-Euclidean-features': {
+            'method': 'UMAP-Euclidean', 
+            'repr': 'features', 
+            'label': 'UMAP-Euclidean (Features)',
+            'short_label': 'UMAP-Euc'
+        },
+        'UMAP-Jaccard-fingerprints': {
+            'method': 'UMAP-Jaccard', 
+            'repr': 'fingerprints', 
+            'label': 'UMAP-Jaccard (Fingerprints)',
+            'short_label': 'UMAP-Jac'
+        }
+    }
+    
+    # Filter to only the configurations we want
+    df_methods = df_results[
+        df_results.apply(
+            lambda row: f"{row['dr_method']}-{row.get('representation', '')}" in configs_to_compare,
+            axis=1
+        )
+    ].copy()
+    
+    if df_methods.empty:
+        logging.warning("No matching method-representation combinations found for comparison")
+        return
+    
+    # Plot 1: Mean EF by tier for all method-representation combinations
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    x = np.arange(len(TIER_ORDER))
+    n_configs = len(configs_to_compare)
+    width = 0.8 / n_configs
+    colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12']
+    
+    config_idx = 0
+    for config_key, config_info in configs_to_compare.items():
+        df_config = df_methods[
+            (df_methods['dr_method'] == config_info['method']) &
+            (df_methods['representation'] == config_info['repr'])
+        ]
+        
+        if df_config.empty:
+            continue
+        
+        means = [df_config[f'{tier}_EF'].mean() for tier in TIER_ORDER]
+        stds = [df_config[f'{tier}_EF'].std() for tier in TIER_ORDER]
+        
+        offset = (config_idx - n_configs/2 + 0.5) * width
+        bars = ax.bar(x + offset, means, width, yerr=stds, 
+                     label=config_info['label'], alpha=0.8, capsize=4,
+                     color=colors[config_idx % len(colors)])
+        
+        # Add value labels
+        for bar, mean_val in zip(bars, means):
+            if not np.isnan(mean_val) and mean_val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                       f'{mean_val:.1f}', ha='center', va='bottom', fontsize=8)
+        
+        config_idx += 1
+    
+    ax.set_xlabel('Potency Tier', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Mean Enrichment Factor @ 1%', fontsize=12, fontweight='bold')
+    ax.set_title('Method-Representation Comparison: Potency-Stratified Enrichment',
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(TIER_ORDER)
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'pca_vs_umap_by_tier.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Plot 2: Detailed comparison with error bars (side by side) - all method-representation pairs
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    
+    box_colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12']
+    
+    for idx, tier in enumerate(TIER_ORDER):
+        ax = axes[idx]
+        ef_col = f'{tier}_EF'
+        
+        # Box plot for each method-representation combination
+        data_to_plot = []
+        labels = []
+        colors_list = []
+        
+        for config_key, config_info in configs_to_compare.items():
+            df_config = df_methods[
+                (df_methods['dr_method'] == config_info['method']) &
+                (df_methods['representation'] == config_info['repr'])
+            ]
+            
+            if not df_config.empty and ef_col in df_config.columns:
+                values = df_config[ef_col].dropna()
+                if len(values) > 0:
+                    data_to_plot.append(values)
+                    labels.append(config_info['short_label'])
+                    colors_list.append(box_colors[len(data_to_plot) - 1])
+        
+        if data_to_plot:
+            bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True,
+                           showmeans=True, meanline=True)
+            
+            # Color boxes
+            for patch, color in zip(bp['boxes'], colors_list):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+        
+        ax.set_title(f'{tier} Potency\n({POTENCY_TIERS[tier][0]}-{POTENCY_TIERS[tier][1]} nM)',
+                    fontweight='bold')
+        ax.set_xlabel('Method', fontsize=10)
+        if idx == 0:
+            ax.set_ylabel('Enrichment Factor @ 1%', fontweight='bold')
+        ax.grid(axis='y', alpha=0.3)
+        ax.tick_params(axis='x', rotation=45, labelsize=8)
+    
+    plt.suptitle('Method-Representation Comparison: Distribution Across Potency Tiers',
+                fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'pca_vs_umap_distributions.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    logging.info("PCA vs UMAP comparison plots saved")
+
+
+def plot_dimensionality_impact(df_results, output_dir):
+    """Analyze impact of dimensionality on potency-stratified enrichment."""
+    logging.info("Generating dimensionality impact plots...")
+    
+    if 'dimension' not in df_results.columns:
+        logging.warning("No dimension data found")
+        return
+    
+    # Plot 1: EF by dimension for each potency tier
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+    
+    dimensions = sorted(df_results['dimension'].unique())
+    
+    for idx, tier in enumerate(TIER_ORDER):
+        ax = axes[idx]
+        ef_col = f'{tier}_EF'
+        
+        if ef_col not in df_results.columns:
+            continue
+        
+        # Separate PCA and UMAP
+        for method in ['PCA', 'UMAP']:
+            if method == 'PCA':
+                df_method = df_results[df_results['dr_method'] == 'PCA']
+                marker, color, label = 'o', '#3498db', 'PCA'
+            else:
+                df_method = df_results[df_results['dr_method'].str.contains('UMAP', na=False)]
+                marker, color, label = 's', '#e74c3c', 'UMAP'
+            
+            if df_method.empty:
+                continue
+            
+            # Calculate mean and std for each dimension
+            dim_stats = df_method.groupby('dimension')[ef_col].agg(['mean', 'std']).reset_index()
+            
+            ax.errorbar(dim_stats['dimension'], dim_stats['mean'], 
+                       yerr=dim_stats['std'], marker=marker, 
+                       color=color, label=label, linewidth=2, 
+                       markersize=8, capsize=5, alpha=0.8)
+        
+        ax.set_title(f'{tier} Potency', fontweight='bold', fontsize=12)
+        ax.set_xlabel('Dimensionality', fontsize=11, fontweight='bold')
+        if idx == 0:
+            ax.set_ylabel('Mean EF@1%', fontsize=11, fontweight='bold')
+        ax.set_xticks(dimensions)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+    
+    plt.suptitle('Impact of Dimensionality on Potency-Stratified Enrichment',
+                fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'dimensionality_impact_by_tier.png'), 
+               dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Plot 2: Heatmap showing method×dimension×tier performance
+    methods_for_heatmap = []
+    for method in ['PCA', 'UMAP']:
+        for dim in dimensions:
+            if method == 'PCA':
+                df_subset = df_results[(df_results['dr_method'] == 'PCA') & 
+                                      (df_results['dimension'] == dim)]
+            else:
+                df_subset = df_results[(df_results['dr_method'].str.contains('UMAP', na=False)) & 
+                                      (df_results['dimension'] == dim)]
+            
+            if not df_subset.empty:
+                row_data = {'Method': method, 'Dim': dim}
+                for tier in TIER_ORDER:
+                    row_data[tier] = df_subset[f'{tier}_EF'].mean()
+                methods_for_heatmap.append(row_data)
+    
+    if methods_for_heatmap:
+        df_heatmap = pd.DataFrame(methods_for_heatmap)
+        df_heatmap['Method_Dim'] = df_heatmap['Method'] + '-' + df_heatmap['Dim'].astype(str) + 'D'
+        
+        # Create heatmap
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        heatmap_data = df_heatmap[TIER_ORDER].values
+        
+        im = ax.imshow(heatmap_data, cmap='RdYlGn', aspect='auto')
+        
+        # Set ticks
+        ax.set_xticks(np.arange(len(TIER_ORDER)))
+        ax.set_yticks(np.arange(len(df_heatmap)))
+        ax.set_xticklabels(TIER_ORDER)
+        ax.set_yticklabels(df_heatmap['Method_Dim'])
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Mean EF@1%', rotation=270, labelpad=20, fontweight='bold')
+        
+        # Add values to cells
+        for i in range(len(df_heatmap)):
+            for j in range(len(TIER_ORDER)):
+                val = heatmap_data[i, j]
+                if not np.isnan(val):
+                    text = ax.text(j, i, f'{val:.1f}',
+                                 ha="center", va="center", color="black", fontsize=10)
+        
+        ax.set_title('Method × Dimensionality × Potency Tier Performance',
+                    fontsize=14, fontweight='bold')
+        ax.set_xlabel('Potency Tier', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Method-Dimension', fontsize=12, fontweight='bold')
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'method_dimension_tier_heatmap.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    # Plot 3: Dimensionality preference by tier (does optimal dim change by tier?)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    x = np.arange(len(dimensions))
+    width = 0.25
+    
+    for idx, tier in enumerate(TIER_ORDER):
+        ef_col = f'{tier}_EF'
+        if ef_col not in df_results.columns:
+            continue
+        
+        means = []
+        for dim in dimensions:
+            dim_data = df_results[df_results['dimension'] == dim][ef_col]
+            means.append(dim_data.mean() if not dim_data.empty else 0)
+        
+        offset = (idx - 1) * width
+        bars = ax.bar(x + offset, means, width, label=tier, 
+                     color=TIER_COLORS[tier], alpha=0.8)
+        
+        # Add value labels
+        for bar, mean_val in zip(bars, means):
+            if not np.isnan(mean_val) and mean_val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                       f'{mean_val:.1f}', ha='center', va='bottom', fontsize=8)
+    
+    ax.set_xlabel('Dimensionality', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Mean EF@1% (All Methods)', fontsize=12, fontweight='bold')
+    ax.set_title('Optimal Dimensionality by Potency Tier',
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'{d}D' for d in dimensions])
+    ax.legend(title='Potency Tier')
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'optimal_dimensionality_by_tier.png'), 
+               dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    logging.info("Dimensionality impact plots saved")
+
+
 def plot_stratified_comparison(df_results, output_dir):
     """Create comparison plots for stratified enrichment."""
     os.makedirs(output_dir, exist_ok=True)
@@ -555,10 +860,15 @@ def plot_stratified_comparison(df_results, output_dir):
         logging.warning("No results to plot")
         return
     
-    # 1. Enrichment Factor by Tier - Grouped by Method/Hyperparameter
     logging.info("Generating stratified enrichment plots...")
     
-    # Focus on UMAP with different n_neighbors
+    # NEW PLOT 1: PCA vs UMAP comparison across potency tiers
+    plot_pca_vs_umap_comparison(df_results, output_dir)
+    
+    # NEW PLOT 2: Dimensionality impact analysis
+    plot_dimensionality_impact(df_results, output_dir)
+    
+    # EXISTING PLOT 3: UMAP hyperparameter analysis
     if 'n_neighbors' in df_results.columns:
         df_umap = df_results[df_results['dr_method'].str.contains('UMAP', na=False)].copy()
         
@@ -738,7 +1048,71 @@ def generate_report(df_results, summary_df, output_dir):
             f.write("KEY FINDINGS\n")
             f.write("-" * 80 + "\n\n")
             
-            # Identify quality vs quantity trade-offs
+            # Method-Representation comparison
+            f.write("1. Method-Representation Performance by Potency Tier:\n\n")
+            
+            # Define the configurations to compare
+            configs_to_compare = {
+                'pca_feat': {'method': 'PCA', 'repr': 'features', 'label': 'PCA-features'},
+                'pca_fing': {'method': 'PCA', 'repr': 'fingerprints', 'label': 'PCA-fingerprints'},
+                'umap_euc': {'method': 'UMAP-Euclidean', 'repr': 'features', 'label': 'UMAP-Euclidean-features'},
+                'umap_jac': {'method': 'UMAP-Jaccard', 'repr': 'fingerprints', 'label': 'UMAP-Jaccard-fingerprints'}
+            }
+            
+            for tier in TIER_ORDER:
+                ef_col = f'{tier}_EF'
+                f.write(f"  {tier} Potency ({POTENCY_TIERS[tier][0]}-{POTENCY_TIERS[tier][1]} nM):\n")
+                
+                config_means = {}
+                for config_key, config_info in configs_to_compare.items():
+                    config_data = df_results[
+                        (df_results['dr_method'] == config_info['method']) &
+                        (df_results['representation'] == config_info['repr'])
+                    ][ef_col]
+                    
+                    if not config_data.empty:
+                        mean_ef = config_data.mean()
+                        std_ef = config_data.std()
+                        config_means[config_key] = mean_ef
+                        f.write(f"    {config_info['label']:30s}: {mean_ef:6.2f} ± {std_ef:5.2f}\n")
+                
+                # Find best config for this tier
+                if config_means:
+                    best_config = max(config_means, key=config_means.get)
+                    best_label = configs_to_compare[best_config]['label']
+                    best_ef = config_means[best_config]
+                    f.write(f"    → Winner: {best_label} (EF = {best_ef:.2f})\n\n")
+                else:
+                    f.write("    (No data available)\n\n")
+            
+            # Dimensionality impact
+            f.write("2. Impact of Dimensionality:\n\n")
+            if 'dimension' in df_results.columns:
+                dimensions = sorted(df_results['dimension'].unique())
+                f.write(f"  Dimensions tested: {', '.join(map(str, dimensions))}\n\n")
+                
+                for tier in TIER_ORDER:
+                    ef_col = f'{tier}_EF'
+                    f.write(f"  {tier} Potency:\n")
+                    
+                    best_dim = None
+                    best_ef = -np.inf
+                    
+                    for dim in dimensions:
+                        dim_data = df_results[df_results['dimension'] == dim][ef_col]
+                        if not dim_data.empty:
+                            mean_ef = dim_data.mean()
+                            f.write(f"    {dim}D: {mean_ef:6.2f} ± {dim_data.std():5.2f}\n")
+                            
+                            if mean_ef > best_ef:
+                                best_ef = mean_ef
+                                best_dim = dim
+                    
+                    if best_dim:
+                        f.write(f"    → Optimal: {best_dim}D (EF = {best_ef:.2f})\n\n")
+            
+            # Quality vs quantity trade-offs
+            f.write("3. Quality vs Quantity Trade-offs:\n\n")
             if 'Overall_EF_mean' in summary_df.columns and 'High_EF_mean' in summary_df.columns:
                 # Find config with best High-Potent EF
                 best_high_idx = summary_df['High_EF_mean'].idxmax()
