@@ -110,7 +110,8 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
         'running': False,
         'error': None,
         'error_type': None,
-        'log_file': None
+        'log_file': None,
+        'error_detection_reason': None  # NEW: Track WHY this was marked as error
     }
     
     # Extract run name from directory
@@ -209,6 +210,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                         if error_lines:
                             status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
                             status['error_type'] = 'Process Killed (return code -9, likely OOM)'
+                            status['error_detection_reason'] = 'Found "return code -9" in log (SIGKILL/OOM)'
                             if debug_log:
                                 debug_log.write(f"❌ Process killed (return code -9) detected - likely OOM\n")
                     
@@ -228,6 +230,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                         if error_lines:
                             status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
                             status['error_type'] = 'Out of Memory (OOM)'
+                            status['error_detection_reason'] = 'Found "oom"/"out of memory"/"memoryerror" in log'
                             if debug_log:
                                 debug_log.write(f"❌ OOM Error detected in log\n")
                     
@@ -247,6 +250,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                         if error_lines:
                             status['error'] = '\n'.join([l.strip() for l in error_lines if l.strip()])
                             status['error_type'] = 'Task Failed'
+                            status['error_detection_reason'] = 'Found " FAILED " or " failed " in log'
                             if debug_log:
                                 debug_log.write(f"❌ Task failure detected in log\n")
                     
@@ -295,6 +299,7 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                                 error_lines = []
                             elif 'filenotfounderror' in error_text or 'no such file' in error_text:
                                 status['error'] = '\n'.join(error_lines[-10:])  # Last 10 lines
+                                status['error_detection_reason'] = 'Found " ERROR " or "Traceback" with FileNotFoundError'
                                 if 'model' in error_text:
                                     status['error_type'] = 'Missing Model File'
                                 elif 'scaler' in error_text:
@@ -304,15 +309,19 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                             elif 'valueerror' in error_text:
                                 status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Value Error'
+                                status['error_detection_reason'] = 'Found " ERROR " or "Traceback" with ValueError'
                             elif 'keyerror' in error_text:
                                 status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Key Error'
+                                status['error_detection_reason'] = 'Found " ERROR " or "Traceback" with KeyError'
                             elif error_lines:  # Only set error if we still have error lines after filtering
                                 status['error'] = '\n'.join(error_lines[-10:])
                                 status['error_type'] = 'Other Error'
+                                status['error_detection_reason'] = 'Found " ERROR " or "Traceback" in log (non-CUDA)'
                             
                             if status['error_type'] and debug_log:
                                 debug_log.write(f"❌ Error detected in log: {status['error_type']}\n")
+                                debug_log.write(f"   Reason: {status['error_detection_reason']}\n")
             except Exception as e:
                 if debug_log:
                     debug_log.write(f"⚠️  Error reading log file: {e}\n")
@@ -616,14 +625,20 @@ def main():
     # Error types
     if failed:
         print("=" * 80)
-        print("ERROR TYPES")
+        print("ERROR TYPES AND DETECTION REASONS")
         print("=" * 80)
         error_counts = defaultdict(int)
+        detection_reasons = defaultdict(lambda: defaultdict(int))
         for r in failed:
             error_counts[r['error_type']] += 1
+            reason = r.get('error_detection_reason', 'Unknown')
+            detection_reasons[r['error_type']][reason] += 1
         
         for error_type, count in sorted(error_counts.items(), key=lambda x: -x[1]):
-            print(f"{error_type:<30} {count:>5} occurrences")
+            print(f"\n{error_type:<30} {count:>5} occurrences")
+            # Show detection reasons for this error type
+            for reason, reason_count in sorted(detection_reasons[error_type].items(), key=lambda x: -x[1]):
+                print(f"  └─ {reason}: {reason_count} times")
         print()
     
     # Detailed failed experiments
@@ -653,6 +668,8 @@ def main():
                 print(f"  Seed: {exp['seed']}")
                 if exp.get('log_file'):
                     print(f"  Log file: {exp['log_file']}")
+                if exp.get('error_detection_reason'):
+                    print(f"  Detection reason: {exp['error_detection_reason']}")
                 if exp['error']:
                     print(f"  Error (last 3 lines):")
                     error_lines = exp['error'].split('\n')
@@ -678,7 +695,8 @@ def main():
         import csv
         with open(output_file, 'w', newline='') as f:
             fieldnames = ['run_dir', 'seed', 'representation', 'dr_method', 'dim', 'n_neighbors', 'min_dist',
-                         'completed', 'running', 'has_results', 'has_rankings', 'has_metrics', 'error_type', 'log_file']
+                         'completed', 'running', 'has_results', 'has_rankings', 'has_metrics', 
+                         'error_type', 'error_detection_reason', 'log_file']
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(results)
