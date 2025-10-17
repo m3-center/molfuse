@@ -257,6 +257,19 @@ def check_experiment_status(run_dir, workspace_root, debug_log=None):
                         in_traceback = False
                         
                         for line in lines:
+                            # IGNORE CUDA/GPU warnings - they are informational, not errors
+                            line_lower = line.lower()
+                            is_cuda_warning = (
+                                ('cuda' in line_lower or 'gpu' in line_lower or 'numba.cuda' in line_lower) and
+                                ('warning' in line_lower or 'falling back' in line_lower or 'not found' in line_lower)
+                            )
+                            
+                            if is_cuda_warning:
+                                # Skip CUDA warnings - successful CPU fallback
+                                if debug_log:
+                                    debug_log.write(f"  ℹ️  CUDA warning IGNORED: {line.strip()[:80]}\n")
+                                continue
+                            
                             if 'ERROR' in line or 'Error' in line:
                                 error_lines.append(line.strip())
                             elif 'Traceback' in line:
@@ -605,6 +618,8 @@ def main():
                 if exp['min_dist']:
                     print(f"  min_dist: {exp['min_dist']}")
                 print(f"  Seed: {exp['seed']}")
+                if exp.get('log_file'):
+                    print(f"  Log file: {exp['log_file']}")
                 if exp['error']:
                     print(f"  Error (last 3 lines):")
                     error_lines = exp['error'].split('\n')
