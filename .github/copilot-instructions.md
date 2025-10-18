@@ -1,0 +1,20 @@
+- Always check the existence of LAB_BOOK.md, README.md, ARCHIVE.md and PLANNING.md files in the root of the repository.
+- If any of these files are missing, create them with appropriate initial content. 
+- Always use the LAB_BOOK.md to track experiments and changes.
+- The LAB_BOOK.md has to be structured as follows:
+    - Research questions and hypotheses
+    - Experiment configurations and parameters
+    - For each day:
+        - Date
+        - Changes made
+        - Experiments run (with links to workspace folders)
+        - Observations and results
+- Use the PLANNING.md file to outline future work and next steps and keep track of finished tasks. The top of the document should contain all finished and pending tasks in a checklist format.
+- The README.md files should provide clear instructions on how to use the scripts and tools in the repository.
+- Always update the README.md files when adding new scripts or features.
+- The ARCHIVE.md file contains deprecated features, scripts, or experiments that are no longer in use. Always update this file when removing or deprecating any part of the codebase.
+- Do not create unnecessary markdown files; consolidate information in existing documentation.
+- If you find unnecessary markdown files, integrate their content into the main documentation files and delete them. If you are unsure, ask for clarification.
+- If you find inconsistencies in the documentation compared to the codebase, ask the user for clarification before making changes.
+- Always ensure that the documentation reflects the current state of the codebase and experiments.
+- Use clear, descriptive yet succinct commit messages when updating scripts or documentation.

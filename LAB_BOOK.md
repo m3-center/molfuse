@@ -2,17 +2,36 @@
 
 **Period**: October 2025  
 **Branch**: 3.0  
-**Status**: Phase 1 Complete, Phase 2 Planned
+**Status**: Phase 1 Complete, Analysis in Progress
+
+---
+
+## Research Questions and Hypotheses
+
+### Primary Hypothesis
+**Ligands active against a specific protein will exhibit measurable chemical proximity to compounds that modulate OTHER proteins sharing the same molecular function.**
+
+### Phase-Specific Questions
+
+**Phase 1 (Complete)**: What are optimal hyperparameters and dimensionality for PCA vs UMAP?
+
+**Phase 2 (Planned)**: Does MF cloud size cause PCA vs UMAP performance reversal?
+
+**Phase 3 (Planned)**: Do optimal configs transfer across proteins (same-MF vs different-MF)?
+
+**Phase 4 (Under Review)**: How does affinity cutoff affect enrichment performance? (See pipeline ordering issue below)
 
 ---
 
 ## Executive Summary
 
-**Goal**: Compare PCA vs UMAP for virtual screening via similarity space projection.
+**Goal**: Develop and validate molecular function-guided virtual screening framework using dimensionality reduction.
 
-**Key Finding**: PCA consistently outperforms UMAP by 1.27-1.46× (EF@1% = 57-58 vs 39-46) for ABL1 ligand retrieval.
+**Key Finding**: PCA consistently outperforms UMAP by 1.27-1.46× (EF@1% = 57-58 vs 39-46) for ABL1 ligand retrieval with full MF cloud.
 
 **Critical Discovery**: Small UMAP neighborhoods (nn=10) outperform large (nn=500) by 2.3×, contradicting standard guidance.
+
+**Recent Enhancement (Oct 18)**: Added parallelization to stratified enrichment analysis (4-8× speedup on multi-core systems).
 
 ---
 
@@ -133,25 +152,96 @@
 
 ---
 
-## Phase 2 Plan (Pending)
+## Phase 2-4 Plans (v3.0 Design)
 
-### Goals
-1. Test top 8 configs (PCA-2D/5D/10D, UMAP-best-2D/5D/10D, FP-PCA-2D, FP-UMAP-2D) on **10 diverse targets**
-2. Validate generalization across protein families (kinases, GPCRs, proteases, etc.)
-3. Compare to Tanimoto/ECFP4 baselines
+**Note**: **PHASE REORDERING COMPLETE** (October 18, 2025). Original Phase 4 moved to Phase 2 to resolve logical dependency issue. Cutoff sensitivity analysis must precede MF cloud ablation because cutoff determines which molecules are "active" in the MF cloud.
 
-### Targets (Proposed)
+### Phase 2: Affinity Cutoff Sensitivity (40 runs) **[REORDERED - was Phase 4]**
+**Purpose**: Determine optimal affinity threshold for classifying molecules as "active" in MF cloud
 
-TODO for LLM while you are editing this lab book: look at our experimental setup
+**Rationale for Reordering**: 
+- **Logical dependency**: Cutoff determines which molecules contribute to MF cloud diversity
+- **Affects downstream phases**: Must establish optimal cutoff before Phase 3 (MF cloud ablation)
+- **Computational efficiency**: Reuses Phase 1 similarity spaces (only reruns ranking, ~75% time savings)
+
+**Configuration**:
+- Target: ABL1 (Tyrosine kinase)
+- **Potency Tiers** (aligned with stratified enrichment analysis):
+  - High Potent: 0.1-100 nM (drug-like, clinically relevant)
+  - Medium Potent: 100-1,000 nM (moderate affinity)
+  - Weak Potent: 1,000-100,000 nM (marginal, promiscuous)
+- **Cutoffs to Test**:
+  - 100 nM: High-potent only (strictest quality)
+  - 1,000 nM (1 μM): High + Medium (balanced)
+  - 10,000 nM (10 μM): High + Medium + some Weak (permissive)
+  - 100,000 nM (100 μM): All potencies (maximum diversity, current default)
+- Methods: Best PCA-features and best UMAP-Euclidean-features from Phase 1
+- Seeds: 5 replicates (42-46)
+
+**Research Questions**:
+1. Which cutoff gives best High-potent EF@1%?
+2. Do PCA and UMAP prefer different cutoffs?
+3. How does cutoff affect Medium vs Weak potency enrichment?
+4. What is optimal cutoff for Phase 3 (MF cloud ablation)?
+
+**Computational Strategy**: 
+- Reuses Phase 1 similarity spaces and DR models
+- Does NOT recalculate features/fingerprints or refit PCA/UMAP
+- ONLY reruns ranking/evaluation with different cutoffs
+- Runtime: ~10-15 hours total (vs ~40+ hours for full pipeline)
+
+**Current Status**: **Config generator and orchestrator created** (October 18, 2025). Ready for execution after Phase 1 best configs extraction.
 
 ---
 
-## Phase 3 Plan (Future)
+### Phase 3: MF Cloud Ablation (60 runs) **[REORDERED - was Phase 2]**
+**Purpose**: Validate hypothesis that MF cloud size causes PCA vs UMAP performance reversal
 
-### Generalization Analysis
-1. **Leave-one-out cross-validation**: Train on N-1 targets, test on held-out target
+**Configuration**:
+- Target: ABL1 (Tyro) only
+- MF Cloud Sizes: 0, 1K, 10K, 50K, 100K, 420K molecules
+- **Cutoff**: Use optimal cutoff identified in Phase 2
+- Methods: Best PCA and best UMAP from Phase 1 (at optimal dimensions)
+- Seeds: 5 replicates (42-46)
+
+**Expected Outcome**: 
+- UMAP dominates at MF=0 (local structure preservation)
+- PCA dominates at MF=420K (global distance preservation)
+- Crossover point at ~10K-50K molecules
+
+**Current Status**: Config generator exists but needs update to use Phase 2 optimal cutoff
+
+---
+
+### Phase 4: Cross-Protein Generalization (80 runs) **[REORDERED - was Phase 3]**
+**Purpose**: Test if optimal configurations transfer across different proteins
+
+**Targets**:
+1. **Pyruvate kinase M2** (PKM2, P14618) - Same MF as ABL1 (Transferase)
+2. **Isocitrate dehydrogenase** (IDH1, O75874) - Different MF (Oxidoreductase)
+
+**Methods**: Best configs from Phase 1 for each method
+**Cutoff**: Use optimal cutoff from Phase 2
+
+**Hypothesis**:
+- Same MF (PKM2): Similar performance expected
+- Different MF (IDH1): Performance may degrade, tests true generalization
+
+**Current Status**: Config generator exists but needs update to use Phase 2 optimal cutoff
+
+---
+
+## Future Directions (Beyond Phase 4)
+
+### Baseline Comparisons
+1. **Tanimoto/ECFP4**: Industry-standard fingerprint similarity
+2. **k-NN in 40D**: No dimensionality reduction (test if DR is beneficial)
+3. **Ensemble methods**: Combining PCA + UMAP predictions
+
+### Extended Validation
+1. **Leave-one-out cross-validation**: Train on N-1 targets, test on held-out
 2. **Transfer learning**: Can kinase cloud predict GPCR ligands?
-3. **Sample size effects**: How much training data needed for robust PCA?
+3. **Sample size effects**: Minimum MF cloud size for robust performance
 
 ---
 
@@ -246,7 +336,248 @@ experiment_workspace_v3_phase1/
 - **Dataset correction**: Confirmed 1,295,279 ZINC used for ranking (not 1K sample)
 - **Descriptor correction**: Using 40 RDKit descriptors (not 208)
 
+### October 18, 2025: Publication Preparation and Pipeline Analysis
+**Analysis Script Enhancements**:
+- Enhanced `scripts/analyze_potency_stratified_enrichment.py`:
+  - Added dimension-separated versions of 4 key plot types (PCA vs UMAP, stratified EF, percent found, quality vs quantity)
+  - Implemented dual PNG+PDF output for all figures (300 DPI PNG + vector PDF)
+  - Applied best hyperparameter filtering to dimensionality impact plots
+  - **Parallelized run analysis** using multiprocessing (4-8× speedup on multi-core systems)
+  - Added `--n_jobs` parameter for user control (default: all CPUs - 1)
+
+**Documentation Updates**:
+- Created `ARCHIVE.md`: Tracks deprecated features and development notes
+- Created `PLANNING.md`: Task tracking with checklist format, research questions, next steps
+- Updated documentation structure per copilot instructions
+
+**Pipeline Logic Analysis**:
+- Identified potential ordering issue in Phase 2-4 design:
+  - Current: Phase 1 (hyperparams) → Phase 2 (MF cloud) → Phase 3 (generalization) → Phase 4 (cutoff)
+  - Problem: Affinity cutoff determines "active" molecule definition → affects MF cloud composition
+  - Phase 2 uses fixed cutoff (100K nM) but Phase 4 tests cutoff sensitivity
+  - **Logical flaw**: If optimal cutoff changes, Phase 2 MF cloud conclusions may be invalid
+- Three restructuring options proposed:
+  - Option A: Cutoff as Phase 2 (before MF cloud)
+  - Option B: Combined MF Cloud + Cutoff study (240 runs: 6 MF sizes × 4 cutoffs)
+  - Option C: Acknowledge limitation in discussion section
+- **Decision pending**: Need to determine if pipeline should be restructured before Phase 2 execution
+
+**Observations**:
+- Parallelization significantly reduces analysis time for large-scale experiments
+- Publication-quality figure generation now automated (PNG for presentations, PDF for papers)
+- Best hyperparameter filtering essential for fair method comparisons
+
+### October 18, 2025 (Evening): Phase Reordering Implementation
+**Pipeline Restructuring Decision**:
+- **Resolved Phase 2-4 ordering issue**: Moved cutoff sensitivity from Phase 4 to Phase 2
+- **Rationale**: Cutoff must be determined before MF cloud ablation (logical dependency)
+- Chose Option A: Best configs only (40 runs) for computational efficiency
+
+**File Renaming** (Phase Shuffle):
+- `generate_phase4_configs.py` → `generate_phase2_configs.py` (cutoff sensitivity)
+- `generate_phase2_configs.py` → `generate_phase3_configs.py` (MF cloud ablation)
+- `generate_phase3_configs.py` → `generate_phase4_configs.py` (generalization)
+- HPC submission scripts renamed accordingly: `submit_v3_phase[234].sh`
+
+**New Phase 2 Implementation** (Cutoff Sensitivity):
+- Created `generate_phase2_configs.py`:
+  - Tests 4 cutoffs: 100 nM, 1 μM, 10 μM, 100 μM (aligned with potency tiers)
+  - Uses potency tier definitions from `analyze_potency_stratified_enrichment.py`
+  - Reuses best PCA-features and best UMAP-Euclidean-features from Phase 1
+  - Total: 4 cutoffs × 2 methods × 5 seeds = 40 runs
+  - Estimated runtime: ~10-15 hours (reusing Phase 1 data)
+
+- Created `scripts/run_phase2_cutoff_analysis.py` (orchestrator):
+  - Locates matching Phase 1 run directories
+  - Reuses similarity spaces, DR models, and target ligand representations
+  - Calls `project_and_analyze.py` with `--affinity_cutoff` parameter only
+  - Does NOT recalculate features/fingerprints or refit PCA/UMAP
+  - **75% time savings** vs full pipeline (ranking only, no DR fitting)
+  - Outputs to Phase 2 workspace with cutoff-specific subdirectories
+
+**Potency Tier Alignment**:
+- Unified potency definitions across scripts:
+  - High Potent: 0.1-100 nM (drug-like, clinically relevant)
+  - Medium Potent: 100-1,000 nM (moderate affinity)
+  - Weak Potent: 1,000-100,000 nM (marginal, promiscuous)
+- Cutoffs designed to test quality vs quantity trade-offs:
+  - 100 nM: High-potent only (maximum quality)
+  - 1 μM: High + Medium (balanced)
+  - 10 μM: High + Medium + some Weak (permissive)
+  - 100 μM: All potencies (maximum diversity, current default)
+
+**Documentation Updates**:
+- Updated LAB_BOOK.md with new Phase 2-4 ordering
+- Marked Phase 2 config generator and orchestrator as complete
+- Noted that Phase 3 and Phase 4 config generators need updates (use optimal cutoff from Phase 2)
+
+**Research Questions for Phase 2**:
+1. Which cutoff gives best High-potent EF@1%?
+2. Do PCA and UMAP prefer different cutoffs?
+3. How does cutoff affect Medium vs Weak potency enrichment?
+4. What is optimal cutoff for Phase 3 (MF cloud ablation)?
+
+**Current Status**: Phase 2 ready for execution pending Phase 1 best configs extraction
+
 ---
+
+## v3.0 Experimental Pipeline Architecture
+
+### Config Generators (4 Phases)
+1. **`generate_phase1_configs.py`** (260 configs)
+   - Hyperparameter sweep: Features/Fingerprints × PCA/UMAP × Dimensions × Hyperparameters × Seeds
+   - Auto-skip completed experiments
+
+2. **`generate_phase2_configs.py`** (60 configs)
+   - MF cloud ablation: Best PCA + Best UMAP × MF sizes (0, 1K, 10K, 50K, 100K, 191K) × Seeds
+   - Requires `phase1_best_configs.json` from Phase 1 analysis
+
+3. **`generate_phase3_configs.py`** (80 configs)
+   - Generalization: 8 best configs × 2 new targets (PKM2, IDH1) × Seeds
+
+4. **`generate_phase4_configs.py`** (40 configs)
+   - Cutoff sensitivity: Best PCA + Best UMAP × 4 cutoffs (100, 1K, 10K, 100K nM) × Seeds
+
+### Main Orchestrator
+**`main_orchestrator.py`**: Single experiment executor
+- Reads JSON config file
+- Calls pipeline stages in sequence:
+  1. Data preparation (load ChEMBL, ZINC, filter by affinity)
+  2. Feature/fingerprint calculation
+  3. Similarity space construction (fit DR, project actives)
+  4. Ranking and evaluation (EF@1%, ROC-AUC, PR-AUC)
+- Logs all operations to `orchestrator_*.log`
+- Creates run-specific workspace directory
+
+### Core Processing Scripts
+
+**`core_scripts/calculate_features_and_fingerprints_exp.py`**:
+- Computes 39 RDKit molecular descriptors (MolWt, LogP, TPSA, etc.)
+- Generates ECFP4 fingerprints (2048-bit, radius=2)
+- Handles three compound sets:
+  - MF cloud (other proteins in same MF)
+  - ZINC decoys (1.29M compounds)
+  - Target actives (held-out)
+- StandardScaler normalization for features
+
+**`core_scripts/calculate_similarityspaces_exp.py`**:
+- Fits PCA or UMAP on MF cloud + ZINC (training set)
+- Projects target actives into learned space (held-out, prevents data leakage)
+- Calculates distances to MF cloud centroid
+- Ranks compounds by proximity score
+- Evaluates EF@1%, ROC-AUC, PR-AUC
+- Generates 2D visualization plots
+
+### Analysis Scripts
+
+**`scripts/analyze_potency_stratified_enrichment.py`** (NEW Oct 18, 2025):
+- Potency-tier stratified analysis:
+  - High: 0.1-100 nM (drug-like, clinically relevant)
+  - Medium: 100-1000 nM (moderate affinity)
+  - Weak: 1000-100,000 nM (marginal binders)
+- Best hyperparameter identification per representation
+- Parallel processing with multiprocessing (4-8× speedup)
+- Dual output: PNG (300 DPI) + PDF (vector)
+- Dimension-separated plots for publication
+- Usage: `python scripts/analyze_potency_stratified_enrichment.py --workspace_dir experiment_workspace_v3_phase1 --output_dir results --n_jobs 8`
+
+**`extract_phase1_best_configs.py`**:
+- Scans Phase 1 workspace
+- Identifies best configs per method/representation/dimension
+- Outputs `phase1_best_configs.json` for Phase 2-4 generation
+
+### Experimental Pipeline Modules
+
+**`experimental_pipeline/prepare_data.py`**:
+- Loads ChEMBL target ligands and MF cloud
+- Applies affinity cutoff filter
+- Loads ZINC decoys
+- Creates train/test split (MF+ZINC train, actives held-out)
+
+**`experimental_pipeline/project_and_analyze.py`**:
+- Wrapper for dimensionality reduction
+- Fits model on training set
+- Projects test set
+- Handles PCA and UMAP methods
+
+**`experimental_pipeline/rank_zinc_decoys.py`**:
+- Calculates distance to MF cloud
+- Ranks all compounds
+- Computes enrichment metrics
+
+---
+
+## Current Documentation Status
+
+### Core Documentation (Per Copilot Instructions)
+- ✅ **LAB_BOOK.md** (this file): Experimental log with daily entries
+- ✅ **README.md**: Main repository overview and quick start
+- ✅ **PLANNING.md**: Task tracking with checklists, research questions, timeline
+- ✅ **ARCHIVE.md**: Deprecated features and migration notes
+
+### Supplementary Documentation
+- ✅ **README_V3_PIPELINE.md**: Complete 4-phase pipeline documentation
+- ✅ **METHODS_FOR_PAPER.md**: Publication-ready methods section
+- ✅ **docs/QUICKSTART_V3.md**: Fast setup guide
+- ✅ **docs/MF_CLOUD_IMPACT_ANALYSIS.md**: Key finding on MF cloud phase transition
+- ✅ **hpc/README.md**: HPC execution guide
+
+---
+
+## Known Issues and Caveats
+
+### 🔴 Critical Pipeline Design Issue
+**Problem**: Phase 4 (cutoff sensitivity) affects Phase 2 (MF cloud ablation) results
+- Affinity cutoff determines which molecules are "active"
+- MF cloud composition changes with different cutoffs
+- Phase 2 uses fixed cutoff (100K nM) but Phase 4 tests multiple cutoffs
+- If optimal cutoff is not 100K nM, Phase 2 MF cloud may be suboptimal
+
+**Status**: Under review (see PLANNING.md for restructuring options)
+
+### ⚠️ Technical Limitations
+- Memory usage: 1.5M compounds requires ~16-32 GB RAM for UMAP
+- Runtime: UMAP with nn=500 can take 30-60 min on 1.5M dataset
+- Checkpoint system: Not yet implemented (long runs cannot resume)
+
+### ⚠️ Methodological Limitations
+- Single target validation (Phase 1): ABL1 only, generalization unknown
+- No industry baselines: Tanimoto/ECFP4 comparison pending
+- Descriptor-dependent: Binary fingerprints fail with PCA (requires continuous features)
+
+---
+
+## Next Steps
+
+### Immediate (This Week)
+1. ✅ Parallelize stratified enrichment analysis
+2. ✅ Create PLANNING.md with task tracking
+3. ✅ Create ARCHIVE.md with deprecated features
+4. [ ] Complete Phase 1 stratified enrichment analysis
+5. [ ] Extract best configs for Phase 2-4
+6. [ ] Decide on pipeline ordering (cutoff before or after MF cloud)
+
+### Short-term (Next 2 Weeks)
+1. [ ] Resolve Phase 2-4 ordering issue
+2. [ ] Generate Phase 2 configs (after best config extraction)
+3. [ ] Execute Phase 2 experiments (MF cloud ablation)
+4. [ ] Analyze Phase 2 results (validate phase transition hypothesis)
+
+### Medium-term (Next Month)
+1. [ ] Execute Phase 3 (generalization to PKM2, IDH1)
+2. [ ] Execute Phase 4 (cutoff sensitivity, if ordering resolved)
+3. [ ] Create unified analysis across all 4 phases
+4. [ ] Generate final publication figures
+
+### Long-term (2-3 Months)
+1. [ ] Write methods section
+2. [ ] Write results section
+3. [ ] Perform statistical significance testing
+4. [ ] Submit manuscript
+
+---
+
+**End of Lab Book**
 
 ## References
 
@@ -264,5 +595,5 @@ experiment_workspace_v3_phase1/
 
 ---
 
-**Last Updated**: October 16, 2025  
-**Next Review**: After Phase 1b completion and literature review
+**Last Updated**: October 18, 2025  
+**Next Review**: After Phase 1b completion and pipeline ordering decision

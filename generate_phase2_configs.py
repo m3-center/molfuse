@@ -1,28 +1,54 @@
 #!/usr/bin/env python3
 """
 Generate Phase 2 configuration files for UMMBAS v3.0
-Phase 2: MF Cloud Ablation Study
+Phase 2: Affinity Cutoff Sensitivity Analysis
 
-Tests PCA-features and UMAP-features at their best dimensionalities
-with varying MF cloud sizes: 0, 1K, 10K, 50K, 100K, 420K molecules
+Tests different affinity cutoffs to determine optimal threshold for classifying
+molecules as "active" in the MF cloud. This is critical because:
+- Cutoff determines which molecules contribute to MF cloud diversity
+- Affects downstream Phase 3 (MF cloud ablation) and Phase 4 (generalization)
+- Must precede Phase 3 logically (cutoff affects MF cloud composition)
 
-This validates the phase transition hypothesis showing PCA overtaking
-UMAP at critical MF cloud mass.
+**Potency Tiers (from stratified enrichment analysis):**
+- High Potent: 0.1-100 nM (drug-like, clinically relevant)
+- Medium Potent: 100-1,000 nM (moderate affinity)
+- Weak Potent: 1,000-100,000 nM (marginal, likely promiscuous)
+
+**Cutoffs to Test:**
+- 100 nM: Only high-potent compounds (strictest, highest quality)
+- 1,000 nM (1 μM): High + medium potent (balanced quality/quantity)
+- 10,000 nM (10 μM): High + medium + some weak (permissive)
+- 100,000 nM (100 μM): All potencies (most permissive, maximum diversity)
+
+**Computational Strategy:**
+Phase 2 REUSES Phase 1 similarity spaces and DR models to save time:
+- Does NOT recalculate features/fingerprints
+- Does NOT refit PCA/UMAP models
+- ONLY reruns ranking/evaluation with different affinity cutoffs
+- Expected runtime: ~10-15 min per run (vs hours for full pipeline)
+
+Total: 4 cutoffs × 2 methods (PCA-feat, UMAP-Euc-feat) × 5 seeds = 40 runs
+Estimated cost: ~10-15 hours total (vs ~40+ hours if recalculating similarity spaces)
 """
 
 import json
 import os
 
 # Configuration
-OUTPUT_DIR = "hyperparam_configs_v3_phase2_ablation"
+OUTPUT_DIR = "hyperparam_configs_v3_phase2_cutoff"
 BASE_CONFIG_PATH = "experiment_config.json"
 BEST_CONFIGS_PATH = "phase1_best_configs.json"
 SEEDS = [42, 43, 44, 45, 46]
 
-# MF cloud sizes for ablation
-MF_CLOUD_SIZES = [0, 1000, 10000, 50000, 100000, 420000]
+# Affinity cutoffs (nM) aligned with potency tiers
+AFFINITY_CUTOFFS = [
+    100,      # High-potent only
+    1000,     # High + Medium
+    10000,    # High + Medium + some Weak
+    100000    # All (default, most permissive)
+]
 
-# Target for Phase 2
+# Target for Phase 2 (same as Phase 1)
 PHASE2_TARGET = {
     "id_name": "TyrosineProteinKinaseABL1_P00519",
     "display_name": "Tyrosine-protein Kinase ABL1",
@@ -42,12 +68,27 @@ def load_base_config():
 
 def load_best_configs():
     """Load best configurations from Phase 1."""
+    if not os.path.exists(BEST_CONFIGS_PATH):
+        raise FileNotFoundError(
+            f"Phase 1 best configs not found: {BEST_CONFIGS_PATH}\\n"
+            f"Please run: python extract_phase1_best_configs.py --workspace experiment_workspace_v3_phase1"
+        )
     with open(BEST_CONFIGS_PATH, 'r') as f:
         return json.load(f)
 
 
-def create_ablation_config(method_config, mf_size, seed, base_config):
-    """Create ablation configuration for a specific MF cloud size."""
+def create_cutoff_config(method_config, cutoff_nm, seed, base_config):
+    """Create cutoff analysis configuration.
+    
+    Args:
+        method_config: Best config from Phase 1 (dict with representation, method, dimension, etc.)
+        cutoff_nm: Affinity cutoff in nM
+        seed: Random seed
+        base_config: Base experiment configuration
+    
+    Returns:
+        Configuration dict for this cutoff analysis run
+    """
     
     representation = method_config['representation']
     method = method_config['method']
@@ -58,15 +99,17 @@ def create_ablation_config(method_config, mf_size, seed, base_config):
         "targets": [PHASE2_TARGET],
         "representations": [representation],
         "random_seed": seed,
-        "phase": "phase2_mf_ablation",
-        "mf_cloud_size": mf_size,
-        "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_mf{mf_size}"
+        "phase": "phase2_cutoff_sensitivity",
+        "affinity_cutoff_nM": cutoff_nm,
+        "reuse_phase1_data": True,  # Flag to indicate data reuse strategy
+        "phase1_workspace": "experiment_workspace_v3_phase1/",
+        "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_cutoff{cutoff_nm}nM"
     }
     
-    # Override dimensions, workspace, and MF cloud size
+    # Override settings for Phase 2
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
     config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase2/"
-    config["global_settings"]["mf_cloud_max_molecules"] = mf_size
+    config["global_settings"]["affinity_cutoff_nM"] = cutoff_nm
     
     # Set DR method
     if method == 'PCA':
@@ -89,7 +132,7 @@ def create_ablation_config(method_config, mf_size, seed, base_config):
 def main():
     """Generate all Phase 2 configuration files."""
     print("="*80)
-    print("UMMBAS v3.0 - Phase 2 MF Cloud Ablation Config Generator")
+    print("UMMBAS v3.0 - Phase 2 Cutoff Sensitivity Config Generator")
     print("="*80)
     print()
     
@@ -98,89 +141,96 @@ def main():
     print(f"Output directory: {OUTPUT_DIR}")
     print()
     
-    # Load configs
+    # Load base config and best Phase 1 configs
     base_config = load_base_config()
     
-    print(f"Loading best configurations from: {BEST_CONFIGS_PATH}")
-    best_configs = load_best_configs()
+    try:
+        best_configs = load_best_configs()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        print("\\nPlease extract best configs from Phase 1 first:")
+        print("  python extract_phase1_best_configs.py --workspace experiment_workspace_v3_phase1")
+        return
     
-    # Extract best PCA-features (at best dimension from Phase 1)
-    best_pca = None
-    for key in ['features_pca_dim2', 'features_pca_dim5', 'features_pca_dim10']:
-        if key in best_configs:
-            if best_pca is None or best_configs[key]['ef_1_pct_mean'] > best_pca['ef_1_pct_mean']:
-                best_pca = best_configs[key]
+    # Select methods for cutoff analysis
+    # Using best PCA-features and best UMAP-Euclidean-features (overall best across dimensions)
+    methods_to_test = []
     
-    # Extract best UMAP-features (at best dimension from Phase 1)
-    best_umap = None
-    for key in ['features_umap_euclidean_dim2', 'features_umap_euclidean_dim5', 'features_umap_euclidean_dim10']:
-        if key in best_configs:
-            if best_umap is None or best_configs[key]['ef_1_pct_mean'] > best_umap['ef_1_pct_mean']:
-                best_umap = best_configs[key]
+    # Best PCA-features overall
+    if 'best_pca_overall' in best_configs:
+        methods_to_test.append(('PCA-features (overall best)', best_configs['best_pca_overall']))
+        print(f"✓ PCA-features (overall best): {best_configs['best_pca_overall']['dimension']}D")
+    elif 'features_pca_dim2' in best_configs:
+        # Fallback to 2D if overall not available
+        methods_to_test.append(('PCA-features (2D)', best_configs['features_pca_dim2']))
+        print(f"✓ PCA-features (2D fallback): 2D")
     
-    if not best_pca or not best_umap:
-        print("ERROR: Could not find best PCA or UMAP configs from Phase 1!")
+    # Best UMAP-Euclidean-features overall
+    if 'best_umap_overall' in best_configs:
+        methods_to_test.append(('UMAP-Euclidean-features (overall best)', best_configs['best_umap_overall']))
+        print(f"✓ UMAP-Euclidean-features (overall best): {best_configs['best_umap_overall']['dimension']}D, "
+              f"nn={best_configs['best_umap_overall']['n_neighbors']}, "
+              f"md={best_configs['best_umap_overall']['min_dist']}")
+    elif 'features_umap_euclidean_dim2' in best_configs:
+        # Fallback to 2D if overall not available
+        methods_to_test.append(('UMAP-Euclidean-features (2D)', best_configs['features_umap_euclidean_dim2']))
+        print(f"✓ UMAP-Euclidean-features (2D fallback): nn={best_configs['features_umap_euclidean_dim2']['n_neighbors']}, "
+              f"md={best_configs['features_umap_euclidean_dim2']['min_dist']}")
+    
+    if not methods_to_test:
+        print("ERROR: No suitable methods found in best_configs!")
         print("Available keys:", list(best_configs.keys()))
         return
     
     print()
-    print("Best configurations for ablation:")
-    print(f"  PCA-features: {best_pca['dimension']}D, EF@1% = {best_pca['ef_1_pct_mean']:.2f}")
-    print(f"  UMAP-features: {best_umap['dimension']}D (nn={best_umap['n_neighbors']}, md={best_umap['min_dist']}), EF@1% = {best_umap['ef_1_pct_mean']:.2f}")
+    print(f"Affinity cutoffs to test: {AFFINITY_CUTOFFS} nM")
+    print(f"Seeds: {SEEDS}")
     print()
     
+    # Generate configurations
     config_count = 0
+    for method_label, method_config in methods_to_test:
+        for cutoff_nm in AFFINITY_CUTOFFS:
+            for seed in SEEDS:
+                config = create_cutoff_config(method_config, cutoff_nm, seed, base_config)
+                
+                # Generate filename
+                method_name = method_config['method'].lower().replace('-', '_')
+                dim = method_config['dimension']
+                filename = f"config_seed{seed}_{method_config['representation']}_{method_name}_dim{dim}_cutoff{cutoff_nm}nM.json"
+                filepath = os.path.join(OUTPUT_DIR, filename)
+                
+                # Save configuration
+                with open(filepath, 'w') as f:
+                    json.dump(config, f, indent=2)
+                
+                config_count += 1
     
-    # ========================================================================
-    # Generate configs for each MF cloud size
-    # ========================================================================
-    print(f"Generating configs for MF cloud sizes: {MF_CLOUD_SIZES}")
+    print(f"Generated {config_count} configuration files")
     print()
     
-    for mf_size in MF_CLOUD_SIZES:
-        mf_label = f"{mf_size//1000}k" if mf_size >= 1000 else str(mf_size)
-        
-        # PCA configs
-        for seed in SEEDS:
-            config = create_ablation_config(best_pca, mf_size, seed, base_config)
-            filename = f"config_tyro_features_pca_dim{best_pca['dimension']}_mf{mf_label}_seed{seed}.json"
-            filepath = os.path.join(OUTPUT_DIR, filename)
-            
-            with open(filepath, 'w') as f:
-                json.dump(config, f, indent=2)
-            
-            config_count += 1
-        
-        # UMAP configs
-        for seed in SEEDS:
-            config = create_ablation_config(best_umap, mf_size, seed, base_config)
-            filename = f"config_tyro_features_umap_dim{best_umap['dimension']}_nn{best_umap['n_neighbors']}_md{best_umap['min_dist']}_mf{mf_label}_seed{seed}.json"
-            filepath = os.path.join(OUTPUT_DIR, filename)
-            
-            with open(filepath, 'w') as f:
-                json.dump(config, f, indent=2)
-            
-            config_count += 1
-    
-    # ========================================================================
     # Summary
-    # ========================================================================
-    print()
     print("="*80)
     print("SUMMARY")
     print("="*80)
-    print(f"Total configs generated: {config_count}")
-    print()
-    print("Breakdown:")
-    print(f"  MF cloud sizes: {len(MF_CLOUD_SIZES)}")
-    print(f"  Methods: 2 (PCA, UMAP)")
+    print(f"Total configurations: {config_count}")
+    print(f"  Methods: {len(methods_to_test)}")
+    print(f"  Cutoffs: {len(AFFINITY_CUTOFFS)}")
     print(f"  Seeds: {len(SEEDS)}")
-    print(f"  Total: {len(MF_CLOUD_SIZES)} × 2 × {len(SEEDS)} = {config_count}")
+    print(f"  Expected runs: {len(methods_to_test)} × {len(AFFINITY_CUTOFFS)} × {len(SEEDS)} = {len(methods_to_test) * len(AFFINITY_CUTOFFS) * len(SEEDS)}")
     print()
-    print("This will test the phase transition hypothesis:")
-    print("  - Expected PCA advantage at high MF counts (50K-420K)")
-    print("  - Expected UMAP advantage at low MF counts (0-10K)")
-    print("  - Crossover point predicted at ~10K-50K molecules")
+    print("Estimated runtime: ~10-15 hours total (reusing Phase 1 data)")
+    print()
+    print("Research Questions:")
+    print("  1. Which cutoff gives best High-potent EF@1%?")
+    print("  2. Do PCA and UMAP prefer different cutoffs?")
+    print("  3. How does cutoff affect Medium vs Weak potency enrichment?")
+    print("  4. What is optimal cutoff for Phase 3 (MF cloud ablation)?")
+    print()
+    print("Next steps:")
+    print("  1. Review generated configs in:", OUTPUT_DIR)
+    print("  2. Run Phase 2: python scripts/run_phase2_cutoff_analysis.py")
+    print("  3. Or submit to HPC: sbatch hpc/submit_v3_phase2.sh")
     print("="*80)
 
 

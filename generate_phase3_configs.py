@@ -1,49 +1,37 @@
 #!/usr/bin/env python3
 """
-Generate Phase 3 configuration files for UMMBAS v3.0
-Phase 3: Cross-Protein Generalization
+Generate Phase 2 configuration files for UMMBAS v3.0
+Phase 2: MF Cloud Ablation Study
 
-Tests best configurations from Phase 1 on two additional proteins:
-- Pyruvate Kinase M2 (same function: Transferase)
-- Isocitrate Dehydrogenase NADP (different function: Oxidoreductase)
+Tests PCA-features and UMAP-features at their best dimensionalities
+with varying MF cloud sizes: 0, 1K, 10K, 50K, 100K, 420K molecules
 
-Tests 8 best configs:
-- PCA-features: 2D, 5D, 10D
-- UMAP-Euclidean-features: 2D, 5D, 10D
-- PCA-fingerprints: 2D
-- UMAP-Jaccard-fingerprints: 2D
+This validates the phase transition hypothesis showing PCA overtaking
+UMAP at critical MF cloud mass.
 """
 
 import json
 import os
 
 # Configuration
-OUTPUT_DIR = "hyperparam_configs_v3_phase3_generalization"
+OUTPUT_DIR = "hyperparam_configs_v3_phase2_ablation"
 BASE_CONFIG_PATH = "experiment_config.json"
 BEST_CONFIGS_PATH = "phase1_best_configs.json"
 SEEDS = [42, 43, 44, 45, 46]
 
-# Generalization targets
-GENERALIZATION_TARGETS = [
-    {
-        "id_name": "PyruvateKinaseM2_P14618",
-        "display_name": "Pyruvate Kinase M2",
-        "uniprot_id": "P14618",
-        "molecular_function_canonical_name": "Transferase",
-        "molecular_function_filename_segment": "Transferase",
-        "molecular_function_display_name": "Transferase",
-        "molecular_function_kw_code": "KW-0808"
-    },
-    {
-        "id_name": "IsocitrateDehydrogenaseNADP_O75874",
-        "display_name": "Isocitrate Dehydrogenase NADP cytoplasmic",
-        "uniprot_id": "O75874",
-        "molecular_function_canonical_name": "Oxidoreductase",
-        "molecular_function_filename_segment": "Oxidoreductase",
-        "molecular_function_display_name": "Oxidoreductase",
-        "molecular_function_kw_code": "KW-0560"
-    }
-]
+# MF cloud sizes for ablation
+MF_CLOUD_SIZES = [0, 1000, 10000, 50000, 100000, 420000]
+
+# Target for Phase 2
+PHASE2_TARGET = {
+    "id_name": "TyrosineProteinKinaseABL1_P00519",
+    "display_name": "Tyrosine-protein Kinase ABL1",
+    "uniprot_id": "P00519",
+    "molecular_function_canonical_name": "Transferase",
+    "molecular_function_filename_segment": "Transferase",
+    "molecular_function_display_name": "Transferase",
+    "molecular_function_kw_code": "KW-0808"
+}
 
 
 def load_base_config():
@@ -58,8 +46,8 @@ def load_best_configs():
         return json.load(f)
 
 
-def create_generalization_config(method_config, target, seed, base_config):
-    """Create generalization configuration."""
+def create_ablation_config(method_config, mf_size, seed, base_config):
+    """Create ablation configuration for a specific MF cloud size."""
     
     representation = method_config['representation']
     method = method_config['method']
@@ -67,16 +55,18 @@ def create_generalization_config(method_config, target, seed, base_config):
     
     config = {
         "global_settings": base_config["global_settings"].copy(),
-        "targets": [target],
+        "targets": [PHASE2_TARGET],
         "representations": [representation],
         "random_seed": seed,
-        "phase": "phase3_generalization",
-        "experiment_type": f"{target['id_name']}_{representation}_{method.lower().replace('-', '_')}_dim{dimension}"
+        "phase": "phase2_mf_ablation",
+        "mf_cloud_size": mf_size,
+        "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_mf{mf_size}"
     }
     
-    # Override dimensions and workspace
+    # Override dimensions, workspace, and MF cloud size
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
-    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase3/"
+    config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase2/"
+    config["global_settings"]["mf_cloud_max_molecules"] = mf_size
     
     # Set DR method
     if method == 'PCA':
@@ -92,23 +82,14 @@ def create_generalization_config(method_config, target, seed, base_config):
                 "min_dist": method_config['min_dist']
             }
         }
-    elif method == 'UMAP-Jaccard':
-        config["dimensionality_reduction_methods"] = {
-            "umap_jaccard": {
-                "short_name": "UMAP-Jaccard",
-                "metric": "jaccard",
-                "n_neighbors": method_config['n_neighbors'],
-                "min_dist": method_config['min_dist']
-            }
-        }
     
     return config
 
 
 def main():
-    """Generate all Phase 3 configuration files."""
+    """Generate all Phase 2 configuration files."""
     print("="*80)
-    print("UMMBAS v3.0 - Phase 3 Generalization Config Generator")
+    print("UMMBAS v3.0 - Phase 2 MF Cloud Ablation Config Generator")
     print("="*80)
     print()
     
@@ -122,80 +103,64 @@ def main():
     
     print(f"Loading best configurations from: {BEST_CONFIGS_PATH}")
     best_configs = load_best_configs()
-    print()
     
-    # Select configs to test
-    configs_to_test = []
-    
-    # PCA-features at each dimension
-    for dim in [2, 5, 10]:
-        key = f'features_pca_dim{dim}'
+    # Extract best PCA-features (at best dimension from Phase 1)
+    best_pca = None
+    for key in ['features_pca_dim2', 'features_pca_dim5', 'features_pca_dim10']:
         if key in best_configs:
-            configs_to_test.append((key, best_configs[key]))
-            print(f"✓ {key}: EF@1% = {best_configs[key]['ef_1_pct_mean']:.2f}")
+            if best_pca is None or best_configs[key]['ef_1_pct_mean'] > best_pca['ef_1_pct_mean']:
+                best_pca = best_configs[key]
     
-    # UMAP-Euclidean-features at each dimension
-    for dim in [2, 5, 10]:
-        key = f'features_umap_euclidean_dim{dim}'
+    # Extract best UMAP-features (at best dimension from Phase 1)
+    best_umap = None
+    for key in ['features_umap_euclidean_dim2', 'features_umap_euclidean_dim5', 'features_umap_euclidean_dim10']:
         if key in best_configs:
-            cfg = best_configs[key]
-            configs_to_test.append((key, cfg))
-            print(f"✓ {key}: EF@1% = {cfg['ef_1_pct_mean']:.2f} (nn={cfg['n_neighbors']}, md={cfg['min_dist']})")
+            if best_umap is None or best_configs[key]['ef_1_pct_mean'] > best_umap['ef_1_pct_mean']:
+                best_umap = best_configs[key]
     
-    # PCA-fingerprints at 2D
-    if 'fingerprints_pca_dim2' in best_configs:
-        configs_to_test.append(('fingerprints_pca_dim2', best_configs['fingerprints_pca_dim2']))
-        print(f"✓ fingerprints_pca_dim2: EF@1% = {best_configs['fingerprints_pca_dim2']['ef_1_pct_mean']:.2f}")
-    
-    # UMAP-Jaccard-fingerprints at 2D
-    if 'fingerprints_umap_jaccard_dim2' in best_configs:
-        cfg = best_configs['fingerprints_umap_jaccard_dim2']
-        configs_to_test.append(('fingerprints_umap_jaccard_dim2', cfg))
-        print(f"✓ fingerprints_umap_jaccard_dim2: EF@1% = {cfg['ef_1_pct_mean']:.2f} (nn={cfg['n_neighbors']}, md={cfg['min_dist']})")
+    if not best_pca or not best_umap:
+        print("ERROR: Could not find best PCA or UMAP configs from Phase 1!")
+        print("Available keys:", list(best_configs.keys()))
+        return
     
     print()
-    print(f"Total configurations to test: {len(configs_to_test)}")
-    print(f"Generalization targets: {len(GENERALIZATION_TARGETS)}")
-    print()
-    
-    for target in GENERALIZATION_TARGETS:
-        print(f"  - {target['display_name']} ({target['molecular_function_display_name']})")
+    print("Best configurations for ablation:")
+    print(f"  PCA-features: {best_pca['dimension']}D, EF@1% = {best_pca['ef_1_pct_mean']:.2f}")
+    print(f"  UMAP-features: {best_umap['dimension']}D (nn={best_umap['n_neighbors']}, md={best_umap['min_dist']}), EF@1% = {best_umap['ef_1_pct_mean']:.2f}")
     print()
     
     config_count = 0
     
     # ========================================================================
-    # Generate configs for each target and method combination
+    # Generate configs for each MF cloud size
     # ========================================================================
-    for target in GENERALIZATION_TARGETS:
-        target_short = target['id_name'].split('_')[0].lower()
+    print(f"Generating configs for MF cloud sizes: {MF_CLOUD_SIZES}")
+    print()
+    
+    for mf_size in MF_CLOUD_SIZES:
+        mf_label = f"{mf_size//1000}k" if mf_size >= 1000 else str(mf_size)
         
-        print(f"Generating configs for {target['display_name']}...")
-        
-        for config_key, method_config in configs_to_test:
-            representation = method_config['representation']
-            method = method_config['method']
-            dimension = method_config['dimension']
+        # PCA configs
+        for seed in SEEDS:
+            config = create_ablation_config(best_pca, mf_size, seed, base_config)
+            filename = f"config_tyro_features_pca_dim{best_pca['dimension']}_mf{mf_label}_seed{seed}.json"
+            filepath = os.path.join(OUTPUT_DIR, filename)
             
-            for seed in SEEDS:
-                config = create_generalization_config(method_config, target, seed, base_config)
-                
-                # Build filename
-                method_str = method.lower().replace('-', '_')
-                filename = f"config_{target_short}_{representation}_{method_str}_dim{dimension}"
-                
-                if 'UMAP' in method:
-                    filename += f"_nn{method_config['n_neighbors']}_md{method_config['min_dist']}"
-                
-                filename += f"_seed{seed}.json"
-                filepath = os.path.join(OUTPUT_DIR, filename)
-                
-                with open(filepath, 'w') as f:
-                    json.dump(config, f, indent=2)
-                
-                config_count += 1
+            with open(filepath, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            config_count += 1
         
-        print(f"  Created {len(configs_to_test) * len(SEEDS)} configs")
+        # UMAP configs
+        for seed in SEEDS:
+            config = create_ablation_config(best_umap, mf_size, seed, base_config)
+            filename = f"config_tyro_features_umap_dim{best_umap['dimension']}_nn{best_umap['n_neighbors']}_md{best_umap['min_dist']}_mf{mf_label}_seed{seed}.json"
+            filepath = os.path.join(OUTPUT_DIR, filename)
+            
+            with open(filepath, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            config_count += 1
     
     # ========================================================================
     # Summary
@@ -207,15 +172,15 @@ def main():
     print(f"Total configs generated: {config_count}")
     print()
     print("Breakdown:")
-    print(f"  Targets: {len(GENERALIZATION_TARGETS)}")
-    print(f"  Methods: {len(configs_to_test)}")
+    print(f"  MF cloud sizes: {len(MF_CLOUD_SIZES)}")
+    print(f"  Methods: 2 (PCA, UMAP)")
     print(f"  Seeds: {len(SEEDS)}")
-    print(f"  Total: {len(GENERALIZATION_TARGETS)} × {len(configs_to_test)} × {len(SEEDS)} = {config_count}")
+    print(f"  Total: {len(MF_CLOUD_SIZES)} × 2 × {len(SEEDS)} = {config_count}")
     print()
-    print("This will test:")
-    print("  - Same molecular function generalization (Tyro → Pyru: both Transferase)")
-    print("  - Different molecular function generalization (Tyro → Iso: Oxidoreductase)")
-    print("  - Dimension transferability across proteins")
+    print("This will test the phase transition hypothesis:")
+    print("  - Expected PCA advantage at high MF counts (50K-420K)")
+    print("  - Expected UMAP advantage at low MF counts (0-10K)")
+    print("  - Crossover point predicted at ~10K-50K molecules")
     print("="*80)
 
 

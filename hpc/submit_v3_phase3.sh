@@ -1,15 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# UMMBAS v3.0 - Phase 3 Job Submission Script
+# UMMBAS v3.0 - Phase 2 Job Submission Script
 # =============================================================================
-# Phase 3: Cross-Protein Generalization Study
-# - Targets: PyruvateKinaseM2 (Pyru), IsocitrateDehydrogenaseNADP (Iso)
-# - Uses best configs from Phase 1 on new proteins
-# - Total: 80 runs (16 configs × 5 seeds)
+# Phase 2: MF Cloud Size Ablation Study
+# - Target: TyrosineProteinKinaseABL1 (Tyro)
+# - MF sizes: 0, 1K, 10K, 50K, 100K, 420K molecules
+# - Uses best configs from Phase 1
+# - Total: 60 runs (12 configs × 5 seeds)
 # =============================================================================
 
 # --- Configuration ---
-CONFIG_DIR="hyperparam_configs_v3_phase3_generalization"
+CONFIG_DIR="hyperparam_configs_v3_phase2_ablation"
 SLURM_SCRIPT="hpc/ummbas_v3_cpu.sh"
 
 # NOTE: Each config file already contains a specific seed.
@@ -17,7 +18,7 @@ SLURM_SCRIPT="hpc/ummbas_v3_cpu.sh"
 
 # --- Pre-submission Checks ---
 echo "============================================================"
-echo "UMMBAS v3.0 - Phase 3 Submission"
+echo "UMMBAS v3.0 - Phase 2 Submission"
 echo "============================================================"
 
 if [ ! -f "${SLURM_SCRIPT}" ]; then
@@ -33,13 +34,13 @@ fi
 
 if [ ! -d "${CONFIG_DIR}" ]; then
     echo "ERROR: Configuration directory '${CONFIG_DIR}' not found."
-    echo "Run: python generate_phase3_configs.py"
+    echo "Run: python generate_phase2_configs.py"
     exit 1
 fi
 
 if [ -z "$(ls -A ${CONFIG_DIR}/*.json 2>/dev/null)" ]; then
     echo "ERROR: No .json configuration files found in '${CONFIG_DIR}'."
-    echo "Run: python generate_phase3_configs.py"
+    echo "Run: python generate_phase2_configs.py"
     exit 1
 fi
 
@@ -49,7 +50,7 @@ TOTAL_JOBS=${NUM_CONFIGS}
 
 echo "Configuration Directory: ${CONFIG_DIR}"
 echo "Number of Configs: ${NUM_CONFIGS}"
-echo "Total Jobs: ${TOTAL_JOBS} (expected: 80)"
+echo "Total Jobs: ${TOTAL_JOBS} (expected: 60)"
 echo "============================================================"
 
 read -p "Proceed with submission? (y/n): " -n 1 -r
@@ -72,7 +73,7 @@ FAILED_COUNT=0
 # Each config file already has a seed in it, so we just submit once per file
 for config_file in "${CONFIG_DIR}"/*.json; do
     config_basename=$(basename "${config_file}" .json)
-    job_name="UMMBAS_v3_phase3_${config_basename}"
+    job_name="UMMBAS_v3_phase2_${config_basename}"
     
     # Extract seed from config filename (format: ..._seed42.json)
     seed=$(echo "${config_basename}" | grep -oP 'seed\K\d+' || echo "unknown")
@@ -97,5 +98,5 @@ echo "============================================================"
 echo ""
 echo "Monitor progress with:"
 echo "  squeue -u \$USER"
-echo "  python scripts/check_hyperparam_status.py --workspace experiment_workspace_v3_phase3"
+echo "  python scripts/check_hyperparam_status.py --workspace experiment_workspace_v3_phase2"
 echo "============================================================"

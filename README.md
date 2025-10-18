@@ -11,6 +11,9 @@
 - **🚀 Quick Start Guide**: [`docs/QUICKSTART_V3.md`](docs/QUICKSTART_V3.md)
 - **🔬 Key Finding - MF Cloud Impact**: [`docs/MF_CLOUD_IMPACT_ANALYSIS.md`](docs/MF_CLOUD_IMPACT_ANALYSIS.md)
 - **💻 HPC Execution**: [`hpc/README.md`](hpc/README.md)
+- **📊 Lab Book**: [`LAB_BOOK.md`](LAB_BOOK.md) - Experimental log and findings
+- **📋 Planning**: [`PLANNING.md`](PLANNING.md) - Task tracking and next steps
+- **🗄️ Archive**: [`ARCHIVE.md`](ARCHIVE.md) - Deprecated features and scripts
 
 ## Abstract
 
@@ -26,17 +29,21 @@ A significant challenge in ligand-based drug discovery is the scarcity of known 
 - Representations: Physicochemical features (39 RDKit descriptors) + ECFP4 fingerprints  
 - Seeds: 5 replicates (42-46)
 
-**Phase 2: MF Cloud Ablation (60 runs)**  
-- MF sizes: 0, 1K, 10K, 50K, 100K, 191K molecules  
+**Phase 2: Affinity Cutoff Sensitivity (40 runs)** *[REORDERED - was Phase 4]*  
+- Cutoffs: 100 nM, 1 μM, 10 μM, 100 μM (aligned with potency tiers)  
+- Purpose: Determine optimal affinity threshold for MF cloud composition  
+- **Computational efficiency**: Reuses Phase 1 similarity spaces (~75% time savings)  
+- **Rationale for reordering**: Cutoff must be established before MF cloud ablation
+
+**Phase 3: MF Cloud Ablation (60 runs)** *[REORDERED - was Phase 2]*  
+- MF sizes: 0, 1K, 10K, 50K, 100K, 420K molecules  
+- Uses optimal cutoff from Phase 2  
 - Purpose: Validate phase transition hypothesis (UMAP→PCA crossover at ~10K-50K)
 
-**Phase 3: Cross-Protein Generalization (80 runs)**  
+**Phase 4: Cross-Protein Generalization (80 runs)** *[REORDERED - was Phase 3]*  
 - Targets: Pyruvate kinase M2 (same MF), Isocitrate dehydrogenase (different MF)  
+- Uses optimal cutoff from Phase 2  
 - Purpose: Test transferability across proteins
-
-**Phase 4: Affinity Cutoff Sensitivity (40 runs)**  
-- Cutoffs: 100 nM, 1 μM, 10 μM, 100 μM  
-- Purpose: Determine optimal IC50 threshold per method
 
 **Evaluation**: EF@1% (primary), ROC-AUC, PR-AUC across 5 replicates 
 
@@ -102,7 +109,7 @@ A significant challenge in ligand-based drug discovery is the scarcity of known 
 **Interpretation**:
 - **Low MF counts**: Actives form isolated clusters → Non-linear UMAP excels at local structure
 - **High MF counts**: MF cloud creates smooth gradient → Linear PCA captures global patterns
-- **Crossover predicted**: ~10K-50K molecules (Phase 2 will validate)
+- **Crossover predicted**: ~10K-50K molecules (Phase 3 will validate)
 
 **Impact**: MF cloud composition is a critical determinant of optimal DR method selection.
 
@@ -125,6 +132,9 @@ A significant challenge in ligand-based drug discovery is the scarcity of known 
 ├── README.md                          # This file (v3.0 overview)
 ├── README_V3_PIPELINE.md              # Complete pipeline documentation
 ├── METHODS_FOR_PAPER.md               # Comprehensive methods for publication
+├── LAB_BOOK.md                        # Experimental log and daily findings
+├── PLANNING.md                        # Task tracking and next steps
+├── ARCHIVE.md                         # Deprecated features and scripts
 │
 ├── hpc/                               # HPC execution scripts
 │   ├── README.md                      # HPC setup and submission guide
@@ -137,6 +147,10 @@ A significant challenge in ligand-based drug discovery is the scarcity of known 
 │   ├── HPC_EXECUTION_GUIDE.md         # HPC operations manual
 │   ├── archive_v2.0/                  # Archived v2.0 documentation
 │   └── archive_development/           # Development/debugging docs
+│
+├── scripts/                           # Analysis scripts
+│   ├── analyze_potency_stratified_enrichment.py  # Potency-stratified analysis (parallelized)
+│   └── ...                            # Other analysis scripts
 │
 ├── generate_phase*_configs.py         # Config generators (4 phases)
 ├── extract_phase1_best_configs.py     # Phase 1 winner extraction
@@ -210,18 +224,47 @@ python extract_phase1_best_configs.py \
 ### 6. Run Subsequent Phases
 
 ```bash
-# Generate and submit Phase 2 (ablation)
+# Generate and submit Phase 2 (cutoff sensitivity - REORDERED)
 python generate_phase2_configs.py
+# Option A: Use orchestrator script (recommended, reuses Phase 1 data)
+python scripts/run_phase2_cutoff_analysis.py \
+  --config_dir hyperparam_configs_v3_phase2_cutoff \
+  --phase1_workspace experiment_workspace_v3_phase1 \
+  --phase2_workspace experiment_workspace_v3_phase2
+# Option B: HPC submission
 bash hpc/submit_v3_phase2.sh
 
-# Generate and submit Phase 3 (generalization)
+# Generate and submit Phase 3 (MF cloud ablation - REORDERED, uses Phase 2 optimal cutoff)
 python generate_phase3_configs.py
 bash hpc/submit_v3_phase3.sh
 
-# Generate and submit Phase 4 (cutoff analysis)
+# Generate and submit Phase 4 (generalization - REORDERED, uses Phase 2 optimal cutoff)
 python generate_phase4_configs.py
 bash hpc/submit_v3_phase4.sh
 ```
+
+### 7. Analyze Results with Potency Stratification
+
+```bash
+# Run parallelized potency-stratified enrichment analysis
+python scripts/analyze_potency_stratified_enrichment.py \
+  --workspace_dir experiment_workspace_v3_phase1 \
+  --output_dir potency_analysis_results \
+  --n_jobs 8  # Optional: specify number of parallel workers
+
+# Outputs:
+# - stratified_enrichment_detailed.csv (all runs)
+# - stratified_enrichment_summary.csv (aggregated by config)
+# - plots/ directory with PNG + PDF figures
+# - potency_stratified_report.txt (summary findings)
+```
+
+**Features**:
+- Parallelized analysis (4-8× faster on multi-core systems)
+- Dimension-separated plots for publication
+- Dual PNG (300 DPI) + PDF (vector) output
+- Best hyperparameter filtering for fair comparisons
+- Potency tier stratification (High: 0.1-100 nM, Medium: 100-1000 nM, Weak: 1000-100,000 nM)
 
 ---
 

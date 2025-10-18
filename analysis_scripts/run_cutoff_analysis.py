@@ -82,19 +82,13 @@ def main():
         
         logging.info(f"  Target: {target_info['display_name']} | DR Method: {dr_params['short_name']}")
         
-        # --- START OF FIX: Explicitly define and separate strategies ---
         strategies_to_run = []
-        if dr_method_key == 'tsne':
-            # t-SNE is ONLY a co-embedding strategy in this pipeline
-            strategies_to_run.append("Co-embedding (Native)")
-        else:
-            # For PCA and UMAP, check which result directories exist
-            if os.path.exists(os.path.join(original_run_dir, target_id_name, "results", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", dr_params['short_name'].replace('-', '_'))):
-                strategies_to_run.append("Projection")
-            if os.path.exists(os.path.join(original_run_dir, target_id_name, "results", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", f"{dr_params['short_name'].replace('-', '_')}_Coembed")):
-                strategies_to_run.append("Co-embedding")
-        # --- END OF FIX ---
-
+        # For PCA and UMAP, check which result directories exist
+        if os.path.exists(os.path.join(original_run_dir, target_id_name, "results", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", dr_params['short_name'].replace('-', '_'))):
+            strategies_to_run.append("Projection")
+        if os.path.exists(os.path.join(original_run_dir, target_id_name, "results", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", f"{dr_params['short_name'].replace('-', '_')}_Coembed")):
+            strategies_to_run.append("Co-embedding")
+    
         for strategy in strategies_to_run:
             for cutoff in affinity_cutoffs:
                 logging.info(f"    * Re-analyzing Strategy: {strategy} with Cutoff: {cutoff} nM *")
@@ -102,25 +96,12 @@ def main():
                 cmd = ["python", "experimental_pipeline/project_and_analyze.py"]
                 simspace_path = ""
                 
-                if strategy == "Projection":
-                    output_dir_leaf = dr_params['short_name'].replace('-', '_')
-                    simspace_path = os.path.join(original_run_dir, target_id_name, "similarity_spaces", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}_similarity_space.csv")
-                    model_dir = os.path.join(original_run_dir, target_id_name, "models", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}")
-                    model_name_root = f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}"
-                    target_ligands_path = os.path.join(original_run_dir, target_id_name, "target_ligands_calculated", REPR_TYPE_TO_PROCESS, f"{target_id_name}_target_ligands_for_calc_{REPR_TYPE_TO_PROCESS}.csv")
-                    cmd.extend(["--simspace_csv_path", os.path.abspath(simspace_path), "--target_ligands_repr_path", os.path.abspath(target_ligands_path), "--model_dir_for_projection", os.path.abspath(model_dir), "--model_name_root_for_projection", model_name_root])
-
-                elif strategy == "Co-embedding" or strategy == "Co-embedding (Native)":
-                    output_dir_leaf = f"{dr_params['short_name'].replace('-', '_')}_Coembed"
-                    if strategy == "Co-embedding (Native)": output_dir_leaf = dr_params['short_name'].replace('-', '_')
-                    metric = dr_params.get("metric", "")
-                    coembed_filename = f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}_{dr_params['short_name'].replace('-', '_')}_similarity_space_COEMBED.csv"
-                    if dr_method_key.startswith("umap"):
-                        coembed_filename = f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}_{metric}_UMAP_similarity_space_COEMBED.csv"
-                    elif dr_method_key == "tsne":
-                        coembed_filename = f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}_tSNE_similarity_space_COEMBED.csv"
-                    simspace_path = os.path.join(original_run_dir, target_id_name, "similarity_spaces", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", coembed_filename)
-                    cmd.extend(["--simspace_csv_path", os.path.abspath(simspace_path)])
+                output_dir_leaf = dr_params['short_name'].replace('-', '_')
+                simspace_path = os.path.join(original_run_dir, target_id_name, "similarity_spaces", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}", f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}_similarity_space.csv")
+                model_dir = os.path.join(original_run_dir, target_id_name, "models", REPR_TYPE_TO_PROCESS, f"dim_{SIMSPACE_DIM_TO_PROCESS}")
+                model_name_root = f"{target_id_name}_{REPR_TYPE_TO_PROCESS}_dim{SIMSPACE_DIM_TO_PROCESS}"
+                target_ligands_path = os.path.join(original_run_dir, target_id_name, "target_ligands_calculated", REPR_TYPE_TO_PROCESS, f"{target_id_name}_target_ligands_for_calc_{REPR_TYPE_TO_PROCESS}.csv")
+                cmd.extend(["--simspace_csv_path", os.path.abspath(simspace_path), "--target_ligands_repr_path", os.path.abspath(target_ligands_path), "--model_dir_for_projection", os.path.abspath(model_dir), "--model_name_root_for_projection", model_name_root])
 
                 if not os.path.exists(simspace_path):
                     logging.warning(f"Required simspace file not found, skipping: {simspace_path}")
