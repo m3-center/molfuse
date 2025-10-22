@@ -369,7 +369,12 @@ def main():
             min_dist = umap_params.get('min_dist', 0.1)
             logger.info(f"Preparing UMAP run for metric '{metric}' with n_neighbors={n_neighbors} and min_dist={min_dist}")
 
-            sklearn_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'low_memory': False}
+            if args.representation_type == "fingerprints":
+                low_memory = True
+            else:
+                low_memory = False
+                
+            sklearn_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'low_memory': low_memory}
             cuml_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'metric': metric}
 
             umap_config = {
