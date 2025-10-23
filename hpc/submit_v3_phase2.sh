@@ -25,8 +25,8 @@ ORCHESTRATOR_SCRIPT="scripts/run_phase2_cutoff_analysis.py"
 # SLURM settings for Phase 2 (shorter runtime than Phase 1)
 PARTITION="hpc"        # Use short partition for quick jobs
 TIME_LIMIT="02:00:00"    # 30 minutes should be plenty
-MEMORY="32G"              # Less memory needed than full pipeline
-CPUS=32                   # Single-threaded
+MEMORY="8G"              # Less memory needed than full pipeline
+CPUS=1                   # Single-threaded
 
 # NOTE: Each config file already contains a specific seed.
 # We do NOT loop over seeds here - that would create duplicate jobs!
