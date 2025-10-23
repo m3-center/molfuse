@@ -402,19 +402,56 @@ def main():
         except Exception as e:
             logging.error(f"Error loading pre-computed similarity space {args.simspace_csv_path}: {e}", exc_info=True)
     
-    if args.affinity_cutoff is not None and 'Standard Value (nM)' in df_projected_target_actives.columns:
-        logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
-        # Ensure the activity column is numeric, coercing errors
-        df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
+    # DATA REUSE mode affinity cutoff handling:
+    # In DATA REUSE mode, the similarity space CSV doesn't have 'Standard Value (nM)' column
+    # We need to load it from the original target ligands file and merge it back
+    if args.affinity_cutoff is not None:
+        if 'Standard Value (nM)' not in df_projected_target_actives.columns:
+            logging.info("'Standard Value (nM)' not in similarity space. Loading from target ligands file...")
+            
+            if args.target_ligands_repr_path and os.path.exists(args.target_ligands_repr_path):
+                try:
+                    df_affinity = pd.read_csv(args.target_ligands_repr_path, low_memory=False)
+                    
+                    # Merge affinity data back in using SMILES or Compound ChEMBL ID
+                    merge_col = None
+                    if 'SMILES' in df_projected_target_actives.columns and 'SMILES' in df_affinity.columns:
+                        merge_col = 'SMILES'
+                    elif 'Compound ChEMBL ID' in df_projected_target_actives.columns and 'Compound ChEMBL ID' in df_affinity.columns:
+                        merge_col = 'Compound ChEMBL ID'
+                    
+                    if merge_col and 'Standard Value (nM)' in df_affinity.columns:
+                        df_projected_target_actives = df_projected_target_actives.merge(
+                            df_affinity[[merge_col, 'Standard Value (nM)']],
+                            on=merge_col,
+                            how='left'
+                        )
+                        logging.info(f"Successfully merged affinity data using '{merge_col}' column")
+                    else:
+                        logging.warning(f"Could not merge affinity data. merge_col={merge_col}")
+                
+                except Exception as e:
+                    logging.error(f"Error loading/merging affinity data: {e}")
+            else:
+                logging.warning(f"Target ligands file not provided or doesn't exist: {args.target_ligands_repr_path}")
         
-        # Keep rows that are less than or equal to the cutoff, OR where the value is NaN (to keep actives without reported affinity)
-        original_active_count = len(df_projected_target_actives)
-        df_projected_target_actives = df_projected_target_actives[
-            (df_projected_target_actives['Standard Value (nM)'] <= args.affinity_cutoff) |
-            (df_projected_target_actives['Standard Value (nM)'].isna())
-        ].copy()
-        filtered_active_count = len(df_projected_target_actives)
-        logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
+        # Now apply the cutoff if we have the column
+        if 'Standard Value (nM)' in df_projected_target_actives.columns:
+            logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
+            # Ensure the activity column is numeric, coercing errors
+            df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
+            
+            # Keep rows that are less than or equal to the cutoff, OR where the value is NaN (to keep actives without reported affinity)
+            original_active_count = len(df_projected_target_actives)
+            df_projected_target_actives = df_projected_target_actives[
+                (df_projected_target_actives['Standard Value (nM)'] <= args.affinity_cutoff) |
+                (df_projected_target_actives['Standard Value (nM)'].isna())
+            ].copy()
+            filtered_active_count = len(df_projected_target_actives)
+            logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
+        else:
+            logging.error("Cannot apply affinity cutoff: 'Standard Value (nM)' column still missing after merge attempt")
+            logging.error("Phase 2 cutoff analysis cannot proceed without affinity data!")
     
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives projected or loaded for DR: {args.dr_short_name} (method key: {args.dr_method_key}). Cannot perform ranking analysis.")

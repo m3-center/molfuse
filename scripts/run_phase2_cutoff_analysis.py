@@ -228,12 +228,18 @@ def run_cutoff_analysis(config_path, phase1_workspace, phase2_workspace, base_co
         logging.error("Cannot proceed without Phase 1 data")
         return False
     
-    # Find required Phase 1 files (only need similarity space for DATA REUSE mode)
+    # Find required Phase 1 files
     simspace_path = find_similarity_space(phase1_run_dir, representation, dimension, target_id)
+    target_ligands_path = find_target_ligands_path(phase1_run_dir, representation, target_id)
     
     if not simspace_path:
         logging.error("Missing required similarity space file from Phase 1")
         return False
+    
+    # Target ligands path is needed for affinity data merging (not for projection)
+    if not target_ligands_path:
+        logging.warning("Target ligands file not found - affinity cutoff filtering may not work")
+
     
     # Build output directory for Phase 2
     config_basename = os.path.basename(config_path).replace('config_', '').replace('.json', '')
@@ -253,13 +259,13 @@ def run_cutoff_analysis(config_path, phase1_workspace, phase2_workspace, base_co
     
     # Build command for project_and_analyze.py
     # Phase 2 DATA REUSE mode: similarity space already contains projected actives
-    # Do NOT pass --target_ligands_repr_path or --model_dir_for_projection
-    # This triggers DATA REUSE mode instead of PROJECTION mode
+    # Pass --target_ligands_repr_path ONLY for affinity data merging (not for projection)
     cmd = [
         "python", "experimental_pipeline/project_and_analyze.py",
         "--simspace_csv_path", os.path.abspath(simspace_path),
-        # NOTE: Omit --target_ligands_repr_path to trigger DATA REUSE mode
+        "--target_ligands_repr_path", os.path.abspath(target_ligands_path) if target_ligands_path else "none",
         # NOTE: Omit --model_dir_for_projection to trigger DATA REUSE mode
+        # NOTE: Omit --model_name_root_for_projection to trigger DATA REUSE mode
         "--dr_method_key", dr_method_key,
         "--dr_short_name", dr_config["short_name"],
         "--simspace_dim", str(dimension),

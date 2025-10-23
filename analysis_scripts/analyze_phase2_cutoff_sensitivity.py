@@ -117,18 +117,18 @@ def load_metrics(run_dir):
     Returns:
         dict: Metrics including EF@1%, ROC AUC, etc., or None if not found
     """
-    # Look for ranking metrics CSV
+    # Look for ranking metrics CSV (can be in PCA/ or UMAP_Euclidean/ subdirectory)
     pattern = os.path.join(
         run_dir,
         "TyrosineProteinKinaseABL1_P00519",
         "results",
         "features",
         "dim_5",
-        "*",
+        "**",
         "*_ranking_metrics.csv"
     )
     
-    csv_files = glob.glob(pattern)
+    csv_files = glob.glob(pattern, recursive=True)
     
     if not csv_files:
         logging.warning(f"No metrics found in: {run_dir}")
@@ -156,17 +156,18 @@ def load_ranked_data(run_dir):
     Returns:
         tuple: (num_actives, num_total) or (None, None) if not found
     """
+    # Pattern to find ranked CSV files (can be in PCA/ or UMAP_Euclidean/)
     pattern = os.path.join(
         run_dir,
         "TyrosineProteinKinaseABL1_P00519",
         "results",
         "features",
         "dim_5",
-        "*",
+        "**",
         "TYROSINEPROTEINKINASEABL1_P00519-*-5D-FEATURES.csv"
     )
     
-    csv_files = glob.glob(pattern)
+    csv_files = glob.glob(pattern, recursive=True)
     
     if not csv_files:
         return None, None
@@ -519,9 +520,22 @@ def generate_summary_report(df_results, output_dir):
     
     for cutoff, label in zip(CUTOFFS, CUTOFF_LABELS):
         df_cutoff = df_results[df_results['cutoff_nM'] == cutoff]
-        best_config = df_cutoff.groupby('config_type')['ef_1_pct'].mean().idxmax()
-        best_ef = df_cutoff.groupby('config_type')['ef_1_pct'].mean().max()
+        if df_cutoff.empty:
+            report_lines.append(f"{label:12s}: No data available")
+            continue
+        
+        grouped = df_cutoff.groupby('config_type')['ef_1_pct'].mean()
+        if grouped.isna().all():
+            report_lines.append(f"{label:12s}: All EF values are NaN (jobs may have failed)")
+            continue
+        
+        best_config = grouped.idxmax()
+        best_ef = grouped.max()
         best_std = df_cutoff[df_cutoff['config_type'] == best_config]['ef_1_pct'].std()
+        
+        if pd.isna(best_config) or pd.isna(best_ef):
+            report_lines.append(f"{label:12s}: Unable to determine best configuration")
+            continue
         
         report_lines.append(f"{label:12s}: {CONFIG_LABELS[best_config]:40s} EF@1% = {best_ef:.2f} ± {best_std:.2f}")
     
