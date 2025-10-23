@@ -1501,14 +1501,14 @@ def extract_best_configs(df_results, output_dir):
     group_cols = ['representation', 'dr_method', 'dimension', 'n_neighbors', 'min_dist']
     
     # For overall EF@1%
-    aggregated_overall = df_results.groupby(group_cols).agg({
+    aggregated_overall = df_results.groupby(group_cols, dropna=False).agg({
         'Overall_EF': ['mean', 'std', 'count']
     }).reset_index()
     aggregated_overall.columns = ['representation', 'method', 'dimension', 'n_neighbors', 'min_dist',
                                    'ef_1_pct_mean', 'ef_1_pct_std', 'n_seeds']
     
     # For high-potency EF@1%
-    aggregated_high = df_results.groupby(group_cols).agg({
+    aggregated_high = df_results.groupby(group_cols, dropna=False).agg({
         'High_EF': ['mean', 'std', 'count']
     }).reset_index()
     aggregated_high.columns = ['representation', 'method', 'dimension', 'n_neighbors', 'min_dist',
