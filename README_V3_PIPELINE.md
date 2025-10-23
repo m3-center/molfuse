@@ -1,7 +1,7 @@
 # UMMBAS v3.0 - Comprehensive Experimental Pipeline
 
 **Version:** 3.0  
-**Date:** October 2025  
+**Date:** October 2025 (Updated October 23, 2025)  
 **Branch:** `3.0`
 
 ## Overview
@@ -21,6 +21,8 @@ UMMBAS v3.0 is a rigorous experimental pipeline for evaluating dimensionality re
 
 ## Experimental Design
 
+**Note:** Phase ordering was revised October 18, 2025. Affinity cutoff analysis (Phase 2) now precedes MF cloud ablation (Phase 3) because the cutoff determines which molecules are included in the MF cloud, making it a logical prerequisite.
+
 ### Phase 1: Hyperparameter Sweep (260 runs)
 
 **Target:** TyrosineProteinKinaseABL1_P00519 (Tyro)
@@ -39,7 +41,37 @@ UMMBAS v3.0 is a rigorous experimental pipeline for evaluating dimensionality re
 
 ---
 
-### Phase 2: MF Cloud Ablation (60 runs)
+### Phase 2: Affinity Cutoff Sensitivity [REORDERED - was Phase 4] (60 runs)
+
+**Target:** Tyro only
+
+**Cutoffs:** 100 nM, 1 μM (1,000 nM), 10 μM (10,000 nM), 100 μM (100,000 nM)
+
+**Rationale:** Aligned with potency tiers from stratified enrichment analysis:
+- 100 nM: High-potent only (drug-like, 0.1-100 nM)
+- 1 μM: High + Medium potent (100-1,000 nM)
+- 10 μM: High + Medium + Weak (1,000-10,000 nM)
+- 100 μM: All potencies (most permissive)
+
+**Configurations Tested:** 3 specific 5D configurations from Phase 1:
+1. **PCA/features/5D** (best overall PCA)
+2. **UMAP/features/5D** - overall-EF optimized (quantity-focused)
+3. **UMAP/features/5D** - high-potency-EF optimized (quality-focused)
+
+**Computational Strategy:**
+- **REUSES** Phase 1 similarity spaces (features/fingerprints)
+- **REUSES** Phase 1 DR models (fitted PCA/UMAP)
+- **ONLY** reruns ranking with different affinity cutoffs
+- Expected runtime: ~10-15 min/run vs hours for full pipeline
+
+**Purpose:** 
+- Determine optimal affinity cutoff for Phase 3 and Phase 4
+- Compare quantity-optimized vs quality-optimized UMAP hyperparameters
+- Understand cutoff impact on potency-stratified enrichment
+
+---
+
+### Phase 3: MF Cloud Ablation [REORDERED - was Phase 2] (60 runs)
 
 **Target:** Tyro only
 
@@ -49,6 +81,8 @@ UMMBAS v3.0 is a rigorous experimental pipeline for evaluating dimensionality re
 - Best PCA-features (at best dimension from Phase 1)
 - Best UMAP-features (at best dimension from Phase 1)
 
+**Affinity Cutoff:** Uses optimal cutoff determined from Phase 2
+
 **Purpose:** Validate phase transition hypothesis:
 - PCA expected to dominate at high MF counts (gradient formation)
 - UMAP expected to dominate at low MF counts (isolated clusters)
@@ -56,7 +90,7 @@ UMMBAS v3.0 is a rigorous experimental pipeline for evaluating dimensionality re
 
 ---
 
-### Phase 3: Generalization (80 runs)
+### Phase 4: Generalization [REORDERED - was Phase 3] (80 runs)
 
 **Targets:**
 - **PyruvateKinaseM2_P14618** (Pyru) - Same function (Transferase)
@@ -68,6 +102,8 @@ UMMBAS v3.0 is a rigorous experimental pipeline for evaluating dimensionality re
 - PCA-fingerprints: 2D
 - UMAP-Jaccard-fingerprints: 2D
 
+**Affinity Cutoff:** Uses optimal cutoff determined from Phase 2
+
 **Purpose:** 
 - Test generalization across proteins
 - Compare same-function vs different-function transferability
@@ -75,21 +111,7 @@ UMMBAS v3.0 is a rigorous experimental pipeline for evaluating dimensionality re
 
 ---
 
-### Phase 4: Cutoff Analysis (40 runs)
-
-**Target:** Tyro only
-
-**Cutoffs:** 100,000 / 10,000 / 1,000 / 100 nM
-
-**Methods:**
-- Best PCA overall (at best dimension)
-- Best UMAP overall (at best dimension)
-
-**Purpose:** Determine optimal affinity cutoff threshold per method
-
----
-
-## Total Experiment Count: 440 runs
+## Total Experiment Count: 460 runs
 
 ---
 
@@ -114,64 +136,76 @@ python main_orchestrator.py \
 
 ### Step 3: Extract Best Configs from Phase 1
 
+Run potency-stratified enrichment analysis (includes best config extraction):
+
 ```bash
-python extract_phase1_best_configs.py \
-  --workspace experiment_workspace_v3_phase1 \
-  --output phase1_best_configs.json
+python scripts/analyze_potency_stratified_enrichment.py \
+  --workspace_dir experiment_workspace_v3_phase1 \
+  --output_dir potency_analysis_results
 ```
 
-Output: `phase1_best_configs.json` (8 best configurations)
+Output: 
+- `potency_analysis_results/phase1_best_configs_by_overall_ef.json` (quantity-focused)
+- `potency_analysis_results/phase1_best_configs_by_high_potency_ef.json` (quality-focused)
+- Potency-stratified enrichment analysis (CSV, plots, report)
 
-### Step 4: Generate Phase 2 Configs (Ablation)
+### Step 4: Generate Phase 2 Configs (Cutoff Sensitivity)
 
 ```bash
 python generate_phase2_configs.py
 ```
 
-Requires: `phase1_best_configs.json`  
-Output: `hyperparam_configs_v3_phase2_ablation/` (60 config files)
+Requires: `phase1_best_configs_by_overall_ef.json` and `phase1_best_configs_by_high_potency_ef.json`  
+Output: `hyperparam_configs_v3_phase2_cutoff/` (60 config files)
 
-### Step 5: Run Phase 2 Experiments
+**Note:** Configs are for PCA/features/5D + 2 UMAP/features/5D variants (overall-EF and high-potency-EF optimized)
 
+### Step 5: Run Phase 2 Experiments (Cutoff)
+
+**Option A - Using orchestrator script:**
 ```bash
-python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase2_ablation \
-  --workspace experiment_workspace_v3_phase2 \
-  --n_jobs 10
+python scripts/run_phase2_cutoff_analysis.py \
+  --config_dir hyperparam_configs_v3_phase2_cutoff \
+  --workspace experiment_workspace_v3_phase2
 ```
 
-### Step 6: Generate Phase 3 Configs (Generalization)
+**Option B - Using HPC:**
+```bash
+sbatch hpc/submit_v3_phase2.sh
+```
+
+### Step 6: Generate Phase 3 Configs (MF Cloud Ablation)
 
 ```bash
 python generate_phase3_configs.py
 ```
 
-Requires: `phase1_best_configs.json`  
-Output: `hyperparam_configs_v3_phase3_generalization/` (80 config files)
+Requires: Best configs JSONs + Phase 2 results (for optimal cutoff)  
+Output: `hyperparam_configs_v3_phase3_ablation/` (60 config files)
 
-### Step 7: Run Phase 3 Experiments
+### Step 7: Run Phase 3 Experiments (Ablation)
 
 ```bash
 python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase3_generalization \
+  --config_dir hyperparam_configs_v3_phase3_ablation \
   --workspace experiment_workspace_v3_phase3 \
   --n_jobs 10
 ```
 
-### Step 8: Generate Phase 4 Configs (Cutoff)
+### Step 8: Generate Phase 4 Configs (Generalization)
 
 ```bash
 python generate_phase4_configs.py
 ```
 
-Requires: `phase1_best_configs.json`  
-Output: `hyperparam_configs_v3_phase4_cutoff/` (40 config files)
+Requires: Best configs JSONs + Phase 2 results (for optimal cutoff)  
+Output: `hyperparam_configs_v3_phase4_generalization/` (80 config files)
 
-### Step 9: Run Phase 4 Experiments
+### Step 9: Run Phase 4 Experiments (Generalization)
 
 ```bash
 python main_orchestrator.py \
-  --config_dir hyperparam_configs_v3_phase4_cutoff \
+  --config_dir hyperparam_configs_v3_phase4_generalization \
   --workspace experiment_workspace_v3_phase4 \
   --n_jobs 10
 ```
@@ -233,15 +267,16 @@ Generates comprehensive PDF report with:
 1. **What is the optimal dimensionality for PCA and UMAP?**
    - Hypothesis: 2D favors PCA due to compression, higher D favors UMAP
 
-2. **Why does PCA dominate at 2D with large MF clouds?**
+2. **What is the optimal affinity cutoff for each method?** (Phase 2)
+   - Test: 100 nM, 1 μM, 10 μM, 100 μM cutoffs
+   - Compare: Quantity-focused vs quality-focused hyperparameters
+
+3. **Why does PCA dominate at 2D with large MF clouds?** (Phase 3)
    - Hypothesis: MF cloud creates linear gradient, PCA captures it efficiently
    - Test: Ablation study at varying MF sizes
 
-3. **Do optimal configs generalize across proteins?**
+4. **Do optimal configs generalize across proteins?** (Phase 4)
    - Test: Same function (Tyro → Pyru) vs different function (Tyro → Iso)
-
-4. **What is the optimal affinity cutoff?**
-   - Test: 100K, 10K, 1K, 100 nM cutoffs
 
 ---
 
@@ -251,21 +286,23 @@ Generates comprehensive PDF report with:
 - Best dimension per method identified
 - Optimal UMAP hyperparameters per dimension
 - Compression ratio effects quantified
+- **Two sets of best configs:** quantity-focused (overall EF) and quality-focused (high-potency EF)
 
 ### Phase 2
+- Optimal affinity cutoff identified
+- Cutoff sensitivity curves per method
+- Comparison: quantity vs quality optimization strategies
+- Potency-stratified enrichment patterns
+
+### Phase 3
 - MF cloud phase transition curve
 - Crossover point identified (~10K-50K molecules)
 - Mechanistic understanding of PCA 2D advantage
 
-### Phase 3
+### Phase 4
 - Generalization performance metrics
 - Same-function vs different-function comparison
 - Dimension transferability validated
-
-### Phase 4
-- Optimal cutoff per method
-- Cutoff sensitivity curves
-- Method-specific cutoff recommendations
 
 ---
 
@@ -275,21 +312,27 @@ Generates comprehensive PDF report with:
 UMMBAS_screening_experiments/
 ├── experiment_config.json                    # Base configuration
 ├── generate_phase1_configs.py                # Phase 1 config generator
-├── generate_phase2_configs.py                # Phase 2 config generator  
-├── generate_phase3_configs.py                # Phase 3 config generator
-├── generate_phase4_configs.py                # Phase 4 config generator
-├── extract_phase1_best_configs.py            # Best config extractor
+├── generate_phase2_configs.py                # Phase 2 cutoff config generator  
+├── generate_phase3_configs.py                # Phase 3 ablation config generator
+├── generate_phase4_configs.py                # Phase 4 generalization config generator
 ├── orchestrate_v3_pipeline.py                # Master orchestrator
 ├── check_hyperparam_status.py                # Status checker with viz
 ├── hyperparam_configs_v3_phase1/             # Phase 1 configs (260)
-├── hyperparam_configs_v3_phase2_ablation/    # Phase 2 configs (60)
-├── hyperparam_configs_v3_phase3_generalization/  # Phase 3 configs (80)
-├── hyperparam_configs_v3_phase4_cutoff/      # Phase 4 configs (40)
+├── hyperparam_configs_v3_phase2_cutoff/      # Phase 2 configs (60)
+├── hyperparam_configs_v3_phase3_ablation/    # Phase 3 configs (60)
+├── hyperparam_configs_v3_phase4_generalization/  # Phase 4 configs (80)
 ├── experiment_workspace_v3_phase1/           # Phase 1 results
 ├── experiment_workspace_v3_phase2/           # Phase 2 results
 ├── experiment_workspace_v3_phase3/           # Phase 3 results
 ├── experiment_workspace_v3_phase4/           # Phase 4 results
-├── phase1_best_configs.json                  # Best configs for Phase 2-4
+├── potency_analysis_results/                 # Phase 1 analysis + best configs
+│   ├── phase1_best_configs_by_overall_ef.json        # Quantity-focused
+│   ├── phase1_best_configs_by_high_potency_ef.json   # Quality-focused
+│   ├── stratified_enrichment_detailed.csv
+│   └── plots/
+├── scripts/
+│   ├── analyze_potency_stratified_enrichment.py      # Phase 1 analysis + extraction
+│   └── run_phase2_cutoff_analysis.py                 # Phase 2 orchestrator
 ├── analysis_scripts/
 │   └── analyze_pca_dominance.py              # PCA dominance analysis
 └── README_V3_PIPELINE.md                     # This file
@@ -300,11 +343,13 @@ UMMBAS_screening_experiments/
 ## Computational Requirements
 
 - **Phase 1:** ~260 runs × ~2-4 hours = ~520-1040 hours
-- **Phase 2:** ~60 runs × ~2-4 hours = ~120-240 hours  
-- **Phase 3:** ~80 runs × ~2-4 hours = ~160-320 hours
-- **Phase 4:** ~40 runs × ~2-4 hours = ~80-160 hours
+- **Phase 2:** ~60 runs × ~10-15 min = ~10-15 hours (reuses Phase 1 data!)
+- **Phase 3:** ~60 runs × ~2-4 hours = ~120-240 hours  
+- **Phase 4:** ~80 runs × ~2-4 hours = ~160-320 hours
 
-**Total:** ~880-1760 CPU hours (~37-73 days on single core, ~4-7 days on 10-core cluster)
+**Total:** ~810-1615 CPU hours (~34-67 days on single core, ~3-7 days on 10-core cluster)
+
+**Note:** Phase 2 is dramatically faster due to data reuse strategy (similarity spaces and DR models from Phase 1).
 
 ---
 
@@ -312,22 +357,41 @@ UMMBAS_screening_experiments/
 
 1. **Manuscript Figures** (PNG + PDF)
    - PCA vs UMAP performance across dimensions
-   - MF cloud phase transition curve
-   - Generalization heatmaps
-   - Cutoff sensitivity plots
+   - Potency-stratified enrichment analysis (Phase 1)
+   - Affinity cutoff sensitivity curves (Phase 2)
+   - MF cloud phase transition curve (Phase 3)
+   - Generalization heatmaps (Phase 4)
    - PCA dominance mechanistic diagrams
 
 2. **Supplementary Materials**
    - Full hyperparameter screening results
+   - Quantity vs quality optimization comparison
    - Distance distribution analyses
    - Manifold quality metrics
    - Per-seed variability assessments
 
 3. **Code/Data Repository**
    - Configuration files
-   - Analysis scripts
-   - Best configurations JSON
+   - Analysis scripts (including potency stratification)
+   - Best configurations JSONs (both optimization criteria)
    - Reproducibility instructions
+
+---
+
+## Recent Updates (October 2025)
+
+### October 23, 2025
+- Integrated best config extraction into potency stratification analysis
+- Two optimization criteria: overall EF (quantity) and high-potency EF (quality)
+- Phase 2 now tests 3 specific 5D configurations (60 runs)
+- Updated config paths and script names
+
+### October 18, 2025
+- **Phase reordering:** Moved cutoff analysis from Phase 4 → Phase 2
+  - Rationale: Cutoff determines MF cloud composition (logical prerequisite)
+  - Phase 2: Cutoff sensitivity (was Phase 4)
+  - Phase 3: MF cloud ablation (was Phase 2)
+  - Phase 4: Generalization (was Phase 3)
 
 ---
 
@@ -336,4 +400,4 @@ UMMBAS_screening_experiments/
 For questions or issues, contact the UMMBAS development team.
 
 **Version:** 3.0  
-**Last Updated:** October 15, 2025
+**Last Updated:** October 23, 2025
