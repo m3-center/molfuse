@@ -1219,7 +1219,7 @@ def plot_stratified_comparison(df_results, output_dir):
             ax.grid(axis='y', alpha=0.3)
             
             plt.tight_layout()
-            save_figure(fig, output_dir, 'stratified_percent_found')
+            save_figure(fig, output_dir, 'stratified_percent_found_by_nn')
             plt.close()
             
             # Generate dimension-separated versions
@@ -1252,8 +1252,154 @@ def plot_stratified_comparison(df_results, output_dir):
                 ax.grid(axis='y', alpha=0.3)
                 
                 plt.tight_layout()
-                save_figure(fig, output_dir, f'stratified_percent_found_dim{dim}')
+                save_figure(fig, output_dir, f'stratified_percent_found_by_nn_dim{dim}')
                 plt.close()
+            
+            # =====================================================================
+            # PLOT 3: EF by tier, faceted by min_dist (similar to n_neighbors)
+            # =====================================================================
+            if 'min_dist' in df_umap.columns:
+                fig, axes = plt.subplots(1, len(df_umap['min_dist'].unique()), 
+                                         figsize=(5*len(df_umap['min_dist'].unique()), 5),
+                                         sharey=True)
+                
+                if len(df_umap['min_dist'].unique()) == 1:
+                    axes = [axes]
+                
+                for idx, md in enumerate(sorted(df_umap['min_dist'].unique())):
+                    ax = axes[idx]
+                    df_subset = df_plot[df_plot['min_dist'] == md]
+                    
+                    # Group by tier and calculate mean
+                    tier_means = df_subset.groupby('Tier')['EF@1%'].mean()
+                    
+                    bars = ax.bar(TIER_ORDER, [tier_means.get(t, 0) for t in TIER_ORDER],
+                                 color=[TIER_COLORS[t] for t in TIER_ORDER])
+                    
+                    ax.set_title(f'min_dist = {md}', fontweight='bold')
+                    ax.set_xlabel('Potency Tier')
+                    if idx == 0:
+                        ax.set_ylabel('Mean Enrichment Factor @ 1%')
+                    ax.grid(axis='y', alpha=0.3)
+                    
+                    # Add value labels on bars
+                    for bar in bars:
+                        height = bar.get_height()
+                        if not np.isnan(height):
+                            ax.text(bar.get_x() + bar.get_width()/2., height,
+                                   f'{height:.1f}',
+                                   ha='center', va='bottom', fontsize=9)
+                
+                plt.suptitle('Potency-Stratified Enrichment: Impact of min_dist', 
+                            fontsize=14, fontweight='bold')
+                plt.tight_layout()
+                save_figure(fig, output_dir, 'stratified_ef_by_min_dist')
+                plt.close()
+                
+                # Generate dimension-separated versions
+                for dim in sorted(df_umap['dimension'].unique()):
+                    df_dim = df_plot[df_plot['dimension'] == dim]
+                    
+                    if df_dim.empty:
+                        continue
+                    
+                    md_values_dim = sorted(df_dim['min_dist'].unique())
+                    fig, axes = plt.subplots(1, len(md_values_dim), 
+                                             figsize=(5*len(md_values_dim), 5),
+                                             sharey=True)
+                    
+                    if len(md_values_dim) == 1:
+                        axes = [axes]
+                    
+                    for idx, md in enumerate(md_values_dim):
+                        ax = axes[idx]
+                        df_subset = df_dim[df_dim['min_dist'] == md]
+                        
+                        tier_means = df_subset.groupby('Tier')['EF@1%'].mean()
+                        
+                        bars = ax.bar(TIER_ORDER, [tier_means.get(t, 0) for t in TIER_ORDER],
+                                     color=[TIER_COLORS[t] for t in TIER_ORDER])
+                        
+                        ax.set_title(f'min_dist = {md}', fontweight='bold')
+                        ax.set_xlabel('Potency Tier')
+                        if idx == 0:
+                            ax.set_ylabel('Mean Enrichment Factor @ 1%')
+                        ax.grid(axis='y', alpha=0.3)
+                        
+                        for bar in bars:
+                            height = bar.get_height()
+                            if not np.isnan(height):
+                                ax.text(bar.get_x() + bar.get_width()/2., height,
+                                       f'{height:.1f}',
+                                       ha='center', va='bottom', fontsize=9)
+                    
+                    plt.suptitle(f'Potency-Stratified Enrichment: Impact of min_dist (Dim {dim}D)', 
+                                fontsize=14, fontweight='bold')
+                    plt.tight_layout()
+                    save_figure(fig, output_dir, f'stratified_ef_by_min_dist_dim{dim}')
+                    plt.close()
+                
+                # =====================================================================
+                # PLOT 4: Percent Found by Tier, faceted by min_dist
+                # =====================================================================
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                x = np.arange(len(TIER_ORDER))
+                width = 0.15
+                
+                md_values = sorted(df_umap['min_dist'].unique())
+                for idx, md in enumerate(md_values):
+                    df_subset = df_umap[df_umap['min_dist'] == md]
+                    means = [df_subset[f'{tier}_percent_found'].mean() for tier in TIER_ORDER]
+                    
+                    offset = (idx - len(md_values)/2) * width + width/2
+                    ax.bar(x + offset, means, width, label=f'md={md}')
+                
+                ax.set_xlabel('Potency Tier', fontweight='bold')
+                ax.set_ylabel('% of Tier Found in Top 1%', fontweight='bold')
+                ax.set_title('Potency-Stratified Recovery: Percent of Each Tier Found', 
+                            fontsize=14, fontweight='bold')
+                ax.set_xticks(x)
+                ax.set_xticklabels(TIER_ORDER)
+                ax.legend(title='min_dist', loc='upper right')
+                ax.grid(axis='y', alpha=0.3)
+                
+                plt.tight_layout()
+                save_figure(fig, output_dir, 'stratified_percent_found_by_min_dist')
+                plt.close()
+                
+                # Generate dimension-separated versions
+                for dim in sorted(df_umap['dimension'].unique()):
+                    df_dim = df_umap[df_umap['dimension'] == dim]
+                    
+                    if df_dim.empty:
+                        continue
+                    
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    
+                    x = np.arange(len(TIER_ORDER))
+                    width = 0.15
+                    
+                    md_values_dim = sorted(df_dim['min_dist'].unique())
+                    for idx, md in enumerate(md_values_dim):
+                        df_subset = df_dim[df_dim['min_dist'] == md]
+                        means = [df_subset[f'{tier}_percent_found'].mean() for tier in TIER_ORDER]
+                        
+                        offset = (idx - len(md_values_dim)/2) * width + width/2
+                        ax.bar(x + offset, means, width, label=f'md={md}')
+                    
+                    ax.set_xlabel('Potency Tier', fontweight='bold')
+                    ax.set_ylabel('% of Tier Found in Top 1%', fontweight='bold')
+                    ax.set_title(f'Potency-Stratified Recovery: Percent of Each Tier Found (Dim {dim}D)', 
+                                fontsize=14, fontweight='bold')
+                    ax.set_xticks(x)
+                    ax.set_xticklabels(TIER_ORDER)
+                    ax.legend(title='min_dist', loc='upper right')
+                    ax.grid(axis='y', alpha=0.3)
+                    
+                    plt.tight_layout()
+                    save_figure(fig, output_dir, f'stratified_percent_found_by_min_dist_dim{dim}')
+                    plt.close()
     
     # 3. Scatter plot: Overall EF vs High-Potent EF
     if 'Overall_EF' in df_results.columns and 'High_EF' in df_results.columns:
