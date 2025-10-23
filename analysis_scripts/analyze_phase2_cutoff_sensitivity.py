@@ -89,11 +89,11 @@ def find_phase2_runs(workspace_dir):
         
         # Extract config type
         config_type = None
-        if basename.endswith('_pca_overall'):
+        if '_pca_' in basename and basename.endswith('_pca_overall'):
             config_type = 'pca_overall'
-        elif basename.endswith('_umap_overall'):
+        elif '_umap_' in basename and basename.endswith('_umap_overall'):
             config_type = 'umap_overall'
-        elif basename.endswith('_umap_high_potency'):
+        elif '_umap_' in basename and basename.endswith('_umap_high_potency'):
             config_type = 'umap_high_potency'
         
         if config_type is None:
@@ -173,12 +173,17 @@ def load_ranked_data(run_dir):
     
     try:
         df = pd.read_csv(csv_files[0])
+        if df.empty or 'TYPE' not in df.columns:
+            return None, None
         num_actives = len(df[df['TYPE'] == 'HELDOUT_ACTIVE'])
         num_total = len(df)
         return num_actives, num_total
     
+    except pd.errors.EmptyDataError:
+        logging.debug(f"Empty CSV file: {csv_files[0]}")
+        return None, None
     except Exception as e:
-        logging.error(f"Error loading ranked data from {csv_files[0]}: {e}")
+        logging.warning(f"Error loading ranked data from {csv_files[0]}: {e}")
         return None, None
 
 
@@ -330,9 +335,21 @@ def plot_potency_stratified_heatmap(df_results, output_dir):
         aggfunc='mean'
     )
     
-    # Reorder rows and columns
-    pivot_data = pivot_data.reindex(CONFIG_TYPES)
-    pivot_data = pivot_data[CUTOFFS]
+    # Reorder rows (only include configs that have data)
+    available_configs = [ct for ct in CONFIG_TYPES if ct in pivot_data.index]
+    if not available_configs:
+        logging.warning("No data available for heatmap")
+        return
+    
+    pivot_data = pivot_data.reindex(available_configs)
+    
+    # Reorder columns (only include cutoffs that have data)
+    available_cutoffs = [c for c in CUTOFFS if c in pivot_data.columns]
+    if not available_cutoffs:
+        logging.warning("No cutoffs available for heatmap")
+        return
+    
+    pivot_data = pivot_data[available_cutoffs]
     
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -358,8 +375,9 @@ def plot_potency_stratified_heatmap(df_results, output_dir):
                  fontsize=16, fontweight='bold', pad=20)
     
     # Update labels
-    ax.set_xticklabels(CUTOFF_LABELS, rotation=0, fontsize=11)
-    ax.set_yticklabels([CONFIG_LABELS[ct] for ct in CONFIG_TYPES], rotation=0, fontsize=11)
+    cutoff_labels_for_plot = [CUTOFF_LABELS[CUTOFFS.index(c)] for c in available_cutoffs]
+    ax.set_xticklabels(cutoff_labels_for_plot, rotation=0, fontsize=11)
+    ax.set_yticklabels([CONFIG_LABELS[ct] for ct in available_configs], rotation=0, fontsize=11)
     
     plt.tight_layout()
     
