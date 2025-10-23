@@ -2,8 +2,8 @@
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --mem=8G
-#SBATCH --time=0-02:00:00
+#SBATCH --mem=64G
+#SBATCH --time=0-04:00:00
 
 # ============================================================================
 # UMMBAS v3.0 - Phase 2 Cutoff Analysis - HPC Execution Script
