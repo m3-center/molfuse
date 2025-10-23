@@ -53,6 +53,23 @@ This directory contains deprecated scripts from earlier versions of UMMBAS that 
 
 ---
 
+### `extract_phase1_best_configs.py`
+**Original Purpose**: Extract best Phase 1 configurations for use in Phase 2-4  
+**Status**: REPLACED  
+**Replacement**: Integrated into `scripts/analyze_potency_stratified_enrichment.py`  
+**Archive Date**: October 23, 2025  
+**Reason for Deprecation**:
+- Functionality fully integrated into potency stratification analysis script
+- New implementation extracts **two** sets of best configs:
+  - `phase1_best_configs_by_overall_ef.json` (quantity-focused)
+  - `phase1_best_configs_by_high_potency_ef.json` (quality-focused)
+- Avoids running separate analysis pipeline
+- Leverages existing potency-stratified metrics
+
+**Can still be used for**: Basic config extraction without potency considerations (not recommended)
+
+---
+
 ## Restoration
 
 If you need to restore any of these scripts:
@@ -71,8 +88,7 @@ These scripts were part of:
 For current v3.0 scripts, see:
 - `generate_phase1_configs.py` through `generate_phase4_configs.py`
 - `main_orchestrator.py`
-- `scripts/analyze_potency_stratified_enrichment.py`
-- `extract_phase1_best_configs.py`
+- `scripts/analyze_potency_stratified_enrichment.py` (includes best config extraction)
 
 ---
 

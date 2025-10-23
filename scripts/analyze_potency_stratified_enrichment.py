@@ -17,6 +17,13 @@ ligand (weak binder).
 - nn=20 might show lower overall EF@1% but enrich fewer, highly potent binders
 - For drug discovery, nn=20 would be superior despite appearing worse by traditional metrics
 
+**Outputs:**
+- Potency-stratified enrichment analysis CSV files
+- Comparison plots (PCA vs UMAP, dimensionality impact, hyperparameter effects)
+- Best configurations JSON files (2 versions):
+  * phase1_best_configs_by_overall_ef.json (quantity-focused, traditional metric)
+  * phase1_best_configs_by_high_potency_ef.json (quality-focused, drug discovery relevant)
+
 Usage:
     # Analyze all completed runs in workspace
     python scripts/analyze_potency_stratified_enrichment.py \\
@@ -1470,6 +1477,301 @@ def plot_stratified_comparison(df_results, output_dir):
     logging.info(f"Plots saved to {output_dir}")
 
 
+def extract_best_configs(df_results, output_dir):
+    """Extract best configurations for Phase 2-4 based on both overall and high-potency EF@1%.
+    
+    Produces two sets of best configs:
+    1. Best by overall EF@1% (quantity-focused)
+    2. Best by high-potency EF@1% (quality-focused)
+    """
+    import json
+    
+    print("\n" + "="*80)
+    print("EXTRACTING BEST CONFIGURATIONS FOR PHASE 2-4")
+    print("="*80)
+    
+    if df_results.empty:
+        print("ERROR: No results to extract configs from!")
+        return
+    
+    # Group by representation, method, dimension, and hyperparameters
+    # Average across seeds
+    group_cols = ['representation', 'dr_method', 'dimension', 'n_neighbors', 'min_dist']
+    
+    # For overall EF@1%
+    aggregated_overall = df_results.groupby(group_cols).agg({
+        'Overall_EF': ['mean', 'std', 'count']
+    }).reset_index()
+    aggregated_overall.columns = ['representation', 'method', 'dimension', 'n_neighbors', 'min_dist',
+                                   'ef_1_pct_mean', 'ef_1_pct_std', 'n_seeds']
+    
+    # For high-potency EF@1%
+    aggregated_high = df_results.groupby(group_cols).agg({
+        'High_EF': ['mean', 'std', 'count']
+    }).reset_index()
+    aggregated_high.columns = ['representation', 'method', 'dimension', 'n_neighbors', 'min_dist',
+                                'high_ef_1_pct_mean', 'high_ef_1_pct_std', 'n_seeds']
+    
+    # ========================================================================
+    # BEST CONFIGS BY OVERALL EF@1% (QUANTITY)
+    # ========================================================================
+    best_configs_overall = {}
+    
+    # Best PCA-features per dimension
+    for dim in [2, 5, 10]:
+        mask = ((aggregated_overall['representation'] == 'features') & 
+                (aggregated_overall['method'] == 'PCA') & 
+                (aggregated_overall['dimension'] == dim))
+        if mask.any():
+            best = aggregated_overall[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
+            best_configs_overall[f'features_pca_dim{dim}'] = {
+                'representation': 'features',
+                'method': 'PCA',
+                'dimension': int(dim),
+                'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+                'ef_1_pct_std': float(best['ef_1_pct_std']),
+                'n_seeds': int(best['n_seeds']),
+                'selection_criterion': 'overall_ef_1_pct'
+            }
+    
+    # Best UMAP-Euclidean-features per dimension
+    for dim in [2, 5, 10]:
+        mask = ((aggregated_overall['representation'] == 'features') & 
+                (aggregated_overall['method'] == 'UMAP-Euclidean') & 
+                (aggregated_overall['dimension'] == dim))
+        if mask.any():
+            best = aggregated_overall[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
+            best_configs_overall[f'features_umap_euclidean_dim{dim}'] = {
+                'representation': 'features',
+                'method': 'UMAP-Euclidean',
+                'dimension': int(dim),
+                'n_neighbors': int(best['n_neighbors']),
+                'min_dist': float(best['min_dist']),
+                'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+                'ef_1_pct_std': float(best['ef_1_pct_std']),
+                'n_seeds': int(best['n_seeds']),
+                'selection_criterion': 'overall_ef_1_pct'
+            }
+    
+    # Best PCA-fingerprints at 2D
+    mask = ((aggregated_overall['representation'] == 'fingerprints') & 
+            (aggregated_overall['method'] == 'PCA') & 
+            (aggregated_overall['dimension'] == 2))
+    if mask.any():
+        best = aggregated_overall[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
+        best_configs_overall['fingerprints_pca_2d'] = {
+            'representation': 'fingerprints',
+            'method': 'PCA',
+            'dimension': int(best['dimension']),
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'overall_ef_1_pct'
+        }
+    
+    # Best UMAP-Jaccard-fingerprints at 2D
+    mask = ((aggregated_overall['representation'] == 'fingerprints') & 
+            (aggregated_overall['method'] == 'UMAP-Jaccard') & 
+            (aggregated_overall['dimension'] == 2))
+    if mask.any():
+        best = aggregated_overall[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
+        best_configs_overall['fingerprints_umap_jaccard_2d'] = {
+            'representation': 'fingerprints',
+            'method': 'UMAP-Jaccard',
+            'dimension': int(best['dimension']),
+            'n_neighbors': int(best['n_neighbors']),
+            'min_dist': float(best['min_dist']),
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'overall_ef_1_pct'
+        }
+    
+    # Overall best PCA
+    mask = (aggregated_overall['method'] == 'PCA')
+    if mask.any():
+        best = aggregated_overall[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
+        best_configs_overall['best_pca_overall'] = {
+            'representation': best['representation'],
+            'method': 'PCA',
+            'dimension': int(best['dimension']),
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'overall_ef_1_pct'
+        }
+    
+    # Overall best UMAP
+    mask = (aggregated_overall['method'].str.contains('UMAP'))
+    if mask.any():
+        best = aggregated_overall[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
+        best_configs_overall['best_umap_overall'] = {
+            'representation': best['representation'],
+            'method': best['method'],
+            'dimension': int(best['dimension']),
+            'n_neighbors': int(best['n_neighbors']) if pd.notna(best['n_neighbors']) else None,
+            'min_dist': float(best['min_dist']) if pd.notna(best['min_dist']) else None,
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'overall_ef_1_pct'
+        }
+    
+    # ========================================================================
+    # BEST CONFIGS BY HIGH-POTENCY EF@1% (QUALITY)
+    # ========================================================================
+    best_configs_high = {}
+    
+    # Best PCA-features per dimension
+    for dim in [2, 5, 10]:
+        mask = ((aggregated_high['representation'] == 'features') & 
+                (aggregated_high['method'] == 'PCA') & 
+                (aggregated_high['dimension'] == dim))
+        if mask.any():
+            best = aggregated_high[mask].nlargest(1, 'high_ef_1_pct_mean').iloc[0]
+            best_configs_high[f'features_pca_dim{dim}'] = {
+                'representation': 'features',
+                'method': 'PCA',
+                'dimension': int(dim),
+                'high_ef_1_pct_mean': float(best['high_ef_1_pct_mean']),
+                'high_ef_1_pct_std': float(best['high_ef_1_pct_std']),
+                'n_seeds': int(best['n_seeds']),
+                'selection_criterion': 'high_potency_ef_1_pct'
+            }
+    
+    # Best UMAP-Euclidean-features per dimension
+    for dim in [2, 5, 10]:
+        mask = ((aggregated_high['representation'] == 'features') & 
+                (aggregated_high['method'] == 'UMAP-Euclidean') & 
+                (aggregated_high['dimension'] == dim))
+        if mask.any():
+            best = aggregated_high[mask].nlargest(1, 'high_ef_1_pct_mean').iloc[0]
+            best_configs_high[f'features_umap_euclidean_dim{dim}'] = {
+                'representation': 'features',
+                'method': 'UMAP-Euclidean',
+                'dimension': int(dim),
+                'n_neighbors': int(best['n_neighbors']),
+                'min_dist': float(best['min_dist']),
+                'high_ef_1_pct_mean': float(best['high_ef_1_pct_mean']),
+                'high_ef_1_pct_std': float(best['high_ef_1_pct_std']),
+                'n_seeds': int(best['n_seeds']),
+                'selection_criterion': 'high_potency_ef_1_pct'
+            }
+    
+    # Best PCA-fingerprints at 2D
+    mask = ((aggregated_high['representation'] == 'fingerprints') & 
+            (aggregated_high['method'] == 'PCA') & 
+            (aggregated_high['dimension'] == 2))
+    if mask.any():
+        best = aggregated_high[mask].nlargest(1, 'high_ef_1_pct_mean').iloc[0]
+        best_configs_high['fingerprints_pca_2d'] = {
+            'representation': 'fingerprints',
+            'method': 'PCA',
+            'dimension': int(best['dimension']),
+            'high_ef_1_pct_mean': float(best['high_ef_1_pct_mean']),
+            'high_ef_1_pct_std': float(best['high_ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'high_potency_ef_1_pct'
+        }
+    
+    # Best UMAP-Jaccard-fingerprints at 2D
+    mask = ((aggregated_high['representation'] == 'fingerprints') & 
+            (aggregated_high['method'] == 'UMAP-Jaccard') & 
+            (aggregated_high['dimension'] == 2))
+    if mask.any():
+        best = aggregated_high[mask].nlargest(1, 'high_ef_1_pct_mean').iloc[0]
+        best_configs_high['fingerprints_umap_jaccard_2d'] = {
+            'representation': 'fingerprints',
+            'method': 'UMAP-Jaccard',
+            'dimension': int(best['dimension']),
+            'n_neighbors': int(best['n_neighbors']),
+            'min_dist': float(best['min_dist']),
+            'high_ef_1_pct_mean': float(best['high_ef_1_pct_mean']),
+            'high_ef_1_pct_std': float(best['high_ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'high_potency_ef_1_pct'
+        }
+    
+    # Overall best PCA
+    mask = (aggregated_high['method'] == 'PCA')
+    if mask.any():
+        best = aggregated_high[mask].nlargest(1, 'high_ef_1_pct_mean').iloc[0]
+        best_configs_high['best_pca_overall'] = {
+            'representation': best['representation'],
+            'method': 'PCA',
+            'dimension': int(best['dimension']),
+            'high_ef_1_pct_mean': float(best['high_ef_1_pct_mean']),
+            'high_ef_1_pct_std': float(best['high_ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'high_potency_ef_1_pct'
+        }
+    
+    # Overall best UMAP
+    mask = (aggregated_high['method'].str.contains('UMAP'))
+    if mask.any():
+        best = aggregated_high[mask].nlargest(1, 'high_ef_1_pct_mean').iloc[0]
+        best_configs_high['best_umap_overall'] = {
+            'representation': best['representation'],
+            'method': best['method'],
+            'dimension': int(best['dimension']),
+            'n_neighbors': int(best['n_neighbors']) if pd.notna(best['n_neighbors']) else None,
+            'min_dist': float(best['min_dist']) if pd.notna(best['min_dist']) else None,
+            'high_ef_1_pct_mean': float(best['high_ef_1_pct_mean']),
+            'high_ef_1_pct_std': float(best['high_ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds']),
+            'selection_criterion': 'high_potency_ef_1_pct'
+        }
+    
+    # ========================================================================
+    # SAVE BOTH CONFIGS TO FILES
+    # ========================================================================
+    overall_config_file = os.path.join(output_dir, 'phase1_best_configs_by_overall_ef.json')
+    with open(overall_config_file, 'w') as f:
+        json.dump(best_configs_overall, f, indent=2)
+    print(f"\n✅ Saved overall EF@1% best configs to: {overall_config_file}")
+    
+    high_config_file = os.path.join(output_dir, 'phase1_best_configs_by_high_potency_ef.json')
+    with open(high_config_file, 'w') as f:
+        json.dump(best_configs_high, f, indent=2)
+    print(f"✅ Saved high-potency EF@1% best configs to: {high_config_file}")
+    
+    # ========================================================================
+    # PRINT COMPARISON
+    # ========================================================================
+    print("\n" + "="*80)
+    print("COMPARISON: OVERALL vs HIGH-POTENCY BEST CONFIGS")
+    print("="*80)
+    
+    for config_key in sorted(best_configs_overall.keys()):
+        if config_key in best_configs_high:
+            overall_cfg = best_configs_overall[config_key]
+            high_cfg = best_configs_high[config_key]
+            
+            print(f"\n{config_key}:")
+            print(f"  Overall EF@1% optimized:")
+            print(f"    Method: {overall_cfg['method']}, Dim: {overall_cfg['dimension']}")
+            if 'n_neighbors' in overall_cfg:
+                print(f"    Hyperparams: nn={overall_cfg['n_neighbors']}, md={overall_cfg['min_dist']}")
+            if 'ef_1_pct_mean' in overall_cfg:
+                print(f"    Overall EF@1%: {overall_cfg['ef_1_pct_mean']:.2f} ± {overall_cfg['ef_1_pct_std']:.2f}")
+            
+            print(f"  High-potency EF@1% optimized:")
+            print(f"    Method: {high_cfg['method']}, Dim: {high_cfg['dimension']}")
+            if 'n_neighbors' in high_cfg:
+                print(f"    Hyperparams: nn={high_cfg['n_neighbors']}, md={high_cfg['min_dist']}")
+            if 'high_ef_1_pct_mean' in high_cfg:
+                print(f"    High-potency EF@1%: {high_cfg['high_ef_1_pct_mean']:.2f} ± {high_cfg['high_ef_1_pct_std']:.2f}")
+            
+            # Check if configs are different
+            if 'n_neighbors' in overall_cfg and 'n_neighbors' in high_cfg:
+                if (overall_cfg['n_neighbors'] != high_cfg['n_neighbors'] or 
+                    overall_cfg['min_dist'] != high_cfg['min_dist']):
+                    print(f"    ⚠️  DIFFERENT hyperparameters selected!")
+    
+    print("\n" + "="*80)
+    return best_configs_overall, best_configs_high
+
+
 def generate_report(df_results, summary_df, output_dir):
     """Generate text report with key findings."""
     report_path = os.path.join(output_dir, 'potency_stratified_report.txt')
@@ -1772,6 +2074,9 @@ def main():
     if not args.summary_only:
         plot_dir = os.path.join(args.output_dir, 'plots')
         plot_stratified_comparison(df_results, plot_dir)
+    
+    # Extract best configurations for Phase 2-4
+    extract_best_configs(df_results, args.output_dir)
     
     # Generate report
     generate_report(df_results, summary_df, args.output_dir)

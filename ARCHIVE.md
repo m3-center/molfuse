@@ -46,6 +46,7 @@ This directory contains deprecated scripts that have been moved from active loca
 - `analyze_hyperparams.py` (old analysis script)
 - `aggregate_and_report.py` (old reporting script)
 - `quick_test_run.sh` (v2.0 test script)
+- `extract_phase1_best_configs.py` (October 2025) - Functionality integrated into `analyze_potency_stratified_enrichment.py`
 
 ---
 
