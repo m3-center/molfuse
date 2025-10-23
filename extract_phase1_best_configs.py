@@ -116,10 +116,10 @@ def find_best_configs(df):
             best_configs[f'features_pca_dim{dim}'] = {
                 'representation': 'features',
                 'method': 'PCA',
-                'dimension': dim,
-                'ef_1_pct_mean': best['ef_1_pct_mean'],
-                'ef_1_pct_std': best['ef_1_pct_std'],
-                'n_seeds': best['n_seeds']
+                'dimension': int(dim),
+                'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+                'ef_1_pct_std': float(best['ef_1_pct_std']),
+                'n_seeds': int(best['n_seeds'])
             }
     
     # ========================================================================
@@ -134,12 +134,12 @@ def find_best_configs(df):
             best_configs[f'features_umap_euclidean_dim{dim}'] = {
                 'representation': 'features',
                 'method': 'UMAP-Euclidean',
-                'dimension': dim,
+                'dimension': int(dim),
                 'n_neighbors': int(best['n_neighbors']),
                 'min_dist': float(best['min_dist']),
-                'ef_1_pct_mean': best['ef_1_pct_mean'],
-                'ef_1_pct_std': best['ef_1_pct_std'],
-                'n_seeds': best['n_seeds']
+                'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+                'ef_1_pct_std': float(best['ef_1_pct_std']),
+                'n_seeds': int(best['n_seeds'])
             }
     
     # ========================================================================
@@ -150,13 +150,13 @@ def find_best_configs(df):
             (aggregated['dimension'] == 2))
     if mask.any():
         best = aggregated[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
-        best_configs['fingerprints_pca_dim2'] = {
+        best_configs['fingerprints_pca_2d'] = {
             'representation': 'fingerprints',
             'method': 'PCA',
-            'dimension': 2,
-            'ef_1_pct_mean': best['ef_1_pct_mean'],
-            'ef_1_pct_std': best['ef_1_pct_std'],
-            'n_seeds': best['n_seeds']
+            'dimension': int(best['dimension']),
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds'])
         }
     
     # ========================================================================
@@ -167,19 +167,19 @@ def find_best_configs(df):
             (aggregated['dimension'] == 2))
     if mask.any():
         best = aggregated[mask].nlargest(1, 'ef_1_pct_mean').iloc[0]
-        best_configs['fingerprints_umap_jaccard_dim2'] = {
+        best_configs['fingerprints_umap_jaccard_2d'] = {
             'representation': 'fingerprints',
             'method': 'UMAP-Jaccard',
-            'dimension': 2,
+            'dimension': int(best['dimension']),
             'n_neighbors': int(best['n_neighbors']),
             'min_dist': float(best['min_dist']),
-            'ef_1_pct_mean': best['ef_1_pct_mean'],
-            'ef_1_pct_std': best['ef_1_pct_std'],
-            'n_seeds': best['n_seeds']
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds'])
         }
     
     # ========================================================================
-    # Overall best PCA (any dimension)
+    # Overall best PCA (any dimension, any representation)
     # ========================================================================
     mask = (aggregated['method'] == 'PCA')
     if mask.any():
@@ -188,9 +188,9 @@ def find_best_configs(df):
             'representation': best['representation'],
             'method': 'PCA',
             'dimension': int(best['dimension']),
-            'ef_1_pct_mean': best['ef_1_pct_mean'],
-            'ef_1_pct_std': best['ef_1_pct_std'],
-            'n_seeds': best['n_seeds']
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds'])
         }
     
     # ========================================================================
@@ -205,9 +205,9 @@ def find_best_configs(df):
             'dimension': int(best['dimension']),
             'n_neighbors': int(best['n_neighbors']) if pd.notna(best['n_neighbors']) else None,
             'min_dist': float(best['min_dist']) if pd.notna(best['min_dist']) else None,
-            'ef_1_pct_mean': best['ef_1_pct_mean'],
-            'ef_1_pct_std': best['ef_1_pct_std'],
-            'n_seeds': best['n_seeds']
+            'ef_1_pct_mean': float(best['ef_1_pct_mean']),
+            'ef_1_pct_std': float(best['ef_1_pct_std']),
+            'n_seeds': int(best['n_seeds'])
         }
     
     return best_configs
