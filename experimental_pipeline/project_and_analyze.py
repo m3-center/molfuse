@@ -247,9 +247,9 @@ def plot_projection_results(df_projected_target_actives_with_min_dist, df_simspa
     coord_cols_2d = [f"{dr_short_name_for_plot}-1", f"{dr_short_name_for_plot}-2"]
 
     if not all(col in df_projected_target_actives_with_min_dist.columns for col in coord_cols_2d):
-        # Fallback: if df_projected_target_actives_with_min_dist has columns like "PCA-1", but dr_short_name_for_plot is "PCA-Coembed"
+        # Fallback: if df_projected_target_actives_with_min_dist has columns like "PCA-1", but dr_short_name_for_plot differs
         # This situation needs careful handling. The most robust way is to ensure that the
-        # df_projected_target_actives_with_min_dist ALWAYS has columns named according to the strategy being plotted.
+        # df_projected_target_actives_with_min_dist ALWAYS has columns named according to the method being plotted.
         # The current project_and_analyze.py structure should ensure this if orchestrator passes correct dr_short_name.
         logging.warning(f"Projected target actives missing 2D coordinate columns for plotting: {coord_cols_2d}. Columns available: {df_projected_target_actives_with_min_dist.columns.tolist()}. This might indicate a mismatch in dr_short_name used for processing vs. plotting.")
         # Try to find any 'SHORTNAME-1', 'SHORTNAME-2' pattern if the specific one isn't found. This is a bit of a hack.
@@ -354,10 +354,10 @@ def main():
     df_projected_target_actives = pd.DataFrame()
     df_simspace_main_data = pd.DataFrame()
     
-    # CASE 1: Projection strategy - target actives must be loaded/projected separately.
+    # CASE 1: PROJECTION mode - target actives must be loaded/projected separately.
     # The main simspace CSV contains only MF Cloud + ZINC.
     if args.target_ligands_repr_path and args.target_ligands_repr_path.lower() != 'none':
-        logging.info(f"PROJECTION strategy detected. Projecting target actives...")
+        logging.info(f"PROJECTION mode: Projecting target actives through DR models...")
         try:
             df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
             
@@ -387,18 +387,20 @@ def main():
         except Exception as e:
             logging.error(f"Error during model loading or projection for {args.dr_short_name}: {e}", exc_info=True)
 
-    # CASE 2: Co-embedding strategy - actives are already in the simspace_csv_path
+    # CASE 2: DATA REUSE mode - actives are already in the simspace_csv_path
+    # This is used in Phase 2+ to reuse pre-computed similarity spaces from Phase 1
     else:
-        logging.info(f"CO-EMBEDDING strategy detected. Extracting actives from: {args.simspace_csv_path}")
+        logging.info(f"DATA REUSE mode: Loading pre-computed similarity space from: {args.simspace_csv_path}")
         try:
-            df_full_coembed_space = pd.read_csv(args.simspace_csv_path, low_memory=False)
-            if 'DataSource' not in df_full_coembed_space.columns:
-                logging.error("'DataSource' column not found in co-embedded simspace CSV. Cannot split data.")
+            df_full_space = pd.read_csv(args.simspace_csv_path, low_memory=False)
+            if 'DataSource' not in df_full_space.columns:
+                logging.error("'DataSource' column not found in simspace CSV. Cannot split data.")
             else:
-                df_projected_target_actives = df_full_coembed_space[df_full_coembed_space['DataSource'] == 'HELDOUT_ACTIVE'].copy()
-                df_simspace_main_data = df_full_coembed_space[df_full_coembed_space['DataSource'] != 'HELDOUT_ACTIVE'].copy()
+                df_projected_target_actives = df_full_space[df_full_space['DataSource'] == 'HELDOUT_ACTIVE'].copy()
+                df_simspace_main_data = df_full_space[df_full_space['DataSource'] != 'HELDOUT_ACTIVE'].copy()
+                logging.info(f"  Extracted {len(df_projected_target_actives)} actives and {len(df_simspace_main_data)} other compounds from pre-computed space")
         except Exception as e:
-            logging.error(f"Error processing co-embedded simspace file {args.simspace_csv_path}: {e}", exc_info=True)
+            logging.error(f"Error loading pre-computed similarity space {args.simspace_csv_path}: {e}", exc_info=True)
     
     if args.affinity_cutoff is not None and 'Standard Value (nM)' in df_projected_target_actives.columns:
         logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
@@ -429,8 +431,13 @@ def main():
         return 
     logging.info(f"Successfully obtained {len(df_projected_target_actives)} target actives for DR: {args.dr_short_name} (method key: {args.dr_method_key}).")
 
-    try: df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
-    except Exception as e: logging.error(f"Error loading main simspace file {args.simspace_csv_path}: {e}"); df_simspace_main_data = pd.DataFrame()
+    # NOTE: df_simspace_main_data is already populated from either:
+    #   - PROJECTION mode: loaded at line ~362 (MF cloud + ZINC only)
+    #   - DATA REUSE mode: loaded and split at line ~395 (excludes actives)
+    # No need to reload the CSV here - this was a redundant operation that doubled I/O time!
+    # OLD CODE (removed for performance):
+    # try: df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
+    # except Exception as e: logging.error(f"Error loading main simspace file {args.simspace_csv_path}: {e}"); df_simspace_main_data = pd.DataFrame()
     
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives remaining after affinity filtering. Cannot perform ranking.");
