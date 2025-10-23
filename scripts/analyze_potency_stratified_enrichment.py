@@ -129,6 +129,8 @@ def find_ranked_file(run_dir):
         os.path.join(run_dir, "*/results/*/dim_*/*/TYR*-*-*D-*.csv"),  # Tyro uppercase pattern
         os.path.join(run_dir, "*/results/*/dim_*/*/PYR*-*-*D-*.csv"),  # Pyru uppercase pattern
         os.path.join(run_dir, "*/results/*/dim_*/*/ISO*-*-*D-*.csv"),  # Iso uppercase pattern
+        os.path.join(run_dir, "*/results/*/dim_*/*/TYROSINEPROTEINKINASEABL1*-PCA-*D-FEATURES.csv"),  # PCA uppercase
+        os.path.join(run_dir, "*/results/*/dim_*/*/TYROSINEPROTEINKINASEABL1*-UMAP-*D-FEATURES.csv"),  # UMAP uppercase
     ]
     
     for pattern in patterns:
