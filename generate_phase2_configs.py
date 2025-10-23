@@ -27,8 +27,14 @@ Phase 2 REUSES Phase 1 similarity spaces and DR models to save time:
 - ONLY reruns ranking/evaluation with different affinity cutoffs
 - Expected runtime: ~10-15 min per run (vs hours for full pipeline)
 
-Total: 4 cutoffs × 2 methods (PCA-feat, UMAP-Euc-feat) × 5 seeds = 40 runs
-Estimated cost: ~10-15 hours total (vs ~40+ hours if recalculating similarity spaces)
+**Phase 2 Specific Selection:**
+This phase tests only 3 specific configurations:
+1. PCA/features/5D (best overall PCA)
+2. UMAP/features/5D with overall-EF-optimized hyperparameters (quantity-focused)
+3. UMAP/features/5D with high-potency-EF-optimized hyperparameters (quality-focused)
+
+Total: 4 cutoffs × 3 configs × 5 seeds = 60 runs
+Estimated cost: ~10-15 hours total (vs ~60+ hours if recalculating similarity spaces)
 """
 
 import json
@@ -37,8 +43,9 @@ import os
 # Configuration
 OUTPUT_DIR = "hyperparam_configs_v3_phase2_cutoff"
 BASE_CONFIG_PATH = "experiment_config.json"
-BEST_CONFIGS_PATH = "phase1_best_configs.json"
-SEEDS = [42, 43, 44, 45, 46]
+BEST_CONFIGS_OVERALL_PATH = "phase1_best_configs_by_overall_ef.json"
+BEST_CONFIGS_HIGH_POTENCY_PATH = "phase1_best_configs_by_high_potency_ef.json"
+SEEDS = [42, 43, 44, 45, 46]  # Same seeds as Phase 1
 
 # Affinity cutoffs (nM) aligned with potency tiers
 AFFINITY_CUTOFFS = [
@@ -67,17 +74,33 @@ def load_base_config():
 
 
 def load_best_configs():
-    """Load best configurations from Phase 1."""
-    if not os.path.exists(BEST_CONFIGS_PATH):
+    """Load best configurations from Phase 1 (both overall and high-potency)."""
+    configs = {}
+    
+    # Load overall EF best configs
+    if not os.path.exists(BEST_CONFIGS_OVERALL_PATH):
         raise FileNotFoundError(
-            f"Phase 1 best configs not found: {BEST_CONFIGS_PATH}\\n"
-            f"Please run: python extract_phase1_best_configs.py --workspace experiment_workspace_v3_phase1"
+            f"Phase 1 overall best configs not found: {BEST_CONFIGS_OVERALL_PATH}\n"
+            f"Please run: python scripts/analyze_potency_stratified_enrichment.py "
+            f"--workspace_dir experiment_workspace_v3_phase1 --output_dir potency_analysis_results"
         )
-    with open(BEST_CONFIGS_PATH, 'r') as f:
-        return json.load(f)
+    with open(BEST_CONFIGS_OVERALL_PATH, 'r') as f:
+        configs['overall'] = json.load(f)
+    
+    # Load high-potency EF best configs
+    if not os.path.exists(BEST_CONFIGS_HIGH_POTENCY_PATH):
+        raise FileNotFoundError(
+            f"Phase 1 high-potency best configs not found: {BEST_CONFIGS_HIGH_POTENCY_PATH}\n"
+            f"Please run: python scripts/analyze_potency_stratified_enrichment.py "
+            f"--workspace_dir experiment_workspace_v3_phase1 --output_dir potency_analysis_results"
+        )
+    with open(BEST_CONFIGS_HIGH_POTENCY_PATH, 'r') as f:
+        configs['high_potency'] = json.load(f)
+    
+    return configs
 
 
-def create_cutoff_config(method_config, cutoff_nm, seed, base_config):
+def create_cutoff_config(method_config, cutoff_nm, seed, base_config, config_label):
     """Create cutoff analysis configuration.
     
     Args:
@@ -85,6 +108,7 @@ def create_cutoff_config(method_config, cutoff_nm, seed, base_config):
         cutoff_nm: Affinity cutoff in nM
         seed: Random seed
         base_config: Base experiment configuration
+        config_label: Label for this config (e.g., 'overall', 'high_potency')
     
     Returns:
         Configuration dict for this cutoff analysis run
@@ -103,7 +127,8 @@ def create_cutoff_config(method_config, cutoff_nm, seed, base_config):
         "affinity_cutoff_nM": cutoff_nm,
         "reuse_phase1_data": True,  # Flag to indicate data reuse strategy
         "phase1_workspace": "experiment_workspace_v3_phase1/",
-        "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_cutoff{cutoff_nm}nM"
+        "selection_criterion": config_label,  # Track which criterion was used
+        "experiment_type": f"{representation}_{method.lower().replace('-', '_')}_dim{dimension}_cutoff{cutoff_nm}nM_{config_label}"
     }
     
     # Override settings for Phase 2
@@ -148,56 +173,72 @@ def main():
         best_configs = load_best_configs()
     except FileNotFoundError as e:
         print(f"ERROR: {e}")
-        print("\\nPlease extract best configs from Phase 1 first:")
-        print("  python extract_phase1_best_configs.py --workspace experiment_workspace_v3_phase1")
+        print("\nPlease run potency stratified enrichment analysis first:")
+        print("  python scripts/analyze_potency_stratified_enrichment.py \\")
+        print("    --workspace_dir experiment_workspace_v3_phase1 \\")
+        print("    --output_dir potency_analysis_results")
         return
     
-    # Select methods for cutoff analysis
-    # Using best PCA-features and best UMAP-Euclidean-features (overall best across dimensions)
+    # Select specific configurations for Phase 2 cutoff analysis
     methods_to_test = []
     
-    # Best PCA-features overall
-    if 'best_pca_overall' in best_configs:
-        methods_to_test.append(('PCA-features (overall best)', best_configs['best_pca_overall']))
-        print(f"✓ PCA-features (overall best): {best_configs['best_pca_overall']['dimension']}D")
-    elif 'features_pca_dim2' in best_configs:
-        # Fallback to 2D if overall not available
-        methods_to_test.append(('PCA-features (2D)', best_configs['features_pca_dim2']))
-        print(f"✓ PCA-features (2D fallback): 2D")
+    # 1. PCA-features 5D (from overall best configs)
+    if 'features_pca_dim5' in best_configs['overall']:
+        pca_config = best_configs['overall']['features_pca_dim5']
+        methods_to_test.append(('PCA-features-5D', pca_config, 'pca_overall'))
+        print(f"✓ PCA-features-5D: EF@1%={pca_config.get('ef_1_pct_mean', 'N/A'):.2f}")
+    else:
+        print("WARNING: PCA-features-5D not found in overall configs!")
     
-    # Best UMAP-Euclidean-features overall
-    if 'best_umap_overall' in best_configs:
-        methods_to_test.append(('UMAP-Euclidean-features (overall best)', best_configs['best_umap_overall']))
-        print(f"✓ UMAP-Euclidean-features (overall best): {best_configs['best_umap_overall']['dimension']}D, "
-              f"nn={best_configs['best_umap_overall']['n_neighbors']}, "
-              f"md={best_configs['best_umap_overall']['min_dist']}")
-    elif 'features_umap_euclidean_dim2' in best_configs:
-        # Fallback to 2D if overall not available
-        methods_to_test.append(('UMAP-Euclidean-features (2D)', best_configs['features_umap_euclidean_dim2']))
-        print(f"✓ UMAP-Euclidean-features (2D fallback): nn={best_configs['features_umap_euclidean_dim2']['n_neighbors']}, "
-              f"md={best_configs['features_umap_euclidean_dim2']['min_dist']}")
+    # 2. UMAP-features 5D (overall EF optimized - quantity-focused)
+    if 'features_umap_euclidean_dim5' in best_configs['overall']:
+        umap_overall = best_configs['overall']['features_umap_euclidean_dim5']
+        methods_to_test.append(('UMAP-features-5D (overall-EF)', umap_overall, 'umap_overall'))
+        print(f"✓ UMAP-features-5D (overall-EF optimized):")
+        print(f"    nn={umap_overall['n_neighbors']}, md={umap_overall['min_dist']}")
+        print(f"    Overall EF@1%={umap_overall.get('ef_1_pct_mean', 'N/A'):.2f}")
+    else:
+        print("WARNING: UMAP-features-5D not found in overall configs!")
+    
+    # 3. UMAP-features 5D (high-potency EF optimized - quality-focused)
+    if 'features_umap_euclidean_dim5' in best_configs['high_potency']:
+        umap_high = best_configs['high_potency']['features_umap_euclidean_dim5']
+        methods_to_test.append(('UMAP-features-5D (high-potency-EF)', umap_high, 'umap_high_potency'))
+        print(f"✓ UMAP-features-5D (high-potency-EF optimized):")
+        print(f"    nn={umap_high['n_neighbors']}, md={umap_high['min_dist']}")
+        print(f"    High-potency EF@1%={umap_high.get('high_ef_1_pct_mean', 'N/A'):.2f}")
+    else:
+        print("WARNING: UMAP-features-5D not found in high-potency configs!")
     
     if not methods_to_test:
-        print("ERROR: No suitable methods found in best_configs!")
-        print("Available keys:", list(best_configs.keys()))
+        print("ERROR: No suitable 5D configurations found in best_configs!")
+        print("Available overall keys:", list(best_configs['overall'].keys()))
+        print("Available high-potency keys:", list(best_configs['high_potency'].keys()))
         return
     
     print()
     print(f"Affinity cutoffs to test: {AFFINITY_CUTOFFS} nM")
-    print(f"Seeds: {SEEDS}")
+    print(f"Seeds: {SEEDS} (same as Phase 1)")
     print()
     
     # Generate configurations
     config_count = 0
-    for method_label, method_config in methods_to_test:
+    for method_label, method_config, config_type in methods_to_test:
         for cutoff_nm in AFFINITY_CUTOFFS:
             for seed in SEEDS:
-                config = create_cutoff_config(method_config, cutoff_nm, seed, base_config)
+                config = create_cutoff_config(method_config, cutoff_nm, seed, base_config, config_type)
                 
                 # Generate filename
                 method_name = method_config['method'].lower().replace('-', '_')
                 dim = method_config['dimension']
-                filename = f"config_seed{seed}_{method_config['representation']}_{method_name}_dim{dim}_cutoff{cutoff_nm}nM.json"
+                
+                # Include hyperparams in filename for UMAP to distinguish configs
+                if 'n_neighbors' in method_config:
+                    hyperparam_str = f"_nn{method_config['n_neighbors']}_md{method_config['min_dist']}"
+                else:
+                    hyperparam_str = ""
+                
+                filename = f"config_seed{seed}_{method_config['representation']}_{method_name}_dim{dim}{hyperparam_str}_cutoff{cutoff_nm}nM_{config_type}.json"
                 filepath = os.path.join(OUTPUT_DIR, filename)
                 
                 # Save configuration
@@ -214,16 +255,27 @@ def main():
     print("SUMMARY")
     print("="*80)
     print(f"Total configurations: {config_count}")
-    print(f"  Methods: {len(methods_to_test)}")
+    print(f"  Configs: {len(methods_to_test)} (PCA-5D + 2×UMAP-5D)")
     print(f"  Cutoffs: {len(AFFINITY_CUTOFFS)}")
-    print(f"  Seeds: {len(SEEDS)}")
+    print(f"  Seeds: {len(SEEDS)} (same as Phase 1)")
     print(f"  Expected runs: {len(methods_to_test)} × {len(AFFINITY_CUTOFFS)} × {len(SEEDS)} = {len(methods_to_test) * len(AFFINITY_CUTOFFS) * len(SEEDS)}")
+    print()
+    print("Configurations:")
+    print("  1. PCA/features/5D (overall best PCA)")
+    print("  2. UMAP/features/5D - overall-EF optimized (quantity-focused)")
+    print("  3. UMAP/features/5D - high-potency-EF optimized (quality-focused)")
+    print()
+    print("Data Reuse Strategy:")
+    print("  ✓ Reuses Phase 1 similarity spaces (features/fingerprints)")
+    print("  ✓ Reuses Phase 1 DR models (PCA/UMAP fitted models)")
+    print("  ✓ Same seeds as Phase 1 (enables exact model matching)")
+    print("  ✗ Only reruns ranking with different affinity cutoffs")
     print()
     print("Estimated runtime: ~10-15 hours total (reusing Phase 1 data)")
     print()
     print("Research Questions:")
     print("  1. Which cutoff gives best High-potent EF@1%?")
-    print("  2. Do PCA and UMAP prefer different cutoffs?")
+    print("  2. Do quantity-optimized vs quality-optimized UMAP params prefer different cutoffs?")
     print("  3. How does cutoff affect Medium vs Weak potency enrichment?")
     print("  4. What is optimal cutoff for Phase 3 (MF cloud ablation)?")
     print()
