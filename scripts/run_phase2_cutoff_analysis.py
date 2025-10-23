@@ -73,14 +73,15 @@ def find_matching_phase1_run(phase2_config, phase1_workspace):
     dimension = phase2_config['global_settings']['simspace_dims_to_test'][0]
     
     # Build search pattern based on representation and method
+    # Phase 1 pattern: run_seed{seed}_config_tyro_{representation}_{method}_dim{dimension}_[params]_seed{seed}
     if 'PCA' in dr_config['short_name']:
-        # PCA pattern: run_seed{seed}_config_{representation}_pca_*dim{dimension}*
-        pattern = f"run_seed{seed}_config_{representation}_pca_*dim{dimension}*"
+        # PCA pattern: run_seed{seed}_config_tyro_{representation}_pca_dim{dimension}_seed{seed}
+        pattern = f"run_seed{seed}_config_tyro_{representation}_pca_*dim{dimension}*seed{seed}"
     elif 'UMAP' in dr_config['short_name']:
-        # UMAP pattern: run_seed{seed}_config_{representation}_umap_*dim{dimension}_nn{nn}_md{md}*
+        # UMAP pattern: run_seed{seed}_config_tyro_{representation}_umap_euclidean_dim{dimension}_nn{nn}_md{md}_seed{seed}
         nn = dr_config['n_neighbors']
         md = dr_config['min_dist']
-        pattern = f"run_seed{seed}_config_{representation}_umap_*dim{dimension}_nn{nn}_md{md}*"
+        pattern = f"run_seed{seed}_config_tyro_{representation}_umap_euclidean_dim{dimension}_nn{nn}_md{md}_seed{seed}"
     else:
         logging.error(f"Unknown DR method: {dr_config['short_name']}")
         return None
