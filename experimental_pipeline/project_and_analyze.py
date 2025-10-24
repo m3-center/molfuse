@@ -530,7 +530,14 @@ def main():
                 if os.path.exists(mf_file_path):
                     logging.info(f"  Loading MF affinity data from: {mf_file_path}")
                     try:
-                        mf_affinity_data = pd.read_csv(mf_file_path, usecols=['Compound ChEMBL ID', 'Standard Value (nM)'], low_memory=False)
+                        # Load only the two required columns to minimize memory
+                        mf_affinity_data = pd.read_csv(
+                            mf_file_path, 
+                            usecols=['Compound ChEMBL ID', 'Standard Value (nM)'], 
+                            dtype={'Compound ChEMBL ID': str, 'Standard Value (nM)': np.float32},
+                            low_memory=False
+                        )
+                        logging.info(f"  Loaded {len(mf_affinity_data)} affinity records from source file")
                         
                         # Merge affinity data into MF cloud
                         original_mf_count = len(mf_cloud_df_full)
@@ -539,6 +546,12 @@ def main():
                             on='Compound ChEMBL ID',
                             how='left'
                         )
+                        
+                        # Free memory immediately after merge
+                        del mf_affinity_data
+                        import gc
+                        gc.collect()
+                        
                         logging.info(f"  Merged affinity data for {len(mf_cloud_df_full[mf_cloud_df_full['Standard Value (nM)'].notna()])} of {original_mf_count} MF molecules")
                     except Exception as e:
                         logging.warning(f"  Failed to load/merge MF affinity data: {e}")
