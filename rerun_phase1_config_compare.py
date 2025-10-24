@@ -61,7 +61,17 @@ def parse_original_config(original_run_dir):
     dr_config = dr_methods[dr_key]
     
     dr_method = dr_config.get('short_name')
-    dimension = config['global_settings'].get('simspace_dim')
+    
+    # Extract dimension from simspace_dims_to_test list (Phase 1 configs have single dimension)
+    dims_list = config['global_settings'].get('simspace_dims_to_test', [])
+    dimension = dims_list[0] if dims_list else None
+    if dimension is None:
+        # Fallback: try simspace_dim (used in some configs)
+        dimension = config['global_settings'].get('simspace_dim')
+    
+    if dimension is None:
+        raise ValueError("Could not extract dimension from config. Check 'simspace_dims_to_test' or 'simspace_dim' in global_settings")
+    
     n_neighbors = dr_config.get('n_neighbors')
     min_dist = dr_config.get('min_dist')
     
