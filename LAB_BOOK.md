@@ -562,6 +562,190 @@ experiment_workspace_v3_phase1/
 
 ---
 
+### October 24, 2025: CRITICAL DISCOVERY - MF Cloud Duplication in Phase 1 Similarity Spaces
+
+**Context**: During Phase 2 cutoff sensitivity debugging, discovered that MF cloud filtering in `project_and_analyze.py` caused 30× memory explosion (12.8M rows from 420K molecules). Root cause: affinity source file contains duplicate Compound ChEMBL IDs (compounds binding to multiple MF targets).
+
+**Critical Realization**: This same duplication existed in Phase 1 similarity space training data.
+
+#### Data Flow Investigation (TyrosineProteinKinaseABL1_P00519 Example)
+
+**Source MF File**: `datasets/molecular_function_features_fingerprints/KW-0808_Transferase_affinity_extracted_features.csv`
+
+**Duplication Statistics (BEFORE Phase 1 Training)**:
+- Total rows: 430,794
+- Unique Compound ChEMBL IDs: 193,244
+- **Duplication factor: 2.23× (430,794 / 193,244)**
+- Duplicated compounds: 83,633 (43% of unique compounds)
+- Most duplicated: CHEMBL388978 (2,127 occurrences - likely pan-kinase inhibitor)
+- Unique targets in MF file: 833 different transferase proteins
+
+**Why Duplicates Exist**:
+- Compounds tested against **multiple targets** within same MF category
+- Example: Kinase inhibitor screened against 100+ different kinases
+- Same compound has different affinities for different targets
+- Reflects real biological promiscuity of drug-like molecules
+
+**Impact on Phase 1 DR Models**:
+- PCA covariance matrix weighted toward highly-tested compounds
+- UMAP k-NN graph contains artificial high-density regions
+- DR manifolds potentially biased toward "privileged scaffolds"
+- Distance metrics influenced by over-represented chemistry
+
+#### Pipeline Fix Implementation
+
+**Step 1: `prepare_data.py` Deduplication** (Lines 171-188)
+```python
+# Aggregate duplicates using minimum affinity (most potent binding)
+df_filtered_precalc_mf = df_filtered_precalc_mf.groupby('Compound ChEMBL ID').agg({
+    col: 'first' if col != 'Standard Value (nM)' else 'min'
+    for col in df_filtered_precalc_mf.columns if col != 'Compound ChEMBL ID'
+}).reset_index()
+```
+- Strategy: Keep **minimum affinity** (most potent) for each compound
+- Rationale: If compound binds strongly to ANY transferase, that's its most relevant MF property
+- Expected reduction: 430,794 → 193,244 rows (2.23× for Transferase)
+
+**Step 2: `calculate_similarityspaces_exp.py` Safety Check** (Lines 159-177)
+- Detects duplicates after loading (should be prevented by Step 1)
+- Drops duplicates if found (keep='first')
+- Logs warning if deduplication needed
+
+**Step 3: Validation Framework**
+- Created `rerun_phase1_config_compare.py`: Retrain ONE config with clean data
+- Created `rerun_phase1_clean_compare_slurm.sh`: HPC submission script
+- Test case: seed44, UMAP-Euclidean 5D, n_neighbors=10, min_dist=0.1
+- Comparison metrics: EF@1%, ROC-AUC, PR-AUC (original vs clean)
+- Decision threshold: **< 5% change** = minimal fix, **≥ 5% change** = full Phase 1 rerun
+
+#### Scientific Question: Is Duplication Harmful or Beneficial?
+
+**The Ambiguity**:
+This discovery reveals either a **critical experimental flaw** OR an **accidental feature engineering success**. The outcome is uncertain.
+
+**Hypothesis A: Duplication as Artifact (Harmful)**
+- **Mechanism**: Over-representation biases manifold toward testing convenience, not biological relevance
+- **Effect**: DR models learn "compounds medicinal chemists like to test" rather than true transferase chemistry
+- **Evidence for**:
+  - Confounds chemical diversity with testing frequency
+  - Affinity information lost (promiscuity vs selectivity unclear)
+  - May not generalize to novel/under-studied targets
+- **Prediction**: EF@1% will **decrease** with deduplication (original results were inflated)
+
+**Hypothesis B: Duplication as Weighting (Beneficial)**
+- **Mechanism**: Over-representation emphasizes "privileged scaffolds" with favorable ADME properties
+- **Effect**: DR models learn validated drug-like chemical space for this MF
+- **Evidence for**:
+  - Compounds tested 100+ times likely have good bioavailability, stability, safety profiles
+  - Reflect medicinal chemistry consensus on "what works" for this target class
+  - Natural importance weighting by biological relevance
+- **Prediction**: EF@1% will **decrease** with deduplication (we removed useful signal)
+
+**Hypothesis C: Minimal Impact (Neutral)**
+- **Mechanism**: Chemical diversity of unique compounds dominates signal; duplication adds redundancy but not bias
+- **Effect**: Over-representation was relatively uniform (2.23× average), not extreme
+- **Evidence for**:
+  - 193K unique compounds still provides rich diversity
+  - Duplication factor moderate compared to potential bias (not 10× or 100×)
+  - PCA/UMAP may be robust to modest data imbalance
+- **Prediction**: EF@1% change **< 5%** (acceptable tolerance)
+
+#### Technical Considerations
+
+**Why Duplicates Don't "Break" Algorithms**:
+- **PCA**: Handles duplicates by weighting covariance matrix (mathematically valid)
+- **UMAP**: Treats duplicates as high-density regions (no computational failure)
+- **Problem**: Not algorithmic error, but **representational bias**
+
+**What Information Is Lost by Deduplication**:
+- **Binding promiscuity**: Cannot distinguish pan-inhibitors (bind everything weakly) from selective inhibitors (bind one target strongly)
+- **Affinity distribution**: CHEMBL388978's 2,127 affinities range from potent to weak - aggregating to minimum loses this variance
+- **Target diversity**: Compound tested against 50 kinases vs 5 kinases - this frequency signal is discarded
+
+**Why This Matters for Publication**:
+- If duplication was beneficial: Must justify as **intentional weighting scheme** (feature engineering)
+- If duplication was harmful: Must report **corrected metrics** (rerun Phase 1)
+- If duplication was neutral: Must acknowledge as **limitation** (methods section)
+
+#### Experimental Validation Plan
+
+**HPC Comparison Test** (Running):
+```bash
+sbatch rerun_phase1_clean_compare_slurm.sh
+```
+
+**Three Possible Outcomes**:
+
+1. **Scenario A: EF@1% Decreases ≥ 5% (Duplication was inflating metrics)**
+   - **Interpretation**: Original results optimistic, testing bias artifact
+   - **Action**: Full Phase 1 rerun required (all 260 configs)
+   - **Timeline**: ~2-3 weeks HPC time
+   - **Publication impact**: Delay, but stronger scientific rigor
+
+2. **Scenario B: EF@1% Increases ≥ 5% (Deduplication improves performance)**
+   - **Interpretation**: Duplicates added noise, unique diversity provides cleaner signal
+   - **Action**: Full Phase 1 rerun required (celebrate improved results!)
+   - **Timeline**: ~2-3 weeks HPC time
+   - **Publication impact**: Demonstrates robustness, method improvement
+
+3. **Scenario C: EF@1% Change < 5% (Minimal impact)**
+   - **Interpretation**: Chemical diversity dominated, duplication was redundant but not biasing
+   - **Action**: Proceed with existing Phase 1 results, note limitation
+   - **Timeline**: Immediate (no rerun needed)
+   - **Publication impact**: Methods section caveat, no delay
+
+#### Connection to UMAP n_neighbors Hypothesis
+
+**Potential Interaction with H4 (MF Cloud Anchor)**:
+- If duplicates create artificial high-density MF cloud regions
+- Small nn (10) may preferentially connect duplicates to each other
+- Large nn (500) may dilute duplicate clusters by connecting to broader decoy population
+- **Phase 3 MF ablation test** will be critical: Does nn effect change with deduplicated data?
+
+**Revised Prediction**:
+- Original Phase 1 (with duplicates): nn effect driven by duplicate clustering
+- Clean Phase 1 (deduplicated): nn effect may diminish or shift
+- **This makes the comparison test even more valuable** - tests two hypotheses simultaneously
+
+#### Documentation and Reproducibility
+
+**Data Provenance for ABL1**:
+- Source: `KW-0808_Transferase_affinity_extracted_features.csv`
+- Original: 430,794 rows, 193,244 unique compounds, 833 targets
+- Filtered by target P00519 (ABL1): Excludes rows where accession='P00519'
+- Deduplicated: Keep minimum affinity per Compound ChEMBL ID
+- Output: `{workspace}/TyrosineProteinKinaseABL1_P00519/temp_data/TyrosineProteinKinaseABL1_P00519_chembl_mf_excluded_features.csv`
+
+**Verification Steps**:
+1. Check source file duplicate statistics: ✅ Confirmed 2.23× duplication
+2. Verify deduplication logic in `prepare_data.py`: ✅ Implemented (lines 171-188)
+3. Confirm safety check in `calculate_similarityspaces_exp.py`: ✅ Implemented (lines 159-177)
+4. Create comparison test framework: ✅ Complete (`rerun_phase1_config_compare.py`)
+5. Run HPC validation: 🔄 In progress
+6. Analyze results and make decision: ⏳ Pending HPC completion
+
+#### Research Integrity Note
+
+**Why This Discovery Is Valuable (Regardless of Outcome)**:
+- Demonstrates thorough data quality investigation
+- Tests robustness of findings to data preprocessing decisions
+- Provides insight into DR model sensitivity to data imbalance
+- Exemplifies scientific method: hypothesis → experiment → evidence-based decision
+
+**Transparency Commitment**:
+- Will report comparison results honestly (whether favorable or unfavorable)
+- Will rerun experiments if scientifically necessary (no shortcuts)
+- Will document this investigation in methods section (shows rigor)
+
+**Next Steps**:
+1. Wait for HPC comparison results (~2 hours)
+2. Analyze EF@1% change percentage
+3. Make evidence-based decision on Phase 1 validity
+4. Update LAB_BOOK.md with findings
+5. Proceed with Phase 2-4 OR initiate Phase 1 rerun
+
+---
+
 ### October 24, 2025: UMAP n_neighbors Mechanistic Investigation
 
 **Objective**: Understand why small neighborhoods (nn=10) outperform large (nn=500) by 2.3× using existing and planned experimental data.
