@@ -356,7 +356,9 @@ def main():
     
     # CASE 1: PROJECTION mode - target actives must be loaded/projected separately.
     # The main simspace CSV contains only MF Cloud + ZINC.
-    if args.target_ligands_repr_path and args.target_ligands_repr_path.lower() != 'none':
+    # Triggered when BOTH --target_ligands_repr_path AND --model_dir_for_projection are provided
+    if (args.target_ligands_repr_path and args.target_ligands_repr_path.lower() != 'none' and
+        args.model_dir_for_projection and args.model_dir_for_projection.lower() != 'none'):
         logging.info(f"PROJECTION mode: Projecting target actives through DR models...")
         try:
             df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
