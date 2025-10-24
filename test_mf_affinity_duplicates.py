@@ -50,6 +50,37 @@ if len(mf_duplicates) > 0:
 else:
     print(f"   ✓ Each compound appears exactly once in MF cloud")
 
+# Check ZINC decoys
+print(f"\n   ZINC decoys:")
+if 'DataSource' in df_simspace.columns:
+    df_zinc = df_simspace[df_simspace['DataSource'] == 'ZINC']
+elif 'MOLECULE ID' in df_simspace.columns:
+    df_zinc = df_simspace[df_simspace['MOLECULE ID'].str.startswith('ZINC', na=False)]
+else:
+    df_zinc = pd.DataFrame()
+
+if not df_zinc.empty:
+    print(f"   Total ZINC rows: {len(df_zinc):,}")
+    if 'ZINC_ID' in df_zinc.columns:
+        print(f"   Unique ZINC IDs: {df_zinc['ZINC_ID'].nunique():,}")
+    elif 'MOLECULE ID' in df_zinc.columns:
+        print(f"   Unique MOLECULE IDs: {df_zinc['MOLECULE ID'].nunique():,}")
+else:
+    print(f"   No ZINC decoys found in similarity space")
+
+# Check target ligands
+print(f"\n   Target ligands:")
+target_ligands_file = os.path.join(phase1_run, "TyrosineProteinKinaseABL1_P00519/target_ligands_calculated/features/TyrosineProteinKinaseABL1_P00519_target_ligands_for_calc_features.csv")
+if os.path.exists(target_ligands_file):
+    df_targets = pd.read_csv(target_ligands_file, low_memory=False)
+    print(f"   Total target ligand rows: {len(df_targets):,}")
+    if 'Compound ChEMBL ID' in df_targets.columns:
+        print(f"   Unique Compound ChEMBL IDs: {df_targets['Compound ChEMBL ID'].nunique():,}")
+    if 'SMILES' in df_targets.columns:
+        print(f"   Unique SMILES: {df_targets['SMILES'].nunique():,}")
+else:
+    print(f"   Target ligands file not found: {target_ligands_file}")
+
 # 2. Load affinity source file
 print("\n2. Loading affinity source file...")
 print(f"   File: {affinity_file}")
