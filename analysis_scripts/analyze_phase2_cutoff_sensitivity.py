@@ -95,12 +95,16 @@ def find_phase2_runs(workspace_dir):
         if '_pca_' in basename and basename.endswith('_pca_overall'):
             config_type = 'pca_overall'
             logging.debug(f"  ✓ Matched PCA: {basename}")
-        elif 'umap' in basename and basename.endswith('_umap_overall'):
-            config_type = 'umap_overall'
-            logging.debug(f"  ✓ Matched UMAP overall: {basename}")
-        elif 'umap' in basename and basename.endswith('_umap_high_potency'):
-            config_type = 'umap_high_potency'
-            logging.debug(f"  ✓ Matched UMAP high-potency: {basename}")
+        elif 'umap' in basename.lower():  # Case insensitive check
+            if basename.endswith('_umap_overall'):
+                config_type = 'umap_overall'
+                logging.debug(f"  ✓ Matched UMAP overall: {basename}")
+            elif basename.endswith('_umap_high_potency'):
+                config_type = 'umap_high_potency'
+                logging.debug(f"  ✓ Matched UMAP high-potency: {basename}")
+            else:
+                logging.warning(f"UMAP directory doesn't match expected suffix: {basename}")
+                logging.warning(f"  - Basename ends with: ...{basename[-30:]}")
         
         if config_type is None:
             logging.warning(f"Could not extract config type from: {basename}")
@@ -170,6 +174,43 @@ def load_metrics(run_dir):
     
     except Exception as e:
         logging.error(f"  ✗ Error loading metrics from {csv_files[0]}: {e}")
+        return None
+
+
+def load_actives_with_affinity(run_dir):
+    """Load active compounds with their affinity data to enable potency stratification.
+    
+    Returns:
+        pd.DataFrame: Actives with 'Standard Value (nM)' column, or None if not found
+    """
+    # Look for the complete actives file that includes affinity data
+    pattern = os.path.join(
+        run_dir,
+        "TyrosineProteinKinaseABL1_P00519",
+        "results",
+        "features",
+        "dim_5",
+        "**",
+        "*_actives_complete_*.csv"
+    )
+    
+    csv_files = glob.glob(pattern, recursive=True)
+    
+    if not csv_files:
+        logging.debug(f"  ✗ No actives complete file found in: {run_dir}")
+        return None
+    
+    try:
+        df = pd.read_csv(csv_files[0])
+        if df.empty or 'Standard Value (nM)' not in df.columns:
+            logging.debug(f"  ✗ Actives file missing affinity data")
+            return None
+        
+        logging.debug(f"  ✓ Loaded {len(df)} actives with affinity data")
+        return df
+    
+    except Exception as e:
+        logging.warning(f"  ✗ Error loading actives from {csv_files[0]}: {e}")
         return None
 
 
@@ -244,6 +285,16 @@ def aggregate_results(phase2_runs):
                 # Load active counts
                 num_actives, num_total = load_ranked_data(run_dir)
                 
+                # Load actives with affinity for potency stratification
+                df_actives = load_actives_with_affinity(run_dir)
+                num_high_potency = num_medium_potency = num_low_potency = 0
+                
+                if df_actives is not None and 'Standard Value (nM)' in df_actives.columns:
+                    affinity_vals = pd.to_numeric(df_actives['Standard Value (nM)'], errors='coerce')
+                    num_high_potency = len(affinity_vals[(affinity_vals >= 0.1) & (affinity_vals <= 100)])
+                    num_medium_potency = len(affinity_vals[(affinity_vals > 100) & (affinity_vals <= 1000)])
+                    num_low_potency = len(affinity_vals[(affinity_vals > 1000) & (affinity_vals <= 10000)])
+                
                 # Build result row
                 row = {
                     'config_type': config_type,
@@ -256,7 +307,10 @@ def aggregate_results(phase2_runs):
                     'pr_auc': metrics.get('pr_auc', np.nan),
                     'spearman_rho': metrics.get('spearman_rho_affinity_vs_score', np.nan),
                     'num_actives': num_actives,
-                    'num_total': num_total
+                    'num_total': num_total,
+                    'num_high_potency': num_high_potency,
+                    'num_medium_potency': num_medium_potency,
+                    'num_low_potency': num_low_potency
                 }
                 
                 results.append(row)
@@ -520,6 +574,104 @@ def plot_active_count_vs_performance(df_results, output_dir):
     plt.close()
 
 
+def plot_potency_tier_distribution(df_results, output_dir):
+    """Plot 4: Potency tier distribution by cutoff and DR method.
+    
+    Stacked bar plot showing how many actives fall into each potency tier
+    (high: 0.1-100 nM, medium: 100-1000 nM, low: 1K-10K nM) for each cutoff.
+    Separate subplots for PCA vs UMAP methods.
+    """
+    # Group by config type: PCA vs UMAP (combine both UMAP variants)
+    df_results_copy = df_results.copy()
+    df_results_copy['dr_method'] = df_results_copy['config_type'].apply(
+        lambda x: 'PCA' if x == 'pca_overall' else 'UMAP'
+    )
+    
+    # Calculate mean counts for each DR method and cutoff
+    summary = df_results_copy.groupby(['dr_method', 'cutoff_nM']).agg({
+        'num_high_potency': 'mean',
+        'num_medium_potency': 'mean',
+        'num_low_potency': 'mean'
+    }).reset_index()
+    
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    
+    dr_methods = ['PCA', 'UMAP']
+    colors = ['#2ecc71', '#f39c12', '#e74c3c']  # green, orange, red
+    
+    for idx, dr_method in enumerate(dr_methods):
+        ax = axes[idx]
+        df_method = summary[summary['dr_method'] == dr_method].sort_values('cutoff_nM')
+        
+        if df_method.empty:
+            ax.text(0.5, 0.5, f'No data for {dr_method}', 
+                   ha='center', va='center', fontsize=14, transform=ax.transAxes)
+            continue
+        
+        x_pos = np.arange(len(df_method))
+        width = 0.6
+        
+        # Create stacked bars
+        p1 = ax.bar(x_pos, df_method['num_high_potency'], width, 
+                   label='High (0.1-100 nM)', color=colors[0], edgecolor='black', linewidth=1)
+        p2 = ax.bar(x_pos, df_method['num_medium_potency'], width,
+                   bottom=df_method['num_high_potency'],
+                   label='Medium (100-1K nM)', color=colors[1], edgecolor='black', linewidth=1)
+        p3 = ax.bar(x_pos, df_method['num_low_potency'], width,
+                   bottom=df_method['num_high_potency'] + df_method['num_medium_potency'],
+                   label='Low (1K-10K nM)', color=colors[2], edgecolor='black', linewidth=1)
+        
+        # Add value labels on bars
+        for i, (_, row) in enumerate(df_method.iterrows()):
+            total = row['num_high_potency'] + row['num_medium_potency'] + row['num_low_potency']
+            if total > 0:
+                # Label for high potency
+                if row['num_high_potency'] > 5:
+                    ax.text(i, row['num_high_potency']/2, f"{int(row['num_high_potency'])}", 
+                           ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+                # Label for medium potency
+                if row['num_medium_potency'] > 5:
+                    ax.text(i, row['num_high_potency'] + row['num_medium_potency']/2, 
+                           f"{int(row['num_medium_potency'])}", 
+                           ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+                # Label for low potency
+                if row['num_low_potency'] > 5:
+                    ax.text(i, row['num_high_potency'] + row['num_medium_potency'] + row['num_low_potency']/2,
+                           f"{int(row['num_low_potency'])}", 
+                           ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+        
+        # Formatting
+        ax.set_xlabel('Affinity Cutoff', fontsize=12, fontweight='bold')
+        if idx == 0:
+            ax.set_ylabel('Number of Active Compounds', fontsize=12, fontweight='bold')
+        ax.set_title(f'{dr_method} Method', fontsize=14, fontweight='bold', pad=15)
+        
+        # Set x-axis labels
+        cutoff_labels_for_plot = [CUTOFF_LABELS[CUTOFFS.index(c)] for c in df_method['cutoff_nM']]
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(cutoff_labels_for_plot, fontsize=11)
+        
+        ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+        
+        if idx == 1:  # Add legend to right subplot
+            ax.legend(fontsize=10, loc='upper right', frameon=True, shadow=True)
+    
+    plt.suptitle('Phase 2: Potency Tier Distribution Across Cutoffs\nMean Active Counts by Potency (n=5 seeds)', 
+                fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    
+    # Save
+    output_path = os.path.join(output_dir, 'phase2_potency_tier_distribution.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    logging.info(f"Saved potency tier distribution plot to: {output_path}")
+    
+    output_path_pdf = os.path.join(output_dir, 'phase2_potency_tier_distribution.pdf')
+    plt.savefig(output_path_pdf, bbox_inches='tight')
+    
+    plt.close()
+
+
 def generate_summary_report(df_results, output_dir):
     """Generate text summary of Phase 2 results."""
     
@@ -662,6 +814,9 @@ def main():
     logging.info("Generating Plot 3: Active count vs performance trade-off...")
     plot_active_count_vs_performance(df_results, args.output_dir)
     
+    logging.info("Generating Plot 4: Potency tier distribution by DR method...")
+    plot_potency_tier_distribution(df_results, args.output_dir)
+    
     # Generate summary report
     logging.info("Generating summary report...")
     generate_summary_report(df_results, args.output_dir)
@@ -674,6 +829,7 @@ def main():
     logging.info("  - phase2_cutoff_sensitivity_curves.png/pdf")
     logging.info("  - phase2_enrichment_heatmap.png/pdf")
     logging.info("  - phase2_quality_vs_quantity.png/pdf")
+    logging.info("  - phase2_potency_tier_distribution.png/pdf")
     logging.info("  - phase2_aggregated_results.csv")
     logging.info("  - phase2_summary_report.txt")
     
