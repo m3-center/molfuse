@@ -142,16 +142,76 @@ def run_prepare_data(config, output_workspace):
     return target_workspace, temp_data_dir
 
 
-def run_calculate_similarityspaces(config, target_workspace, temp_data_dir):
+def run_calculate_target_features(config, target_workspace, temp_data_dir):
+    """Calculate features/fingerprints for target ligands (Step 2a from main_orchestrator)."""
+    logging.info("\n" + "="*80)
+    logging.info("STEP 2a: CALCULATE TARGET LIGAND FEATURES")
+    logging.info("="*80)
+    
+    raw_target_ligands_path = os.path.join(temp_data_dir, f"{config['target_id']}_target_ligands_for_feature_calc_raw.csv")
+    
+    if not os.path.exists(raw_target_ligands_path):
+        logging.warning(f"Raw target ligands file not found: {raw_target_ligands_path}")
+        return None
+    
+    # Check if file has any data
+    df_check = pd.read_csv(raw_target_ligands_path, low_memory=False)
+    if df_check.empty:
+        logging.warning("Raw target ligands file is empty")
+        return None
+    
+    # Create output directory for calculated features
+    target_ligands_repr_calc_output_dir = os.path.join(target_workspace, "target_ligands_calculated", config['representation'])
+    os.makedirs(target_ligands_repr_calc_output_dir, exist_ok=True)
+    
+    processed_target_ligands_repr_file = os.path.join(
+        target_ligands_repr_calc_output_dir,
+        f"{config['target_id']}_target_ligands_for_calc_{config['representation']}.csv"
+    )
+    
+    # Run feature/fingerprint calculation
+    cmd = [
+        'python', 'core_scripts/calculate_features_and_fingerprints_exp.py',
+        '--input_csv', raw_target_ligands_path,
+        '--output_dir', target_ligands_repr_calc_output_dir,
+        '--representation_type', config['representation'],
+        '--file_label', f"{config['target_id']}_target_ligands_for_calc",
+        '--n_jobs', '-1'
+    ]
+    
+    logging.info(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        logging.error(f"Target ligand feature calculation failed:")
+        logging.error(result.stderr)
+        raise RuntimeError("Target ligand feature calculation failed")
+    
+    logging.info("✓ Target ligand features calculated")
+    
+    # Verify output file exists and has features
+    if os.path.exists(processed_target_ligands_repr_file):
+        df_verify = pd.read_csv(processed_target_ligands_repr_file, low_memory=False, nrows=5)
+        feature_cols = [col for col in df_verify.columns if col not in ['SMILES', 'Compound ChEMBL ID', 'Activity Type', 'Standard Value (nM)', 'accession']]
+        logging.info(f"✓ Target ligands now have {len(feature_cols)} feature columns")
+        logging.info(f"  Output file: {processed_target_ligands_repr_file}")
+        return processed_target_ligands_repr_file
+    else:
+        raise FileNotFoundError(f"Target ligand features file not created: {processed_target_ligands_repr_file}")
+
+
+def run_calculate_similarityspaces(config, target_workspace, temp_data_dir, processed_target_ligands_path):
     """Run calculate_similarityspaces_exp.py to train DR model."""
     logging.info("\n" + "="*80)
-    logging.info("STEP 2: CALCULATE SIMILARITY SPACE (train DR model on clean data)")
+    logging.info("STEP 2b: CALCULATE SIMILARITY SPACE (train DR model on clean data)")
     logging.info("="*80)
     
     # Prepare paths
     mf_data_path = os.path.join(temp_data_dir, f"{config['target_id']}_chembl_mf_excluded_{config['representation']}.csv")
     zinc_data_path = os.path.join(temp_data_dir, f"{config['target_id']}_zinc_excluded_{config['representation']}.csv")
-    target_ligands_path = os.path.join(temp_data_dir, f"{config['target_id']}_target_ligands_for_feature_calc_raw.csv")
+    
+    # Use processed target ligands path (with calculated features)
+    target_ligands_path = processed_target_ligands_path if processed_target_ligands_path else "None"
     
     output_simspace_dir = os.path.join(target_workspace, "similarity_spaces", config['representation'], f"dim_{config['dimension']}")
     output_model_dir = os.path.join(target_workspace, "models", config['representation'], f"dim_{config['dimension']}")
@@ -396,7 +456,14 @@ def main():
     try:
         # Run pipeline with deduplication
         target_workspace, temp_data_dir = run_prepare_data(config, args.output_workspace)
-        output_simspace_dir, output_model_dir = run_calculate_similarityspaces(config, target_workspace, temp_data_dir)
+        
+        # Calculate features for target ligands (CRITICAL STEP - was missing!)
+        processed_target_ligands_path = run_calculate_target_features(config, target_workspace, temp_data_dir)
+        
+        # Train DR model on clean MF cloud
+        output_simspace_dir, output_model_dir = run_calculate_similarityspaces(config, target_workspace, temp_data_dir, processed_target_ligands_path)
+        
+        # Calculate enrichment metrics
         clean_results_dir = run_project_and_analyze(config, target_workspace, output_simspace_dir, output_model_dir, temp_data_dir)
         
         # Load metrics
