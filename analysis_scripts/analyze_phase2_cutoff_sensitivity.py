@@ -581,12 +581,15 @@ def plot_active_count_vs_performance(df_results, output_dir):
 
 
 def calculate_tier_specific_enrichment(run_dir):
-    """Calculate EF@1% separately for each potency tier.
+    """Calculate EF@1% separately for each potency tier using Option B approach.
+    
+    For each tier, calculate EF@1% by treating only that tier as "actives" in the
+    full ranking (all target ligands + ZINC decoys ranked together).
     
     Returns:
         dict: {tier: ef_1_pct} for 'high', 'medium', 'low' potency actives
     """
-    # Load the ranked output file
+    # Load the ranked output file (includes all compounds: targets + ZINC)
     pattern = os.path.join(
         run_dir,
         "TyrosineProteinKinaseABL1_P00519",
@@ -648,33 +651,42 @@ def calculate_tier_specific_enrichment(run_dir):
         how='left'
     )
     
-    # Assign potency tiers
+    # Assign potency tiers to all target ligands (ZINC will have NaN affinity)
     affinity = pd.to_numeric(df_ranked['Standard Value (nM)'], errors='coerce')
     df_ranked['potency_tier'] = 'none'
     df_ranked.loc[(affinity >= 0.1) & (affinity <= 100), 'potency_tier'] = 'high'
     df_ranked.loc[(affinity > 100) & (affinity <= 1000), 'potency_tier'] = 'medium'
     df_ranked.loc[(affinity > 1000) & (affinity <= 10000), 'potency_tier'] = 'low'
     
-    # Calculate EF@1% for each tier
+    # Calculate EF@1% for each tier (Option B approach)
+    # All compounds ranked together, but EF calculated treating each tier as "actives"
     results = {}
     total_compounds = len(df_ranked)
     top_1_pct = max(1, int(0.01 * total_compounds))
     
     for tier in ['high', 'medium', 'low']:
-        # Count tier actives in full set
+        # Count tier actives in full ranked list (denominator)
         tier_actives_total = len(df_ranked[df_ranked['potency_tier'] == tier])
         
         if tier_actives_total == 0:
-            results[tier] = 0.0
+            results[tier] = np.nan  # No actives of this tier exist
             continue
         
-        # Count tier actives in top 1%
+        # Count tier actives in top 1% (numerator)
         df_top = df_ranked.head(top_1_pct)
         tier_actives_top = len(df_top[df_top['potency_tier'] == tier])
         
-        # Calculate EF@1%
+        # Calculate EF@1% treating this tier as "actives"
+        # EF = (fraction in top) / (fraction in total)
         # EF = (tier_actives_top / top_1_pct) / (tier_actives_total / total_compounds)
-        enrichment = (tier_actives_top / top_1_pct) / (tier_actives_total / total_compounds)
+        fraction_in_top = tier_actives_top / top_1_pct
+        fraction_in_total = tier_actives_total / total_compounds
+        
+        if fraction_in_total > 0:
+            enrichment = fraction_in_top / fraction_in_total
+        else:
+            enrichment = 0.0
+        
         results[tier] = enrichment
     
     return results
