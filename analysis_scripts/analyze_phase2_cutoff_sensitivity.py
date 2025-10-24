@@ -580,99 +580,247 @@ def plot_active_count_vs_performance(df_results, output_dir):
     plt.close()
 
 
-def plot_potency_tier_distribution(df_results, output_dir):
-    """Plot 4: Potency tier distribution by cutoff and DR method.
+def calculate_tier_specific_enrichment(run_dir):
+    """Calculate EF@1% separately for each potency tier.
     
-    Stacked bar plot showing how many actives fall into each potency tier
-    (high: 0.1-100 nM, medium: 100-1000 nM, low: 1K-10K nM) for each cutoff.
-    Separate subplots for PCA vs UMAP methods.
+    Returns:
+        dict: {tier: ef_1_pct} for 'high', 'medium', 'low' potency actives
     """
-    # Group by config type: PCA vs UMAP (combine both UMAP variants)
-    df_results_copy = df_results.copy()
-    df_results_copy['dr_method'] = df_results_copy['config_type'].apply(
-        lambda x: 'PCA' if x == 'pca_overall' else 'UMAP'
+    # Load the ranked output file
+    pattern = os.path.join(
+        run_dir,
+        "TyrosineProteinKinaseABL1_P00519",
+        "results",
+        "features",
+        "dim_5",
+        "**",
+        "TYROSINEPROTEINKINASEABL1_P00519-*-5D-FEATURES.csv"
     )
     
-    # Calculate mean counts for each DR method and cutoff
-    summary = df_results_copy.groupby(['dr_method', 'cutoff_nM']).agg({
-        'num_high_potency': 'mean',
-        'num_medium_potency': 'mean',
-        'num_low_potency': 'mean'
-    }).reset_index()
+    csv_files = glob.glob(pattern, recursive=True)
+    if not csv_files:
+        return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    
+    try:
+        df_ranked = pd.read_csv(csv_files[0])
+        if df_ranked.empty or 'TYPE' not in df_ranked.columns:
+            return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    except Exception as e:
+        logging.debug(f"Error loading ranked data: {e}")
+        return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    
+    # Load actives with affinity data
+    pattern_actives = os.path.join(
+        run_dir,
+        "TyrosineProteinKinaseABL1_P00519",
+        "results",
+        "features",
+        "dim_5",
+        "**",
+        "*_actives_complete_*.csv"
+    )
+    
+    csv_actives = glob.glob(pattern_actives, recursive=True)
+    if not csv_actives:
+        return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    
+    try:
+        df_actives = pd.read_csv(csv_actives[0])
+        if 'Standard Value (nM)' not in df_actives.columns:
+            return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    except Exception as e:
+        logging.debug(f"Error loading actives: {e}")
+        return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    
+    # Merge affinity data into ranked data (use MOLECULE ID or SMILES)
+    merge_col = None
+    for col in ['MOLECULE ID', 'Compound ChEMBL ID', 'SMILES']:
+        if col in df_ranked.columns and col in df_actives.columns:
+            merge_col = col
+            break
+    
+    if not merge_col:
+        return {'high': np.nan, 'medium': np.nan, 'low': np.nan}
+    
+    df_ranked = df_ranked.merge(
+        df_actives[[merge_col, 'Standard Value (nM)']],
+        on=merge_col,
+        how='left'
+    )
+    
+    # Assign potency tiers
+    affinity = pd.to_numeric(df_ranked['Standard Value (nM)'], errors='coerce')
+    df_ranked['potency_tier'] = 'none'
+    df_ranked.loc[(affinity >= 0.1) & (affinity <= 100), 'potency_tier'] = 'high'
+    df_ranked.loc[(affinity > 100) & (affinity <= 1000), 'potency_tier'] = 'medium'
+    df_ranked.loc[(affinity > 1000) & (affinity <= 10000), 'potency_tier'] = 'low'
+    
+    # Calculate EF@1% for each tier
+    results = {}
+    total_compounds = len(df_ranked)
+    top_1_pct = max(1, int(0.01 * total_compounds))
+    
+    for tier in ['high', 'medium', 'low']:
+        # Count tier actives in full set
+        tier_actives_total = len(df_ranked[df_ranked['potency_tier'] == tier])
+        
+        if tier_actives_total == 0:
+            results[tier] = 0.0
+            continue
+        
+        # Count tier actives in top 1%
+        df_top = df_ranked.head(top_1_pct)
+        tier_actives_top = len(df_top[df_top['potency_tier'] == tier])
+        
+        # Calculate EF@1%
+        # EF = (tier_actives_top / top_1_pct) / (tier_actives_total / total_compounds)
+        enrichment = (tier_actives_top / top_1_pct) / (tier_actives_total / total_compounds)
+        results[tier] = enrichment
+    
+    return results
+
+
+def aggregate_tier_enrichments(phase2_runs):
+    """Aggregate tier-specific enrichments across all Phase 2 runs."""
+    results = []
+    
+    for config_type in CONFIG_TYPES:
+        for cutoff in CUTOFFS:
+            run_dirs = phase2_runs[config_type][cutoff]
+            
+            for run_dir in run_dirs:
+                # Extract seed
+                basename = os.path.basename(run_dir)
+                seed = None
+                for s in [42, 43, 44, 45, 46]:
+                    if f"seed{s}_" in basename:
+                        seed = s
+                        break
+                
+                if seed is None:
+                    continue
+                
+                # Calculate tier-specific enrichments
+                tier_efs = calculate_tier_specific_enrichment(run_dir)
+                
+                # Build result row
+                row = {
+                    'config_type': config_type,
+                    'cutoff_nM': cutoff,
+                    'seed': seed,
+                    'ef_1_pct_high': tier_efs['high'],
+                    'ef_1_pct_medium': tier_efs['medium'],
+                    'ef_1_pct_low': tier_efs['low']
+                }
+                
+                results.append(row)
+    
+    df = pd.DataFrame(results)
+    logging.info(f"Aggregated tier-specific enrichments for {len(df)} runs")
+    
+    return df
+
+
+def plot_tier_specific_enrichment_curves(phase2_runs, output_dir):
+    """Plot 4: Tier-specific enrichment across cutoffs.
+    
+    Multi-line plot showing how EF@1% for each potency tier changes
+    as affinity cutoff increases. Separate subplots for PCA vs UMAP.
+    """
+    # Calculate tier-specific enrichments
+    logging.info("Calculating tier-specific enrichments (this may take a moment)...")
+    df_tier_efs = aggregate_tier_enrichments(phase2_runs)
+    
+    if df_tier_efs.empty:
+        logging.warning("No tier-specific enrichment data available")
+        return
+    
+    # Save tier enrichment data
+    tier_csv = os.path.join(output_dir, 'phase2_tier_specific_enrichments.csv')
+    df_tier_efs.to_csv(tier_csv, index=False)
+    logging.info(f"Saved tier-specific enrichments to: {tier_csv}")
     
     # Create figure with two subplots
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
     
-    dr_methods = ['PCA', 'UMAP']
-    colors = ['#2ecc71', '#f39c12', '#e74c3c']  # green, orange, red
+    config_labels = {'pca_overall': 'PCA', 'umap_overall': 'UMAP'}
+    tier_colors = {'high': '#2ecc71', 'medium': '#f39c12', 'low': '#e74c3c'}
+    tier_labels = {'high': 'High (0.1-100 nM)', 'medium': 'Medium (100-1K nM)', 'low': 'Low (1K-10K nM)'}
     
-    for idx, dr_method in enumerate(dr_methods):
+    for idx, config_type in enumerate(CONFIG_TYPES):
         ax = axes[idx]
-        df_method = summary[summary['dr_method'] == dr_method].sort_values('cutoff_nM')
+        df_config = df_tier_efs[df_tier_efs['config_type'] == config_type]
         
-        if df_method.empty:
-            ax.text(0.5, 0.5, f'No data for {dr_method}', 
+        if df_config.empty:
+            ax.text(0.5, 0.5, f'No data for {config_labels[config_type]}', 
                    ha='center', va='center', fontsize=14, transform=ax.transAxes)
             continue
         
-        x_pos = np.arange(len(df_method))
-        width = 0.6
-        
-        # Create stacked bars
-        p1 = ax.bar(x_pos, df_method['num_high_potency'], width, 
-                   label='High (0.1-100 nM)', color=colors[0], edgecolor='black', linewidth=1)
-        p2 = ax.bar(x_pos, df_method['num_medium_potency'], width,
-                   bottom=df_method['num_high_potency'],
-                   label='Medium (100-1K nM)', color=colors[1], edgecolor='black', linewidth=1)
-        p3 = ax.bar(x_pos, df_method['num_low_potency'], width,
-                   bottom=df_method['num_high_potency'] + df_method['num_medium_potency'],
-                   label='Low (1K-10K nM)', color=colors[2], edgecolor='black', linewidth=1)
-        
-        # Add value labels on bars
-        for i, (_, row) in enumerate(df_method.iterrows()):
-            total = row['num_high_potency'] + row['num_medium_potency'] + row['num_low_potency']
-            if total > 0:
-                # Label for high potency
-                if row['num_high_potency'] > 5:
-                    ax.text(i, row['num_high_potency']/2, f"{int(row['num_high_potency'])}", 
-                           ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-                # Label for medium potency
-                if row['num_medium_potency'] > 5:
-                    ax.text(i, row['num_high_potency'] + row['num_medium_potency']/2, 
-                           f"{int(row['num_medium_potency'])}", 
-                           ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-                # Label for low potency
-                if row['num_low_potency'] > 5:
-                    ax.text(i, row['num_high_potency'] + row['num_medium_potency'] + row['num_low_potency']/2,
-                           f"{int(row['num_low_potency'])}", 
-                           ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+        # Plot lines for each potency tier
+        for tier in ['high', 'medium', 'low']:
+            means = []
+            stds = []
+            cutoff_values = []
+            
+            for cutoff in CUTOFFS:
+                df_cutoff = df_config[df_config['cutoff_nM'] == cutoff]
+                
+                if len(df_cutoff) > 0:
+                    ef_values = df_cutoff[f'ef_1_pct_{tier}']
+                    # Filter out NaN and inf values
+                    ef_values = ef_values[np.isfinite(ef_values)]
+                    
+                    if len(ef_values) > 0:
+                        mean_ef = ef_values.mean()
+                        std_ef = ef_values.std()
+                        
+                        means.append(mean_ef)
+                        stds.append(std_ef)
+                        cutoff_values.append(cutoff)
+            
+            if means:
+                # Plot line with error bars
+                ax.errorbar(
+                    cutoff_values,
+                    means,
+                    yerr=stds,
+                    label=tier_labels[tier],
+                    color=tier_colors[tier],
+                    linewidth=2.5,
+                    marker='o',
+                    markersize=8,
+                    capsize=5,
+                    capthick=2,
+                    alpha=0.9
+                )
         
         # Formatting
-        ax.set_xlabel('Affinity Cutoff', fontsize=12, fontweight='bold')
+        ax.set_xscale('log')
+        ax.set_xlabel('Affinity Cutoff (nM)', fontsize=13, fontweight='bold')
         if idx == 0:
-            ax.set_ylabel('Number of Active Compounds', fontsize=12, fontweight='bold')
-        ax.set_title(f'{dr_method} Method', fontsize=14, fontweight='bold', pad=15)
+            ax.set_ylabel('Enrichment Factor @ 1%\n(Tier-Specific)', fontsize=13, fontweight='bold')
+        ax.set_title(f'{config_labels[config_type]} Method', fontsize=15, fontweight='bold', pad=15)
         
-        # Set x-axis labels
-        cutoff_labels_for_plot = [CUTOFF_LABELS[CUTOFFS.index(c)] for c in df_method['cutoff_nM']]
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(cutoff_labels_for_plot, fontsize=11)
+        ax.set_xticks(CUTOFFS)
+        ax.set_xticklabels(CUTOFF_LABELS, fontsize=11)
+        ax.tick_params(labelsize=11)
         
-        ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+        ax.legend(fontsize=11, loc='best', frameon=True, shadow=True, fancybox=True)
+        ax.grid(True, alpha=0.3, linestyle='--')
         
-        if idx == 1:  # Add legend to right subplot
-            ax.legend(fontsize=10, loc='upper right', frameon=True, shadow=True)
+        # Add y=0 reference line
+        ax.axhline(y=0, color='gray', linestyle=':', linewidth=1, alpha=0.5)
     
-    plt.suptitle('Phase 2: Potency Tier Distribution Across Cutoffs\nMean Active Counts by Potency (n=5 seeds)', 
-                fontsize=16, fontweight='bold', y=1.02)
+    plt.suptitle('Phase 2: Tier-Specific Enrichment Across Cutoffs\nHow EF@1% Changes for Each Potency Tier (n=5 seeds)', 
+                fontsize=16, fontweight='bold', y=1.00)
     plt.tight_layout()
     
     # Save
-    output_path = os.path.join(output_dir, 'phase2_potency_tier_distribution.png')
+    output_path = os.path.join(output_dir, 'phase2_tier_specific_enrichment.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    logging.info(f"Saved potency tier distribution plot to: {output_path}")
+    logging.info(f"Saved tier-specific enrichment plot to: {output_path}")
     
-    output_path_pdf = os.path.join(output_dir, 'phase2_potency_tier_distribution.pdf')
+    output_path_pdf = os.path.join(output_dir, 'phase2_tier_specific_enrichment.pdf')
     plt.savefig(output_path_pdf, bbox_inches='tight')
     
     plt.close()
@@ -820,8 +968,8 @@ def main():
     logging.info("Generating Plot 3: Active count vs performance trade-off...")
     plot_active_count_vs_performance(df_results, args.output_dir)
     
-    logging.info("Generating Plot 4: Potency tier distribution by DR method...")
-    plot_potency_tier_distribution(df_results, args.output_dir)
+    logging.info("Generating Plot 4: Tier-specific enrichment curves...")
+    plot_tier_specific_enrichment_curves(phase2_runs, args.output_dir)
     
     # Generate summary report
     logging.info("Generating summary report...")
@@ -835,8 +983,9 @@ def main():
     logging.info("  - phase2_cutoff_sensitivity_curves.png/pdf")
     logging.info("  - phase2_enrichment_heatmap.png/pdf")
     logging.info("  - phase2_quality_vs_quantity.png/pdf")
-    logging.info("  - phase2_potency_tier_distribution.png/pdf")
+    logging.info("  - phase2_tier_specific_enrichment.png/pdf")
     logging.info("  - phase2_aggregated_results.csv")
+    logging.info("  - phase2_tier_specific_enrichments.csv")
     logging.info("  - phase2_summary_report.txt")
     
     return 0
