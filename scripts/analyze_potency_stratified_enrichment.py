@@ -1085,6 +1085,128 @@ def plot_dimensionality_impact(df_results, output_dir):
     logging.info("Dimensionality impact plots saved")
 
 
+def plot_affinity_cutoff_impact(df_results, output_dir):
+    """Visualize how affinity cutoffs relate to potency tiers across DR methods.
+    
+    This plot shows the distribution of active counts by potency tier, helping
+    visualize which cutoffs are most appropriate for Phase 2.
+    """
+    logging.info("Generating affinity cutoff impact visualization...")
+    
+    # Define cutoffs to visualize (same as Phase 2)
+    cutoffs_nM = [100, 1000, 10000, 100000]
+    cutoff_labels = ['100 nM', '1 μM', '10 μM', '100 μM']
+    
+    # Calculate active counts per tier for each cutoff
+    # Group by method and representation for separate panels
+    methods_to_plot = []
+    
+    # Check what methods we have
+    if 'dr_method' in df_results.columns:
+        for method in df_results['dr_method'].unique():
+            if pd.notna(method):
+                methods_to_plot.append(method)
+    
+    if not methods_to_plot:
+        logging.warning("No DR methods found in results")
+        return
+    
+    # Create figure with subplots for each method
+    n_methods = len(methods_to_plot)
+    fig, axes = plt.subplots(1, n_methods, figsize=(6*n_methods, 6), sharey=True)
+    
+    if n_methods == 1:
+        axes = [axes]
+    
+    for idx, method in enumerate(methods_to_plot):
+        ax = axes[idx]
+        
+        # Filter to this method
+        df_method = df_results[df_results['dr_method'] == method]
+        
+        if df_method.empty:
+            continue
+        
+        # Prepare data for this method
+        # For each cutoff, count how many actives fall into each tier
+        tier_counts_by_cutoff = {tier: [] for tier in TIER_ORDER}
+        
+        for cutoff in cutoffs_nM:
+            for tier in TIER_ORDER:
+                # Count actives in this tier that would pass the cutoff
+                tier_col = f'{tier}_count'
+                if tier_col in df_method.columns:
+                    # Average across all runs for this method
+                    mean_count = df_method[tier_col].mean()
+                    
+                    # Apply cutoff logic: only actives <= cutoff
+                    tier_min, tier_max = POTENCY_TIERS[tier]
+                    if tier_max <= cutoff:
+                        # All actives in this tier pass the cutoff
+                        tier_counts_by_cutoff[tier].append(mean_count)
+                    elif tier_min < cutoff < tier_max:
+                        # Some actives in this tier pass (proportional estimate)
+                        fraction = (cutoff - tier_min) / (tier_max - tier_min)
+                        tier_counts_by_cutoff[tier].append(mean_count * fraction)
+                    else:
+                        # No actives in this tier pass the cutoff
+                        tier_counts_by_cutoff[tier].append(0)
+                else:
+                    tier_counts_by_cutoff[tier].append(0)
+        
+        # Create stacked bar chart
+        x = np.arange(len(cutoffs_nM))
+        width = 0.6
+        
+        bottom = np.zeros(len(cutoffs_nM))
+        for tier in TIER_ORDER:
+            counts = tier_counts_by_cutoff[tier]
+            ax.bar(x, counts, width, label=tier, bottom=bottom, 
+                   color=TIER_COLORS[tier], alpha=0.8, edgecolor='black', linewidth=1)
+            bottom += counts
+        
+        # Add horizontal lines showing cutoff boundaries
+        for i, (cutoff, label) in enumerate(zip(cutoffs_nM, cutoff_labels)):
+            # Show which tiers are fully included at this cutoff
+            ax.axvline(i, color='gray', linestyle='--', alpha=0.3, linewidth=0.5)
+        
+        # Formatting
+        ax.set_xlabel('Affinity Cutoff', fontsize=12, fontweight='bold')
+        if idx == 0:
+            ax.set_ylabel('Mean Active Count', fontsize=12, fontweight='bold')
+        ax.set_title(f'{method}\n(Actives Passing Cutoff)', fontsize=13, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(cutoff_labels, rotation=45, ha='right')
+        ax.legend(title='Potency Tier', loc='upper left', fontsize=9)
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Add tier boundary annotations
+        ax2 = ax.twiny()
+        ax2.set_xlim(ax.get_xlim())
+        ax2.set_xticks(x)
+        tier_annotations = []
+        for cutoff in cutoffs_nM:
+            # Determine which tiers are fully included
+            included = []
+            for tier in TIER_ORDER:
+                tier_min, tier_max = POTENCY_TIERS[tier]
+                if tier_max <= cutoff:
+                    included.append(tier[0])  # First letter
+            tier_annotations.append('+'.join(included) if included else '−')
+        ax2.set_xticklabels(tier_annotations, fontsize=10, color='darkred', fontweight='bold')
+        ax2.set_xlabel('Tiers Included', fontsize=10, color='darkred', fontweight='bold')
+    
+    plt.suptitle('Affinity Cutoff Impact on Potency-Stratified Active Counts\n' + 
+                 'Phase 2 Cutoff Sensitivity Analysis Rationale',
+                 fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.tight_layout()
+    save_figure(fig, output_dir, 'affinity_cutoff_impact_by_method')
+    plt.close()
+    
+    logging.info("Affinity cutoff impact plot saved")
+
+
 def plot_stratified_comparison(df_results, output_dir):
     """Create comparison plots for stratified enrichment."""
     os.makedirs(output_dir, exist_ok=True)
@@ -1101,7 +1223,10 @@ def plot_stratified_comparison(df_results, output_dir):
     # NEW PLOT 2: Dimensionality impact analysis
     plot_dimensionality_impact(df_results, output_dir)
     
-    # EXISTING PLOT 3: UMAP hyperparameter analysis
+    # NEW PLOT 3: Affinity cutoff visualization showing potency tier distributions
+    plot_affinity_cutoff_impact(df_results, output_dir)
+    
+    # EXISTING PLOT 4: UMAP hyperparameter analysis
     if 'n_neighbors' in df_results.columns:
         df_umap = df_results[df_results['dr_method'].str.contains('UMAP', na=False)].copy()
         
@@ -1766,9 +1891,53 @@ def extract_best_configs(df_results, output_dir):
             
             # Check if configs are different
             if 'n_neighbors' in overall_cfg and 'n_neighbors' in high_cfg:
-                if (overall_cfg['n_neighbors'] != high_cfg['n_neighbors'] or 
-                    overall_cfg['min_dist'] != high_cfg['min_dist']):
-                    print(f"    ⚠️  DIFFERENT hyperparameters selected!")
+                same_hyperparams = (overall_cfg['n_neighbors'] == high_cfg['n_neighbors'] and 
+                                   overall_cfg['min_dist'] == high_cfg['min_dist'])
+                if same_hyperparams:
+                    print(f"    ⚠️  IDENTICAL hyperparameters (no distinction)")
+                else:
+                    print(f"    ✓ DIFFERENT hyperparameters selected!")
+    
+    print("\n" + "="*80)
+    print("DEBUGGING: Correlation between Overall EF and High-Potency EF")
+    print("="*80)
+    
+    # Check if the two metrics are highly correlated
+    if 'Overall_EF' in df_results.columns and 'High_EF' in df_results.columns:
+        from scipy.stats import pearsonr, spearmanr
+        
+        valid_mask = df_results['Overall_EF'].notna() & df_results['High_EF'].notna()
+        if valid_mask.sum() > 2:
+            pearson_r, pearson_p = pearsonr(
+                df_results.loc[valid_mask, 'Overall_EF'],
+                df_results.loc[valid_mask, 'High_EF']
+            )
+            spearman_r, spearman_p = spearmanr(
+                df_results.loc[valid_mask, 'Overall_EF'],
+                df_results.loc[valid_mask, 'High_EF']
+            )
+            
+            print(f"\nCorrelation statistics (n={valid_mask.sum()} configs):")
+            print(f"  Pearson r  = {pearson_r:.4f} (p={pearson_p:.6f})")
+            print(f"  Spearman ρ = {spearman_r:.4f} (p={spearman_p:.6f})")
+            
+            if pearson_r > 0.95:
+                print(f"\n  ⚠️  VERY HIGH correlation (r > 0.95)!")
+                print(f"      The two metrics are nearly identical.")
+                print(f"      Optimizing overall EF also optimizes high-potency EF.")
+                print(f"      → Little practical difference between selection criteria")
+            elif pearson_r > 0.85:
+                print(f"\n  ⚠️  HIGH correlation (r > 0.85)")
+                print(f"      Strong relationship between the two metrics.")
+                print(f"      → Limited distinction between selection criteria")
+            elif pearson_r > 0.70:
+                print(f"\n  ℹ️  MODERATE correlation (r > 0.70)")
+                print(f"      Some relationship but meaningful differences exist.")
+                print(f"      → Moderate distinction between selection criteria")
+            else:
+                print(f"\n  ✓ LOW/WEAK correlation (r ≤ 0.70)")
+                print(f"      The two metrics capture different aspects of performance.")
+                print(f"      → Strong distinction between selection criteria")
     
     print("\n" + "="*80)
     return best_configs_overall, best_configs_high
