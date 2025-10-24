@@ -91,9 +91,9 @@ def find_phase2_runs(workspace_dir):
         config_type = None
         if '_pca_' in basename and basename.endswith('_pca_overall'):
             config_type = 'pca_overall'
-        elif '_umap_' in basename and basename.endswith('_umap_overall'):
+        elif 'umap' in basename and basename.endswith('_umap_overall'):
             config_type = 'umap_overall'
-        elif '_umap_' in basename and basename.endswith('_umap_high_potency'):
+        elif 'umap' in basename and basename.endswith('_umap_high_potency'):
             config_type = 'umap_high_potency'
         
         if config_type is None:
