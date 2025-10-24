@@ -168,8 +168,8 @@ def run_calculate_similarityspaces(config, target_workspace, temp_data_dir):
         }
     }
     
-    # Get feature list from original config
-    features_list = config['full_config']['targets'][0].get('rdkit_features_list', [])
+    # Get feature list from original config (stored in global_settings)
+    features_list = config['full_config']['global_settings'].get('rdkit_features_list_target', [])
     
     cmd = [
         'python', 'core_scripts/calculate_similarityspaces_exp.py',
@@ -182,13 +182,16 @@ def run_calculate_similarityspaces(config, target_workspace, temp_data_dir):
         '--output_model_dir', output_model_dir,
         '--log_file_path', log_file,
         '--simspace_dim', str(config['dimension']),
-        '--dr_method_umap', 'true',
-        f"--umap_metric_to_run_{config['dr_method'].split('-')[-1].lower()}", 'true',
+        '--dr_method_umap', 'true',  # This one takes a value
         '--n_neighbors', str(config['n_neighbors']),
         '--dr_method_configs_json_str', json.dumps(dr_config),
         '--rdkit_features_list_target_str', json.dumps(features_list),
         '--random_state', str(config['seed'])
     ]
+    
+    # Add metric flag (store_true flag - no value needed)
+    metric_name = config['dr_method'].split('-')[-1].lower()
+    cmd.append(f"--umap_metric_to_run_{metric_name}")
     
     logging.info(f"Running: {' '.join(cmd[:10])}...")  # Truncated for readability
     result = subprocess.run(cmd, capture_output=True, text=True)
