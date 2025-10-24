@@ -68,7 +68,10 @@ def find_phase2_runs(workspace_dir):
     """
     runs = {cfg: {cutoff: [] for cutoff in CUTOFFS} for cfg in CONFIG_TYPES}
     
-    pattern = os.path.join(workspace_dir, "run_seed*_features_*_dim5_cutoff*nM_*")
+    # More flexible pattern to catch both PCA and UMAP directories
+    # PCA: run_seed42_features_pca_dim5_cutoff100nM_pca_overall
+    # UMAP: run_seed42_features_umap_euclidean_dim5_nn5_md0.0_cutoff100nM_umap_overall
+    pattern = os.path.join(workspace_dir, "run_seed*cutoff*nM_*")
     all_runs = glob.glob(pattern)
     
     logging.info(f"Found {len(all_runs)} Phase 2 run directories")
