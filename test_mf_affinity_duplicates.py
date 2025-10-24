@@ -39,6 +39,17 @@ else:
 print(f"   MF cloud rows: {len(df_mf_cloud):,}")
 print(f"   Unique Compound ChEMBL IDs in MF cloud: {df_mf_cloud['Compound ChEMBL ID'].nunique():,}")
 
+# Check if MF cloud itself has duplicates
+mf_duplicate_counts = df_mf_cloud['Compound ChEMBL ID'].value_counts()
+mf_duplicates = mf_duplicate_counts[mf_duplicate_counts > 1]
+if len(mf_duplicates) > 0:
+    print(f"   ⚠ WARNING: MF cloud has {len(mf_duplicates):,} compounds appearing multiple times!")
+    print(f"   Top duplicates in MF cloud:")
+    for chembl_id, count in mf_duplicates.head(5).items():
+        print(f"     {chembl_id}: {count} occurrences")
+else:
+    print(f"   ✓ Each compound appears exactly once in MF cloud")
+
 # 2. Load affinity source file
 print("\n2. Loading affinity source file...")
 print(f"   File: {affinity_file}")
