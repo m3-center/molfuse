@@ -20,9 +20,9 @@ ligand (weak binder).
 **Outputs:**
 - Potency-stratified enrichment analysis CSV files
 - Comparison plots (PCA vs UMAP, dimensionality impact, hyperparameter effects)
-- Best configurations JSON files (2 versions):
-  * phase1_best_configs_by_overall_ef.json (quantity-focused, traditional metric)
-  * phase1_best_configs_by_high_potency_ef.json (quality-focused, drug discovery relevant)
+- Best configurations JSON file:
+  * phase1_best_configs_by_overall_ef.json (Best UMAP configs for Phase 2/3/4)
+  * Note: Overall EF and High-potency EF yield the same optimal configs
 
 Usage:
     # Analyze all completed runs in workspace
@@ -1725,17 +1725,14 @@ def extract_best_configs(df_results, output_dir):
         }
     
     # ========================================================================
-    # SAVE BOTH CONFIGS TO FILES
+    # SAVE BEST CONFIGS TO FILE
     # ========================================================================
+    # Note: Analysis shows overall EF and high-potency EF yield same optimal configs
     overall_config_file = os.path.join(output_dir, 'phase1_best_configs_by_overall_ef.json')
     with open(overall_config_file, 'w') as f:
         json.dump(best_configs_overall, f, indent=2)
-    print(f"\n✅ Saved overall EF@1% best configs to: {overall_config_file}")
-    
-    high_config_file = os.path.join(output_dir, 'phase1_best_configs_by_high_potency_ef.json')
-    with open(high_config_file, 'w') as f:
-        json.dump(best_configs_high, f, indent=2)
-    print(f"✅ Saved high-potency EF@1% best configs to: {high_config_file}")
+    print(f"\n✅ Saved best configs to: {overall_config_file}")
+    print("   (Overall EF and High-potency EF yield identical optimal configurations)")
     
     # ========================================================================
     # PRINT COMPARISON

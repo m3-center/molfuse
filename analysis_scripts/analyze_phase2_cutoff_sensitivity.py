@@ -8,6 +8,14 @@ and generates publication-ready figures showing:
 1. Cutoff sensitivity curves (EF@1% vs cutoff)
 2. Potency-stratified enrichment heatmap
 3. Active count vs performance trade-off
+4. Potency tier distribution by DR method
+
+Configurations analyzed:
+- PCA/features/5D (baseline)
+- UMAP/features/5D (optimized for overall EF)
+
+Note: Phase 1 analysis showed that UMAP configs optimized for overall EF and 
+high-potency EF yield identical hyperparameters, so only one UMAP variant is tested.
 
 Usage:
     python analysis_scripts/analyze_phase2_cutoff_sensitivity.py \\
@@ -42,21 +50,18 @@ sns.set_palette("husl")
 # Constants
 CUTOFFS = [100, 1000, 10000, 100000]  # nM
 CUTOFF_LABELS = ['100 nM', '1 μM', '10 μM', '100 μM']
-CONFIG_TYPES = ['pca_overall', 'umap_overall', 'umap_high_potency']
+CONFIG_TYPES = ['pca_overall', 'umap_overall']
 CONFIG_LABELS = {
     'pca_overall': 'PCA/features/5D',
-    'umap_overall': 'UMAP/features/5D (overall-EF)',
-    'umap_high_potency': 'UMAP/features/5D (high-potency-EF)'
+    'umap_overall': 'UMAP/features/5D'
 }
 CONFIG_COLORS = {
     'pca_overall': '#1f77b4',  # blue
-    'umap_overall': '#ff7f0e',  # orange
-    'umap_high_potency': '#d62728'  # red
+    'umap_overall': '#ff7f0e'  # orange
 }
 CONFIG_LINESTYLES = {
     'pca_overall': '-',
-    'umap_overall': '--',
-    'umap_high_potency': ':'
+    'umap_overall': '--'
 }
 
 
@@ -100,8 +105,9 @@ def find_phase2_runs(workspace_dir):
                 config_type = 'umap_overall'
                 logging.debug(f"  ✓ Matched UMAP overall: {basename}")
             elif basename.endswith('_umap_high_potency'):
-                config_type = 'umap_high_potency'
-                logging.debug(f"  ✓ Matched UMAP high-potency: {basename}")
+                # Skip high_potency configs - not needed (same as overall)
+                logging.debug(f"  ⊘ Skipping UMAP high-potency (same as overall): {basename}")
+                continue
             else:
                 logging.warning(f"UMAP directory doesn't match expected suffix: {basename}")
                 logging.warning(f"  - Basename ends with: ...{basename[-30:]}")
