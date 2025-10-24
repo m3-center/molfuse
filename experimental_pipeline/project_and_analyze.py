@@ -504,6 +504,21 @@ def main():
             zinc_mask = pd.Series(False, index=df_simspace_main_data.index)
 
         mf_cloud_df_full = df_simspace_main_data[mf_cloud_mask].copy()
+        
+        # Apply affinity cutoff to MF cloud for Phase 2 experiments
+        # This filters which MF molecules are used for distance-based scoring
+        if args.affinity_cutoff is not None and 'Standard Value (nM)' in mf_cloud_df_full.columns:
+            logging.info(f"Filtering MF cloud by affinity cutoff: keeping molecules with 'Standard Value (nM)' <= {args.affinity_cutoff}")
+            mf_cloud_df_full['Standard Value (nM)'] = pd.to_numeric(mf_cloud_df_full['Standard Value (nM)'], errors='coerce')
+            
+            original_mf_count = len(mf_cloud_df_full)
+            mf_cloud_df_full = mf_cloud_df_full[
+                (mf_cloud_df_full['Standard Value (nM)'] <= args.affinity_cutoff) |
+                (mf_cloud_df_full['Standard Value (nM)'].isna())
+            ].copy()
+            filtered_mf_count = len(mf_cloud_df_full)
+            logging.info(f"MF cloud filtering complete. Kept {filtered_mf_count} of {original_mf_count} MF molecules.")
+        
         mf_cloud_coords = mf_cloud_df_full.dropna(subset=coord_cols_for_analysis)
         df_zinc_decoys_all_info = df_simspace_main_data[zinc_mask].copy()
         df_zinc_decoys_with_coords = df_zinc_decoys_all_info.dropna(subset=coord_cols_for_analysis)
