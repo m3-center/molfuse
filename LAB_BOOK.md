@@ -15,11 +15,152 @@
 
 **Phase 1 (Complete)**: What are optimal hyperparameters and dimensionality for PCA vs UMAP?
 
-**Phase 2 (Planned)**: Does MF cloud size cause PCA vs UMAP performance reversal?
+**Phase 2 (Running)**: How does affinity cutoff affect enrichment performance? 
 
-**Phase 3 (Planned)**: Do optimal configs transfer across proteins (same-MF vs different-MF)?
+**Phase 3 (Planned)**: Does MF cloud size cause PCA vs UMAP performance reversal?
 
-**Phase 4 (Under Review)**: How does affinity cutoff affect enrichment performance? (See pipeline ordering issue below)
+**Phase 4 (Planned)**: Do optimal configs transfer across proteins (same-MF vs different-MF)?
+
+---
+
+## Hypotheses for UMAP n_neighbors Effect (October 24, 2025)
+
+**Core Finding**: Small UMAP neighborhoods (nn=10) outperform large (nn=500) by 2.3× for centroid-based molecular retrieval.
+
+### H1: Task Mismatch - Embedding Quality vs Ranking Discriminability
+
+**Hypothesis**: UMAP optimizes for smooth manifold visualization/clustering, but centroid-based ranking requires cluster separation, not continuity.
+
+**Mechanism**:
+- **Small nn (10)**: Creates tight, discrete clusters with exaggerated inter-cluster distances → high discriminative power for ranking
+- **Large nn (500)**: Creates smooth, continuous manifold with blurred cluster boundaries → poor discriminative power
+
+**Key Predictions**:
+1. Small nn → higher silhouette scores (cluster separation)
+2. Small nn → lower trustworthiness/continuity (manifold quality)
+3. Effect strongest when MF cloud is dense and cohesive
+
+**Testable with Existing Data**: ✅ YES
+- Distance distributions (intra-class vs inter-class)
+- Silhouette scores
+- MF cloud density metrics
+
+---
+
+### H2: Signal Dilution with Large Neighborhoods
+
+**Hypothesis**: With 1.3M decoys, large neighborhoods force UMAP to preserve too many irrelevant decoy-decoy relationships, diluting the MF cloud signal.
+
+**Mechanism**:
+- **nn=500**: Each compound has 500 neighbors → 650M pairwise relationships to balance
+- Most relationships involve decoy-decoy pairs (not informative)
+- UMAP optimization cycles spent on ZINC internal structure, not MF cloud → target relationships
+- **nn=10**: Only 10 nearest neighbors (likely other MF compounds) → preserves biologically relevant structure
+
+**Key Predictions**:
+1. nn effect stronger with more decoys (1.3M vs 100K)
+2. nn effect weaker if decoys are chemically diverse (less internal structure)
+3. MF cloud compounds' nearest neighbors differ by nn value
+
+**Testable with Existing Data**: ✅ PARTIALLY
+- Cannot vary decoy count (requires new experiments)
+- CAN analyze nearest neighbor composition: What fraction of each compound's nn neighbors are MF cloud vs ZINC?
+- CAN analyze ZINC chemical diversity (descriptor variance, pairwise distances)
+
+---
+
+### H3: Information Bottleneck and Geometric Constraints
+
+**Hypothesis**: Compressing 1.5M compounds from 40D to 2D-10D creates information bottleneck. Small nn accepts the bottleneck; large nn fights it unsuccessfully.
+
+**Mechanism**:
+- **High-D (40D)**: ~500 meaningful neighbors per compound
+- **Low-D (2D-10D)**: Geometrically impossible to preserve 500 neighborhood relationships
+- **nn=500**: Tries to preserve 500 neighbors → creates mediocre compromise
+- **nn=10**: Only preserves 10 neighbors → achievable goal, succeeds
+
+**Key Predictions**:
+1. nn effect diminishes at higher dimensions (20D, 50D, 100D where 500 neighbors are feasible)
+2. UMAP performance gap vs PCA closes with dimension
+
+**Testable with Existing Data**: ✅ PARTIALLY
+- Observed: UMAP improves 2D (39.4) → 5D (44.4) → 10D (45.8) [gap narrows slightly]
+- Cannot test higher dimensions without new experiments
+- CAN extrapolate trend from 2D/5D/10D data
+
+---
+
+### H4: MF Cloud as Anchor Point
+
+**Hypothesis**: The MF cloud (191K compounds) acts as reference frame. Small nn lets MF cloud self-organize cohesively; large nn dilutes it by mixing with decoys.
+
+**Mechanism**:
+- **Small nn**: Each MF compound's 10 neighbors likely other MF compounds → MF cloud forms tight cluster
+- **Large nn**: Each MF compound's 500 neighbors include many ZINC decoys → MF cloud structure distorted
+- Ranking uses distance to **MF cloud centroid** → cohesive cloud = well-defined centroid
+
+**Key Predictions**:
+1. Small nn → tighter MF cloud (lower mean pairwise distance within MF)
+2. Small nn → better-defined centroid (lower variance in distances to centroid)
+3. Effect vanishes with MF cloud ablation: At MF=0, no anchor exists, so nn should not matter
+
+**Testable with Existing Data**: ✅ YES (Phase 1) + ✅ YES (Phase 3 when complete)
+- Phase 1: MF cloud density, centroid definition across nn values
+- **Phase 3 (MF ablation)**: Critical test - if nn effect vanishes at MF=0, hypothesis confirmed
+
+---
+
+### H5: Optimization Landscape Complexity
+
+**Hypothesis**: Large nn creates complex optimization landscape with more local minima. Small nn has simpler landscape with consistent convergence.
+
+**Mechanism**:
+- **nn=500**: 650M pairwise constraints → conflicting objectives → local minima
+- **nn=10**: Fewer constraints → simpler optimization → robust convergence
+
+**Key Predictions**:
+1. Large nn → higher variance across random seeds
+2. Longer optimization (more epochs) may help nn=500 catch up
+
+**Testable with Existing Data**: ✅ YES
+- Check standard deviation across 5 seeds for each nn value
+- Phase 1 data already shows "±0.53-6.29 std across seeds (worse for poorly tuned configs)"
+
+---
+
+### H6: Curse of Dimensionality (Distance Concentration)
+
+**Hypothesis**: In 40D, "500 nearest neighbors" is meaningless due to distance concentration. nn=10 captures true neighbors; nn=500 includes random equidistant noise.
+
+**Mechanism**:
+- High-D: Most points approximately equidistant (distance concentration)
+- 10th neighbor truly close, 500th neighbor in equidistant shell
+- **nn=500**: Forced to preserve relationships with non-meaningful "neighbors"
+
+**Key Predictions**:
+1. Distance ratio d(500th) / d(10th) close to 1 in 40D
+2. Effect stronger in fingerprint space (2048D, sparser) than feature space (40D)
+
+**Testable with Existing Data**: ✅ YES
+- Calculate k-th nearest neighbor distance ratios in original 40D space
+- Compare features (40D) vs fingerprints (2048D)
+
+---
+
+### Priority Ranking for Investigation
+
+**Primary Focus (H1, H2, H4)**: As requested
+
+1. **H4 (MF Cloud Anchor)**: MOST TESTABLE - Has clear Phase 3 validation
+2. **H1 (Task Mismatch)**: HIGH IMPACT - Explains fundamental algorithm-task mismatch
+3. **H2 (Signal Dilution)**: PARTIALLY TESTABLE - Can analyze neighbor composition
+
+**Secondary (H5, H6)**: Useful supporting evidence
+
+4. **H5 (Optimization)**: Easy to test with existing variance data
+5. **H6 (Distance Concentration)**: Requires original 40D data analysis
+
+**Deprioritized (H3)**: Cannot test without new experiments at higher dimensions
 
 ---
 
@@ -360,7 +501,7 @@ experiment_workspace_v3_phase1/
   - Option A: Cutoff as Phase 2 (before MF cloud)
   - Option B: Combined MF Cloud + Cutoff study (240 runs: 6 MF sizes × 4 cutoffs)
   - Option C: Acknowledge limitation in discussion section
-- **Decision pending**: Need to determine if pipeline should be restructured before Phase 2 execution
+- **Decision taken**: Pipeline should be restructured before Phase 2 execution
 
 **Observations**:
 - Parallelization significantly reduces analysis time for large-scale experiments
@@ -418,6 +559,186 @@ experiment_workspace_v3_phase1/
 4. What is optimal cutoff for Phase 3 (MF cloud ablation)?
 
 **Current Status**: Phase 2 ready for execution pending Phase 1 best configs extraction
+
+---
+
+### October 24, 2025: UMAP n_neighbors Mechanistic Investigation
+
+**Objective**: Understand why small neighborhoods (nn=10) outperform large (nn=500) by 2.3× using existing and planned experimental data.
+
+**Focus Hypotheses**: H1 (Task Mismatch), H2 (Signal Dilution), H4 (MF Cloud Anchor)
+
+#### Proposed Experiments (No New DR Required)
+
+**Experiment Set 1: Distance Distribution Analysis (Tests H1)**
+
+*Objective*: Determine if small nn creates better cluster separation for ranking.
+
+*Method*:
+1. Extract embedded coordinates from Phase 1 results for each nn value (10, 20, 100, 500)
+2. For each embedding, calculate:
+   - **Intra-MF distances**: Mean pairwise distance within MF cloud
+   - **Intra-active distances**: Mean pairwise distance within target actives
+   - **Inter-class distances**: Mean distance between MF cloud and target actives vs MF cloud and ZINC decoys
+   - **Silhouette scores**: For 3 classes (MF cloud, target actives, ZINC decoys)
+
+*Expected Outcome (if H1 true)*:
+- nn=10: High silhouette scores (>0.5), large inter-class distances
+- nn=500: Low silhouette scores (<0.3), small inter-class distances
+- Trade-off: nn=10 worse manifold quality (can measure with trustworthiness/continuity if needed)
+
+*Implementation*:
+- Script: `analysis_scripts/analyze_distance_distributions.py`
+- Input: Phase 1 embedded coordinates (saved in workspace)
+- Output: Distance distribution plots, silhouette score table by nn
+
+---
+
+**Experiment Set 2: Nearest Neighbor Composition Analysis (Tests H2)**
+
+*Objective*: Determine if large nn forces UMAP to preserve irrelevant decoy-decoy relationships.
+
+*Method*:
+1. In **original 40D feature space**, for each compound class:
+   - MF cloud compounds: What fraction of their k nearest neighbors (k=10, 20, 100, 500) are other MF compounds vs ZINC?
+   - Target actives: What fraction are MF compounds vs ZINC?
+   - ZINC decoys: What fraction are other ZINC vs MF compounds?
+
+2. Repeat analysis in **embedded space** (2D, 5D, 10D) for each nn value
+
+*Expected Outcome (if H2 true)*:
+- **40D space**: MF compounds naturally cluster (>80% of 10NN are other MF compounds)
+- **nn=10 embedding**: Preserves MF clustering (similar to 40D)
+- **nn=500 embedding**: MF compounds have many ZINC neighbors → signal dilution
+
+*Key Insight*: If nn=500 in original 40D includes many ZINC compounds, UMAP is forced to preserve MF↔ZINC relationships, distorting the MF cloud.
+
+*Implementation*:
+- Script: `analysis_scripts/analyze_neighbor_composition.py`
+- Input: Original 40D features, Phase 1 embeddings
+- Output: Neighbor composition tables, stacked bar charts
+
+---
+
+**Experiment Set 3: MF Cloud Cohesion Metrics (Tests H4)**
+
+*Objective*: Measure if small nn creates tighter, better-defined MF cloud.
+
+*Method*:
+1. **MF Cloud Density**: For each nn, calculate:
+   - Mean pairwise distance within MF cloud (lower = tighter)
+   - Std of pairwise distances (lower = more uniform)
+   - Radius of gyration (compactness measure)
+
+2. **Centroid Definition**: For each nn, calculate:
+   - Mean distance from MF cloud compounds to MF centroid
+   - Std of distances to centroid (lower = better-defined centroid)
+   - Compare to distance from target actives to centroid
+
+*Expected Outcome (if H4 true)*:
+- nn=10: Tight MF cloud (low mean distance, low std), well-defined centroid
+- nn=500: Diffuse MF cloud (high mean distance, high std), poorly-defined centroid
+- Ranking by centroid distance works better when centroid is well-defined
+
+*Implementation*:
+- Script: `analysis_scripts/analyze_mf_cloud_cohesion.py`
+- Input: Phase 1 embeddings with compound labels
+- Output: Cohesion metrics table, visualization of MF cloud density by nn
+
+---
+
+**Experiment Set 4: Phase 3 MF Ablation (Critical Test for H4)**
+
+*Objective*: **Definitive test** - Does nn effect vanish when MF cloud is removed?
+
+*Method*:
+1. Use Phase 3 results (MF sizes: 0, 1K, 10K, 50K, 100K, 191K)
+2. For each MF size, compare EF@1% for nn=10 vs nn=500 (UMAP only)
+3. Plot: EF@1% difference (nn=10 - nn=500) vs MF cloud size
+
+*Expected Outcome (if H4 true)*:
+- **MF=0**: No difference (nn=10 ≈ nn=500) - no anchor to preserve
+- **MF=1K-10K**: Small difference - weak anchor
+- **MF=50K-191K**: Large difference (nn=10 >> nn=500) - strong anchor effect
+
+*Critical Prediction*: If nn effect disappears at MF=0, confirms that MF cloud cohesion is the mechanism.
+
+*Implementation*:
+- Script: `analysis_scripts/analyze_phase3_nn_effect.py`
+- Input: Phase 3 results (when complete)
+- Output: nn effect vs MF size curve, statistical tests
+
+---
+
+**Experiment Set 5: Optimization Variance (Tests H5 - Supporting Evidence)**
+
+*Objective*: Check if large nn has unstable optimization (high seed variance).
+
+*Method*:
+1. From Phase 1 results, extract EF@1% for all 5 seeds per configuration
+2. Calculate coefficient of variation (CV = std/mean) for each nn value
+3. Plot CV vs nn across all dimensions
+
+*Expected Outcome (if H5 true)*:
+- nn=10: Low CV (<5%), stable optimization
+- nn=500: High CV (>10%), unstable optimization
+
+*Implementation*:
+- Script: `analysis_scripts/analyze_optimization_variance.py`
+- Input: Phase 1 metrics across seeds
+- Output: Variance table, CV vs nn plot
+
+---
+
+**Experiment Set 6: Distance Concentration (Tests H6 - Supporting Evidence)**
+
+*Objective*: Check if "500th neighbor" is meaningless in 40D due to distance concentration.
+
+*Method*:
+1. In **original 40D space**, for 1000 random compounds, calculate:
+   - Distance to 10th nearest neighbor: d10
+   - Distance to 100th nearest neighbor: d100
+   - Distance to 500th nearest neighbor: d500
+   - Ratios: d100/d10, d500/d10
+
+2. Compare features (40D) vs fingerprints (2048D)
+
+*Expected Outcome (if H6 true)*:
+- Features (40D): d500/d10 ≈ 1.5-2.0 (moderate concentration)
+- Fingerprints (2048D): d500/d10 ≈ 1.1-1.3 (severe concentration) - may explain fingerprint failure
+
+*Implementation*:
+- Script: `analysis_scripts/analyze_distance_concentration.py`
+- Input: Original feature/fingerprint matrices
+- Output: Distance ratio distributions, concentration severity metrics
+
+---
+
+#### Implementation Priority
+
+**Week 1 (Immediate)**:
+1. Experiment 1 (Distance Distributions) - Validates H1
+2. Experiment 3 (MF Cloud Cohesion) - Validates H4
+3. Experiment 5 (Optimization Variance) - Quick supporting evidence
+
+**Week 2**:
+4. Experiment 2 (Neighbor Composition) - Validates H2
+5. Experiment 6 (Distance Concentration) - Supporting evidence
+
+**Phase 3 Completion** (Future):
+6. Experiment 4 (MF Ablation) - **Definitive H4 test**
+
+#### Expected Manuscript Sections
+
+**Results Section**:
+- "Distance distributions reveal cluster separation vs manifold smoothness trade-off" (Exp 1 → H1)
+- "MF cloud cohesion correlates with retrieval performance" (Exp 3 → H4)
+- "Large neighborhoods dilute signal through decoy relationships" (Exp 2 → H2)
+- "MF cloud ablation confirms anchor point mechanism" (Exp 4 → H4, definitive)
+
+**Supplementary**:
+- Optimization variance analysis (Exp 5)
+- Distance concentration effects (Exp 6)
 
 ---
 
@@ -553,25 +874,34 @@ experiment_workspace_v3_phase1/
 1. ✅ Parallelize stratified enrichment analysis
 2. ✅ Create PLANNING.md with task tracking
 3. ✅ Create ARCHIVE.md with deprecated features
-4. [ ] Complete Phase 1 stratified enrichment analysis
-5. [ ] Extract best configs for Phase 2-4
-6. [ ] Decide on pipeline ordering (cutoff before or after MF cloud)
+4. ✅ Complete Phase 1 stratified enrichment analysis
+5. ✅ Extract best configs for Phase 2-4
+6. ✅ Decide on pipeline ordering (cutoff before or after MF cloud)
+7. ✅ Document UMAP n_neighbors hypotheses (H1-H6)
+8. ✅ Design mechanistic experiments using existing data
+9. [ ] Implement distance distribution analysis (Exp 1 → H1)
+10. [ ] Implement MF cloud cohesion analysis (Exp 3 → H4)
+11. [ ] Implement optimization variance analysis (Exp 5 → H5)
 
 ### Short-term (Next 2 Weeks)
-1. [ ] Resolve Phase 2-4 ordering issue
-2. [ ] Generate Phase 2 configs (after best config extraction)
-3. [ ] Execute Phase 2 experiments (MF cloud ablation)
-4. [ ] Analyze Phase 2 results (validate phase transition hypothesis)
+1. ✅ Resolve Phase 2-4 ordering issue
+2. ✅ Generate Phase 2 configs (after best config extraction)
+3. ✅ Execute Phase 2 experiments (MF cloud ablation)
+4. [ ] Implement neighbor composition analysis (Exp 2 → H2)
+5. [ ] Implement distance concentration analysis (Exp 6 → H6)
+6. [ ] Analyze Phase 2 results (validate phase transition hypothesis)
+7. [ ] Generate mechanistic figures for manuscript
 
 ### Medium-term (Next Month)
 1. [ ] Execute Phase 3 (generalization to PKM2, IDH1)
-2. [ ] Execute Phase 4 (cutoff sensitivity, if ordering resolved)
-3. [ ] Create unified analysis across all 4 phases
-4. [ ] Generate final publication figures
+2. [ ] Execute Phase 4 (cutoff sensitivity)
+3. [ ] **Analyze Phase 3 MF ablation for nn effect (Exp 4 → H4 definitive test)**
+4. [ ] Create unified analysis across all 4 phases
+5. [ ] Generate final publication figures
 
 ### Long-term (2-3 Months)
 1. [ ] Write methods section
-2. [ ] Write results section
+2. [ ] Write results section with mechanistic explanations
 3. [ ] Perform statistical significance testing
 4. [ ] Submit manuscript
 
@@ -595,5 +925,5 @@ experiment_workspace_v3_phase1/
 
 ---
 
-**Last Updated**: October 18, 2025  
-**Next Review**: After Phase 1b completion and pipeline ordering decision
+**Last Updated**: October 24, 2025  
+**Next Review**: After mechanistic analysis implementation (Experiments 1-6)
