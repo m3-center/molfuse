@@ -539,6 +539,18 @@ def main():
                         )
                         logging.info(f"  Loaded {len(mf_affinity_data)} affinity records from source file")
                         
+                        # CRITICAL: Aggregate duplicates to prevent data explosion during merge
+                        # Some compounds appear multiple times (binding to different MF targets)
+                        # Take MINIMUM affinity (best binding) for each compound
+                        original_affinity_count = len(mf_affinity_data)
+                        mf_affinity_data = mf_affinity_data.groupby('Compound ChEMBL ID', as_index=False).agg({
+                            'Standard Value (nM)': 'min'
+                        })
+                        unique_compound_count = len(mf_affinity_data)
+                        
+                        if original_affinity_count > unique_compound_count:
+                            logging.info(f"  Aggregated {original_affinity_count:,} records → {unique_compound_count:,} unique compounds (using minimum affinity)")
+                        
                         # Merge affinity data into MF cloud
                         original_mf_count = len(mf_cloud_df_full)
                         mf_cloud_df_full = mf_cloud_df_full.merge(
@@ -547,12 +559,18 @@ def main():
                             how='left'
                         )
                         
+                        # Verify merge didn't create duplicates
+                        if len(mf_cloud_df_full) != original_mf_count:
+                            logging.error(f"  ERROR: Merge created duplicates! Before: {original_mf_count}, After: {len(mf_cloud_df_full)}")
+                            logging.error(f"  This indicates the MF cloud itself has duplicate Compound ChEMBL IDs!")
+                        
                         # Free memory immediately after merge
                         del mf_affinity_data
                         import gc
                         gc.collect()
                         
-                        logging.info(f"  Merged affinity data for {len(mf_cloud_df_full[mf_cloud_df_full['Standard Value (nM)'].notna()])} of {original_mf_count} MF molecules")
+                        merged_with_affinity = len(mf_cloud_df_full[mf_cloud_df_full['Standard Value (nM)'].notna()])
+                        logging.info(f"  Merged affinity data for {merged_with_affinity:,} of {original_mf_count:,} MF molecules")
                     except Exception as e:
                         logging.warning(f"  Failed to load/merge MF affinity data: {e}")
                         logging.warning(f"  Proceeding without affinity filtering (will use full MF cloud)")
