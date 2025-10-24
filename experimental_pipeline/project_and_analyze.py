@@ -446,33 +446,14 @@ def main():
             logging.error(f"Error in Phase 2 DATA REUSE mode: {e}", exc_info=True)
             return
     
-    # Determine if we're in Phase 2 DATA REUSE mode or PROJECTION mode
-    # Phase 2: simspace already contains MF+ZINC, we only project actives (else block above was executed)
-    # PROJECTION: both target_ligands_repr_path AND model_dir_for_projection were provided (if block above)
-    is_phase2_mode = not (args.target_ligands_repr_path and args.target_ligands_repr_path.lower() != 'none' and
-                          args.model_dir_for_projection and args.model_dir_for_projection.lower() != 'none')
-    
-    # Apply affinity cutoff ONLY in PROJECTION mode (NOT in Phase 2 DATA REUSE mode)
-    # In Phase 2, affinity cutoff applies to MF cloud (already done in prepare_data.py), NOT to target ligands
-    # All target ligands should be evaluated regardless of their potency
-    if (args.affinity_cutoff is not None and 
-        'Standard Value (nM)' in df_projected_target_actives.columns and
-        not is_phase2_mode):  # Skip filtering in Phase 2 mode
-        
-        logging.info(f"PROJECTION mode: Applying affinity cutoff to target ligands: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
-        # Ensure the activity column is numeric, coercing errors
-        df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
-        
-        # Keep rows that are less than or equal to the cutoff, OR where the value is NaN (to keep actives without reported affinity)
-        original_active_count = len(df_projected_target_actives)
-        df_projected_target_actives = df_projected_target_actives[
-            (df_projected_target_actives['Standard Value (nM)'] <= args.affinity_cutoff) |
-            (df_projected_target_actives['Standard Value (nM)'].isna())
-        ].copy()
-        filtered_active_count = len(df_projected_target_actives)
-        logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
-    elif is_phase2_mode:
-        logging.info(f"Phase 2 DATA REUSE mode: Skipping affinity filtering of target ligands (cutoff only applies to MF cloud). All {len(df_projected_target_actives)} target ligands will be evaluated.")
+    # DO NOT FILTER TARGET LIGANDS BY AFFINITY CUTOFF
+    # The affinity_cutoff parameter applies only to the MF cloud (for scoring),
+    # not to target ligands being evaluated. All target ligands should be present
+    # in the ranking regardless of their potency.
+    # 
+    # Historical note: This filtering was previously applied here, but it was incorrect
+    # for Phase 2 experiments where we want to evaluate enrichment across all potency tiers.
+    logging.info(f"Target ligands loaded: {len(df_projected_target_actives)} compounds (no affinity filtering applied)")
     
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives projected or loaded for DR: {args.dr_short_name} (method key: {args.dr_method_key}). Cannot perform ranking analysis.")
