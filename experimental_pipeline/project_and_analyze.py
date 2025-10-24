@@ -446,12 +446,18 @@ def main():
             logging.error(f"Error in Phase 2 DATA REUSE mode: {e}", exc_info=True)
             return
     
+    # Determine if we're in Phase 2 DATA REUSE mode or PROJECTION mode
+    # Phase 2: simspace already contains MF+ZINC, we only project actives (else block above was executed)
+    # PROJECTION: both target_ligands_repr_path AND model_dir_for_projection were provided (if block above)
+    is_phase2_mode = not (args.target_ligands_repr_path and args.target_ligands_repr_path.lower() != 'none' and
+                          args.model_dir_for_projection and args.model_dir_for_projection.lower() != 'none')
+    
     # Apply affinity cutoff ONLY in PROJECTION mode (NOT in Phase 2 DATA REUSE mode)
     # In Phase 2, affinity cutoff applies to MF cloud (already done in prepare_data.py), NOT to target ligands
     # All target ligands should be evaluated regardless of their potency
     if (args.affinity_cutoff is not None and 
         'Standard Value (nM)' in df_projected_target_actives.columns and
-        not args.use_v3_phase2_data_reuse):  # Skip filtering in Phase 2 mode
+        not is_phase2_mode):  # Skip filtering in Phase 2 mode
         
         logging.info(f"PROJECTION mode: Applying affinity cutoff to target ligands: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
         # Ensure the activity column is numeric, coercing errors
@@ -465,7 +471,7 @@ def main():
         ].copy()
         filtered_active_count = len(df_projected_target_actives)
         logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
-    elif args.use_v3_phase2_data_reuse:
+    elif is_phase2_mode:
         logging.info(f"Phase 2 DATA REUSE mode: Skipping affinity filtering of target ligands (cutoff only applies to MF cloud). All {len(df_projected_target_actives)} target ligands will be evaluated.")
     
     if df_projected_target_actives.empty:
