@@ -1725,14 +1725,17 @@ def extract_best_configs(df_results, output_dir):
         }
     
     # ========================================================================
-    # SAVE BEST CONFIGS TO FILE
+    # SAVE BOTH CONFIGS TO FILES
     # ========================================================================
-    # Note: Analysis shows overall EF and high-potency EF yield same optimal configs
     overall_config_file = os.path.join(output_dir, 'phase1_best_configs_by_overall_ef.json')
     with open(overall_config_file, 'w') as f:
         json.dump(best_configs_overall, f, indent=2)
-    print(f"\n✅ Saved best configs to: {overall_config_file}")
-    print("   (Overall EF and High-potency EF yield identical optimal configurations)")
+    print(f"\n✅ Saved overall EF@1% best configs to: {overall_config_file}")
+    
+    high_config_file = os.path.join(output_dir, 'phase1_best_configs_by_high_potency_ef.json')
+    with open(high_config_file, 'w') as f:
+        json.dump(best_configs_high, f, indent=2)
+    print(f"✅ Saved high-potency EF@1% best configs to: {high_config_file}")
     
     # ========================================================================
     # PRINT COMPARISON

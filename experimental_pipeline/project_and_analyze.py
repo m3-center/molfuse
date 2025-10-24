@@ -446,9 +446,14 @@ def main():
             logging.error(f"Error in Phase 2 DATA REUSE mode: {e}", exc_info=True)
             return
     
-    # Apply affinity cutoff (works for both PROJECTION and Phase 2 modes)
-    if args.affinity_cutoff is not None and 'Standard Value (nM)' in df_projected_target_actives.columns:
-        logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
+    # Apply affinity cutoff ONLY in PROJECTION mode (NOT in Phase 2 DATA REUSE mode)
+    # In Phase 2, affinity cutoff applies to MF cloud (already done in prepare_data.py), NOT to target ligands
+    # All target ligands should be evaluated regardless of their potency
+    if (args.affinity_cutoff is not None and 
+        'Standard Value (nM)' in df_projected_target_actives.columns and
+        not args.use_v3_phase2_data_reuse):  # Skip filtering in Phase 2 mode
+        
+        logging.info(f"PROJECTION mode: Applying affinity cutoff to target ligands: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
         # Ensure the activity column is numeric, coercing errors
         df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
         
@@ -460,6 +465,8 @@ def main():
         ].copy()
         filtered_active_count = len(df_projected_target_actives)
         logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
+    elif args.use_v3_phase2_data_reuse:
+        logging.info(f"Phase 2 DATA REUSE mode: Skipping affinity filtering of target ligands (cutoff only applies to MF cloud). All {len(df_projected_target_actives)} target ligands will be evaluated.")
     
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives projected or loaded for DR: {args.dr_short_name} (method key: {args.dr_method_key}). Cannot perform ranking analysis.")
