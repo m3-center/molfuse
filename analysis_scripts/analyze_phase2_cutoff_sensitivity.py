@@ -31,7 +31,7 @@ from scipy import stats
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)-8s - %(message)s'
 )
 
@@ -91,16 +91,25 @@ def find_phase2_runs(workspace_dir):
         config_type = None
         if '_pca_' in basename and basename.endswith('_pca_overall'):
             config_type = 'pca_overall'
+            logging.debug(f"  ✓ Matched PCA: {basename}")
         elif 'umap' in basename and basename.endswith('_umap_overall'):
             config_type = 'umap_overall'
+            logging.debug(f"  ✓ Matched UMAP overall: {basename}")
         elif 'umap' in basename and basename.endswith('_umap_high_potency'):
             config_type = 'umap_high_potency'
+            logging.debug(f"  ✓ Matched UMAP high-potency: {basename}")
         
         if config_type is None:
             logging.warning(f"Could not extract config type from: {basename}")
+            logging.warning(f"  - Contains 'umap': {'umap' in basename}")
+            logging.warning(f"  - Ends with '_umap_overall': {basename.endswith('_umap_overall')}")
+            logging.warning(f"  - Ends with '_umap_high_potency': {basename.endswith('_umap_high_potency')}")
+            logging.warning(f"  - Contains '_pca_': {'_pca_' in basename}")
+            logging.warning(f"  - Ends with '_pca_overall': {basename.endswith('_pca_overall')}")
             continue
         
         runs[config_type][cutoff].append(run_dir)
+        logging.debug(f"  → Added to {config_type} @ {cutoff}nM")
     
     # Log summary
     for config_type in CONFIG_TYPES:
@@ -131,22 +140,33 @@ def load_metrics(run_dir):
     csv_files = glob.glob(pattern, recursive=True)
     
     if not csv_files:
-        logging.warning(f"No metrics found in: {run_dir}")
+        logging.debug(f"  ✗ No metrics found using pattern: {pattern}")
+        # Try to list what actually exists
+        base_path = os.path.join(run_dir, "TyrosineProteinKinaseABL1_P00519", "results", "features", "dim_5")
+        if os.path.exists(base_path):
+            subdirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
+            logging.debug(f"    Available subdirs in dim_5/: {subdirs}")
+        else:
+            logging.debug(f"    Path does not exist: {base_path}")
         return None
     
     if len(csv_files) > 1:
-        logging.warning(f"Multiple metrics files found in {run_dir}, using first")
+        logging.debug(f"  ! Multiple metrics files found in {run_dir}, using first")
+    
+    logging.debug(f"  ✓ Found metrics file: {csv_files[0]}")
     
     try:
         df = pd.read_csv(csv_files[0])
         if df.empty:
+            logging.debug(f"  ✗ Metrics file is empty")
             return None
         
         metrics = df.iloc[0].to_dict()
+        logging.debug(f"  ✓ Loaded metrics: EF@1% = {metrics.get('ef_1%', 'N/A')}")
         return metrics
     
     except Exception as e:
-        logging.error(f"Error loading metrics from {csv_files[0]}: {e}")
+        logging.error(f"  ✗ Error loading metrics from {csv_files[0]}: {e}")
         return None
 
 
