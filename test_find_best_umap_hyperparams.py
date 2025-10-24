@@ -15,64 +15,46 @@ import numpy as np
 import os
 
 # Path to Phase 1 detailed results
-RESULTS_FILE = "reporting/stratified_enrichment_detailed.csv"
+RESULTS_FILE = "stratanalysis/stratified_enrichment_detailed.csv"
 
 def parse_config_details(df):
-    """Extract DR method, hyperparameters from config names."""
+    """Extract DR method, hyperparameters - data already parsed in CSV!"""
     results = []
     
     for _, row in df.iterrows():
-        config = row['config']
+        dr_method = row['dr_method']
         
         # Skip non-UMAP configs
-        if 'umap' not in config.lower():
+        if 'umap' not in dr_method.lower():
             continue
         
-        # Parse UMAP hyperparameters from config name
-        # Format: tyro_features_umap_euclidean_dim5_nn5_md0.0_seed42
-        parts = config.split('_')
+        # Data is already parsed in the CSV columns!
+        representation = row['representation']
+        dimension = row['dimension']
+        n_neighbors = row.get('n_neighbors', np.nan)
+        min_dist = row.get('min_dist', np.nan)
+        seed = row['seed']
+        target = row['target']
         
-        representation = None
+        # Extract metric from dr_method (e.g., "UMAP-Euclidean" -> "euclidean")
         metric = None
-        dimension = None
-        n_neighbors = None
-        min_dist = None
-        seed = None
-        
-        for i, part in enumerate(parts):
-            if part == 'features' or part == 'fingerprints':
-                representation = part
-            elif part == 'euclidean' or part == 'cosine':
-                metric = part
-            elif part.startswith('dim') and len(part) > 3:
-                dimension = int(part[3:])
-            elif part.startswith('nn') and len(part) > 2:
-                n_neighbors = int(part[2:])
-            elif part.startswith('md'):
-                try:
-                    min_dist = float(part[2:])
-                except ValueError:
-                    pass
-            elif part.startswith('seed'):
-                try:
-                    seed = int(part[4:])
-                except ValueError:
-                    pass
+        if '-' in dr_method:
+            metric = dr_method.split('-')[1].lower()
         
         # Add parsed data to results
         result = {
-            'config': config,
+            'run_dir': row.get('run_dir', ''),
             'representation': representation,
             'metric': metric,
             'dimension': dimension,
             'n_neighbors': n_neighbors,
             'min_dist': min_dist,
             'seed': seed,
-            'target': row['target'],
-            'ef_1_overall': row.get('ef_1%_overall', np.nan),
-            'ef_1_high': row.get('ef_1%_high-potent', np.nan),
-            'ef_1_medium': row.get('ef_1%_medium-potent', np.nan),
-            'ef_1_low': row.get('ef_1%_low-potent', np.nan),
+            'target': target,
+            'ef_1_overall': row['Overall_EF'],
+            'ef_1_high': row['High_EF'],
+            'ef_1_medium': row['Medium_EF'],
+            'ef_1_low': row['Weak_EF'],
         }
         
         results.append(result)
