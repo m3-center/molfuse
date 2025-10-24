@@ -168,8 +168,33 @@ def main():
                                         "Neither 'accession' nor ('Compound ChEMBL ID' and target ChEMBL IDs) available for filtering. Using file as is.")
                         df_filtered_precalc_mf = df_precalc_mf.copy()
                     
+                    # DEDUPLICATE MF CLOUD: Aggregate duplicates using minimum affinity
+                    if 'Compound ChEMBL ID' in df_filtered_precalc_mf.columns and 'Standard Value (nM)' in df_filtered_precalc_mf.columns:
+                        original_rows = len(df_filtered_precalc_mf)
+                        unique_compounds_before = df_filtered_precalc_mf['Compound ChEMBL ID'].nunique()
+                        
+                        # Check for duplicates
+                        dup_counts = df_filtered_precalc_mf['Compound ChEMBL ID'].value_counts()
+                        duplicates = dup_counts[dup_counts > 1]
+                        
+                        if len(duplicates) > 0:
+                            logging.info(f"⚠ MF cloud deduplication: Found {len(duplicates):,} compounds with duplicates")
+                            logging.info(f"⚠ Total duplicate rows: {dup_counts[duplicates].sum() - len(duplicates):,}")
+                            
+                            # Aggregate to minimum affinity per compound (most potent binding)
+                            df_filtered_precalc_mf = df_filtered_precalc_mf.groupby('Compound ChEMBL ID').agg({
+                                col: 'first' if col != 'Standard Value (nM)' else 'min'
+                                for col in df_filtered_precalc_mf.columns if col != 'Compound ChEMBL ID'
+                            }).reset_index()
+                            
+                            deduplicated_rows = len(df_filtered_precalc_mf)
+                            logging.info(f"✓ Deduplicated MF cloud: {original_rows:,} → {deduplicated_rows:,} rows (removed {original_rows - deduplicated_rows:,})")
+                            logging.info(f"✓ Using minimum affinity (most potent) for each compound")
+                        else:
+                            logging.info(f"✓ No duplicates found in MF cloud ({unique_compounds_before:,} unique compounds)")
+                    
                     df_filtered_precalc_mf.to_csv(output_chembl_mf_excluded_path, index=False)
-                    logging.info(f"Saved filtered pre-calculated ChEMBL MF {repr_type} to: {output_chembl_mf_excluded_path}")
+                    logging.info(f"Saved filtered and deduplicated ChEMBL MF {repr_type} to: {output_chembl_mf_excluded_path}")
                     
                     # COLLECT MF SMILES for ZINC filtering (from filtered MF cloud)
                     if 'SMILES' in df_filtered_precalc_mf.columns:

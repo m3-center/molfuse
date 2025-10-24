@@ -152,6 +152,28 @@ def load_and_prepare_data(chembl_mf_path, zinc_path, repr_type, features_list):
     df_info = pd.concat(valid_info_chunks, ignore_index=True)
     logger.info(
         f"Loaded {len(df_info)} total valid records. Data matrix shape: {X_original.shape}")
+    
+    # DEDUPLICATE: Remove duplicate Compound ChEMBL IDs (safety check)
+    if 'Compound ChEMBL ID' in df_info.columns:
+        original_rows = len(df_info)
+        unique_compounds_before = df_info['Compound ChEMBL ID'].nunique()
+        
+        dup_counts = df_info['Compound ChEMBL ID'].value_counts()
+        duplicates = dup_counts[dup_counts > 1]
+        
+        if len(duplicates) > 0:
+            logger.warning(f"⚠ Found {len(duplicates):,} duplicate Compound ChEMBL IDs in loaded data!")
+            logger.warning(f"⚠ This should have been handled in prepare_data.py - deduplicating now as safety measure")
+            
+            # Keep first occurrence (arbitrary but consistent)
+            df_info = df_info.drop_duplicates(subset='Compound ChEMBL ID', keep='first')
+            X_original = X_original[df_info.index.values]
+            df_info = df_info.reset_index(drop=True)
+            
+            logger.info(f"✓ Deduplicated: {original_rows:,} → {len(df_info):,} rows (removed {original_rows - len(df_info):,})")
+        else:
+            logger.info(f"✓ No duplicates detected ({unique_compounds_before:,} unique compounds)")
+    
     if 'Compound ChEMBL ID' in df_info.columns and 'ZINC_ID' in df_info.columns:
         df_info['MOLECULE ID'] = df_info['Compound ChEMBL ID'].fillna(
             df_info['ZINC_ID'])
