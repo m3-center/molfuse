@@ -507,17 +507,59 @@ def main():
         
         # Apply affinity cutoff to MF cloud for Phase 2 experiments
         # This filters which MF molecules are used for distance-based scoring
-        if args.affinity_cutoff is not None and 'Standard Value (nM)' in mf_cloud_df_full.columns:
-            logging.info(f"Filtering MF cloud by affinity cutoff: keeping molecules with 'Standard Value (nM)' <= {args.affinity_cutoff}")
-            mf_cloud_df_full['Standard Value (nM)'] = pd.to_numeric(mf_cloud_df_full['Standard Value (nM)'], errors='coerce')
+        if args.affinity_cutoff is not None:
+            logging.info(f"Attempting to filter MF cloud by affinity cutoff: <= {args.affinity_cutoff} nM")
             
-            original_mf_count = len(mf_cloud_df_full)
-            mf_cloud_df_full = mf_cloud_df_full[
-                (mf_cloud_df_full['Standard Value (nM)'] <= args.affinity_cutoff) |
-                (mf_cloud_df_full['Standard Value (nM)'].isna())
-            ].copy()
-            filtered_mf_count = len(mf_cloud_df_full)
-            logging.info(f"MF cloud filtering complete. Kept {filtered_mf_count} of {original_mf_count} MF molecules.")
+            # Check if affinity data is already in the similarity space
+            if 'Standard Value (nM)' not in mf_cloud_df_full.columns:
+                logging.info("Affinity data not in similarity space CSV. Attempting to merge from MF cloud source file...")
+                
+                # The MF cloud source file is in the Phase 1 run directory structure
+                # Path: {phase1_run_dir}/{target_id}/temp_data/{target_id}_chembl_mf_excluded_{representation}.csv
+                # We need to construct this path from the current simspace_csv_path
+                
+                # Extract directory structure from simspace_csv_path
+                # Example: .../run_seed42.../TyrosineProteinKinaseABL1_P00519/similarity_spaces/features/dim_5/...csv
+                simspace_dir = os.path.dirname(args.simspace_csv_path)
+                # Go up to target directory: .../TyrosineProteinKinaseABL1_P00519/
+                target_dir = os.path.dirname(os.path.dirname(os.path.dirname(simspace_dir)))
+                
+                # Construct path to MF cloud source file
+                mf_file_path = os.path.join(target_dir, "temp_data", f"{args.target_id_name}_chembl_mf_excluded_{args.representation_type}.csv")
+                
+                if os.path.exists(mf_file_path):
+                    logging.info(f"  Loading MF affinity data from: {mf_file_path}")
+                    try:
+                        mf_affinity_data = pd.read_csv(mf_file_path, usecols=['Compound ChEMBL ID', 'Standard Value (nM)'], low_memory=False)
+                        
+                        # Merge affinity data into MF cloud
+                        original_mf_count = len(mf_cloud_df_full)
+                        mf_cloud_df_full = mf_cloud_df_full.merge(
+                            mf_affinity_data,
+                            on='Compound ChEMBL ID',
+                            how='left'
+                        )
+                        logging.info(f"  Merged affinity data for {len(mf_cloud_df_full[mf_cloud_df_full['Standard Value (nM)'].notna()])} of {original_mf_count} MF molecules")
+                    except Exception as e:
+                        logging.warning(f"  Failed to load/merge MF affinity data: {e}")
+                        logging.warning(f"  Proceeding without affinity filtering (will use full MF cloud)")
+                else:
+                    logging.warning(f"  MF cloud source file not found: {mf_file_path}")
+                    logging.warning(f"  Proceeding without affinity filtering (will use full MF cloud)")
+            
+            # Now apply the cutoff if we have affinity data
+            if 'Standard Value (nM)' in mf_cloud_df_full.columns:
+                mf_cloud_df_full['Standard Value (nM)'] = pd.to_numeric(mf_cloud_df_full['Standard Value (nM)'], errors='coerce')
+                
+                original_mf_count = len(mf_cloud_df_full)
+                mf_cloud_df_full = mf_cloud_df_full[
+                    (mf_cloud_df_full['Standard Value (nM)'] <= args.affinity_cutoff) |
+                    (mf_cloud_df_full['Standard Value (nM)'].isna())
+                ].copy()
+                filtered_mf_count = len(mf_cloud_df_full)
+                logging.info(f"  MF cloud filtering complete. Kept {filtered_mf_count} of {original_mf_count} MF molecules (cutoff: <= {args.affinity_cutoff} nM)")
+            else:
+                logging.warning("  'Standard Value (nM)' column not available. Using full MF cloud for all cutoffs.")
         
         mf_cloud_coords = mf_cloud_df_full.dropna(subset=coord_cols_for_analysis)
         df_zinc_decoys_all_info = df_simspace_main_data[zinc_mask].copy()
