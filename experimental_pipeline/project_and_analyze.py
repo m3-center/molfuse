@@ -389,71 +389,77 @@ def main():
         except Exception as e:
             logging.error(f"Error during model loading or projection for {args.dr_short_name}: {e}", exc_info=True)
 
-    # CASE 2: DATA REUSE mode - actives are already in the simspace_csv_path
-    # This is used in Phase 2+ to reuse pre-computed similarity spaces from Phase 1
+    # CASE 2: Phase 2 DATA REUSE mode - reuse MF cloud + ZINC, but still project actives
+    # The similarity space CSV only contains MF + ZINC (not actives)
+    # Phase 2 still needs to project actives, but can reuse the similarity space
     else:
-        logging.info(f"DATA REUSE mode: Loading pre-computed similarity space from: {args.simspace_csv_path}")
+        logging.info(f"Phase 2 DATA REUSE mode: Reusing MF cloud + ZINC from Phase 1, projecting actives with new cutoff")
         try:
-            df_full_space = pd.read_csv(args.simspace_csv_path, low_memory=False)
-            if 'DataSource' not in df_full_space.columns:
-                logging.error("'DataSource' column not found in simspace CSV. Cannot split data.")
+            # Load the similarity space (MF + ZINC only)
+            df_simspace_main_data = pd.read_csv(args.simspace_csv_path, low_memory=False)
+            logging.info(f"  Loaded {len(df_simspace_main_data)} compounds from pre-computed similarity space (MF + ZINC)")
+            
+            # Check if we have target ligands file and models to project actives
+            if not args.target_ligands_repr_path or args.target_ligands_repr_path.lower() == 'none':
+                logging.error("Phase 2 requires --target_ligands_repr_path to project actives with new cutoff!")
+                return
+            
+            if not args.model_dir_for_projection or args.model_dir_for_projection.lower() == 'none':
+                logging.error("Phase 2 requires --model_dir_for_projection to project actives!")
+                return
+            
+            # Load and project target actives (same as Phase 1, but with different cutoff)
+            logging.info(f"  Loading target ligands from: {args.target_ligands_repr_path}")
+            df_target_ligands_repr_raw = pd.read_csv(args.target_ligands_repr_path, low_memory=False)
+            
+            # Load scaler and DR model
+            scaler_suffix = "scaler.lzma"
+            if args.representation_type == "fingerprints":
+                logging.info("Using PassthroughScaler for fingerprints.")
             else:
-                df_projected_target_actives = df_full_space[df_full_space['DataSource'] == 'HELDOUT_ACTIVE'].copy()
-                df_simspace_main_data = df_full_space[df_full_space['DataSource'] != 'HELDOUT_ACTIVE'].copy()
-                logging.info(f"  Extracted {len(df_projected_target_actives)} actives and {len(df_simspace_main_data)} other compounds from pre-computed space")
+                logging.info("Using StandardScaler for features.")
+            
+            scaler_path = os.path.join(args.model_dir_for_projection, f"{args.model_name_root_for_projection}_{scaler_suffix}")
+            
+            metric = args.dr_method_key.split("_")[-1] if "umap" in args.dr_method_key else ""
+            if args.dr_method_key == "pca":
+                dr_model_filename = f"{args.model_name_root_for_projection}_PCA_model.lzma"
+            elif "umap" in args.dr_method_key:
+                dr_model_filename = f"{args.model_name_root_for_projection}_{metric}_UMAP_model.lzma"
+            else:
+                dr_model_filename = f"{args.model_name_root_for_projection}_{args.dr_short_name.replace('-','_')}_model.lzma"
+            
+            dr_model_path = os.path.join(args.model_dir_for_projection, dr_model_filename)
+            
+            with open(scaler_path, "rb") as f: scaler_model = decompress_pickle_load(f)
+            with open(dr_model_path, "rb") as f: dr_model = decompress_pickle_load(f)
+            
+            # Project target actives
+            df_projected_target_actives = project_target_ligands_with_models(
+                df_target_ligands_repr_raw, scaler_model, dr_model,
+                args.representation_type, args.simspace_dim, args.dr_method_key, args.dr_short_name,
+                target_rdkit_features_list)
+            
+            logging.info(f"  Projected {len(df_projected_target_actives)} target actives")
+            
         except Exception as e:
-            logging.error(f"Error loading pre-computed similarity space {args.simspace_csv_path}: {e}", exc_info=True)
+            logging.error(f"Error in Phase 2 DATA REUSE mode: {e}", exc_info=True)
+            return
     
-    # DATA REUSE mode affinity cutoff handling:
-    # In DATA REUSE mode, the similarity space CSV doesn't have 'Standard Value (nM)' column
-    # We need to load it from the original target ligands file and merge it back
-    if args.affinity_cutoff is not None:
-        if 'Standard Value (nM)' not in df_projected_target_actives.columns:
-            logging.info("'Standard Value (nM)' not in similarity space. Loading from target ligands file...")
-            
-            if args.target_ligands_repr_path and os.path.exists(args.target_ligands_repr_path):
-                try:
-                    df_affinity = pd.read_csv(args.target_ligands_repr_path, low_memory=False)
-                    
-                    # Merge affinity data back in using SMILES or Compound ChEMBL ID
-                    merge_col = None
-                    if 'SMILES' in df_projected_target_actives.columns and 'SMILES' in df_affinity.columns:
-                        merge_col = 'SMILES'
-                    elif 'Compound ChEMBL ID' in df_projected_target_actives.columns and 'Compound ChEMBL ID' in df_affinity.columns:
-                        merge_col = 'Compound ChEMBL ID'
-                    
-                    if merge_col and 'Standard Value (nM)' in df_affinity.columns:
-                        df_projected_target_actives = df_projected_target_actives.merge(
-                            df_affinity[[merge_col, 'Standard Value (nM)']],
-                            on=merge_col,
-                            how='left'
-                        )
-                        logging.info(f"Successfully merged affinity data using '{merge_col}' column")
-                    else:
-                        logging.warning(f"Could not merge affinity data. merge_col={merge_col}")
-                
-                except Exception as e:
-                    logging.error(f"Error loading/merging affinity data: {e}")
-            else:
-                logging.warning(f"Target ligands file not provided or doesn't exist: {args.target_ligands_repr_path}")
+    # Apply affinity cutoff (works for both PROJECTION and Phase 2 modes)
+    if args.affinity_cutoff is not None and 'Standard Value (nM)' in df_projected_target_actives.columns:
+        logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
+        # Ensure the activity column is numeric, coercing errors
+        df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
         
-        # Now apply the cutoff if we have the column
-        if 'Standard Value (nM)' in df_projected_target_actives.columns:
-            logging.info(f"Applying affinity cutoff: keeping actives with 'Standard Value (nM)' <= {args.affinity_cutoff}")
-            # Ensure the activity column is numeric, coercing errors
-            df_projected_target_actives['Standard Value (nM)'] = pd.to_numeric(df_projected_target_actives['Standard Value (nM)'], errors='coerce')
-            
-            # Keep rows that are less than or equal to the cutoff, OR where the value is NaN (to keep actives without reported affinity)
-            original_active_count = len(df_projected_target_actives)
-            df_projected_target_actives = df_projected_target_actives[
-                (df_projected_target_actives['Standard Value (nM)'] <= args.affinity_cutoff) |
-                (df_projected_target_actives['Standard Value (nM)'].isna())
-            ].copy()
-            filtered_active_count = len(df_projected_target_actives)
-            logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
-        else:
-            logging.error("Cannot apply affinity cutoff: 'Standard Value (nM)' column still missing after merge attempt")
-            logging.error("Phase 2 cutoff analysis cannot proceed without affinity data!")
+        # Keep rows that are less than or equal to the cutoff, OR where the value is NaN (to keep actives without reported affinity)
+        original_active_count = len(df_projected_target_actives)
+        df_projected_target_actives = df_projected_target_actives[
+            (df_projected_target_actives['Standard Value (nM)'] <= args.affinity_cutoff) |
+            (df_projected_target_actives['Standard Value (nM)'].isna())
+        ].copy()
+        filtered_active_count = len(df_projected_target_actives)
+        logging.info(f"Affinity filtering complete. Kept {filtered_active_count} of {original_active_count} actives.")
     
     if df_projected_target_actives.empty:
         logging.warning(f"No target actives projected or loaded for DR: {args.dr_short_name} (method key: {args.dr_method_key}). Cannot perform ranking analysis.")
@@ -578,6 +584,36 @@ def main():
                 logging.info(f"Saved ranked data for docking to: {docking_output_path}")
             except Exception as e:
                 logging.error(f"Failed to save docking output CSV {docking_output_path}: {e}")
+            
+            # Save comprehensive files for each molecule type (all info + coordinates)
+            logging.info("Saving comprehensive data files for MF cloud, target actives, and ZINC decoys...")
+            
+            # 1. MF Cloud - complete info with coordinates
+            if not mf_cloud_coords.empty:
+                mf_output_path = os.path.join(args.output_dir, f"{args.target_id_name}_MF_cloud_complete_{args.representation_type}_{args.dr_short_name}_dim{args.simspace_dim}.csv")
+                try:
+                    mf_cloud_coords.to_csv(mf_output_path, index=False)
+                    logging.info(f"Saved MF cloud complete data ({len(mf_cloud_coords)} compounds) to: {mf_output_path}")
+                except Exception as e:
+                    logging.error(f"Failed to save MF cloud complete CSV {mf_output_path}: {e}")
+            
+            # 2. Target Actives - complete info with coordinates and scores
+            if not df_target_actives_scored.empty:
+                actives_output_path = os.path.join(args.output_dir, f"{args.target_id_name}_actives_complete_{args.representation_type}_{args.dr_short_name}_dim{args.simspace_dim}.csv")
+                try:
+                    df_target_actives_scored.to_csv(actives_output_path, index=False)
+                    logging.info(f"Saved target actives complete data ({len(df_target_actives_scored)} compounds) to: {actives_output_path}")
+                except Exception as e:
+                    logging.error(f"Failed to save actives complete CSV {actives_output_path}: {e}")
+            
+            # 3. ZINC Decoys - complete info with coordinates and scores
+            if not df_zinc_decoys_scored.empty:
+                zinc_output_path = os.path.join(args.output_dir, f"{args.target_id_name}_ZINC_decoys_complete_{args.representation_type}_{args.dr_short_name}_dim{args.simspace_dim}.csv")
+                try:
+                    df_zinc_decoys_scored.to_csv(zinc_output_path, index=False)
+                    logging.info(f"Saved ZINC decoys complete data ({len(df_zinc_decoys_scored)} compounds) to: {zinc_output_path}")
+                except Exception as e:
+                    logging.error(f"Failed to save ZINC decoys complete CSV {zinc_output_path}: {e}")
         else:
             logging.warning(f"DataFrame for ranking/docking is empty after dropping NaN scores for {args.dr_short_name}.")
 

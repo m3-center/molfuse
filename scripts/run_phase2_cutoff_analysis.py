@@ -230,15 +230,12 @@ def run_cutoff_analysis(config_path, phase1_workspace, phase2_workspace, base_co
     
     # Find required Phase 1 files
     simspace_path = find_similarity_space(phase1_run_dir, representation, dimension, target_id)
+    model_dir = find_dr_model_dir(phase1_run_dir, representation, dimension, target_id)
     target_ligands_path = find_target_ligands_path(phase1_run_dir, representation, target_id)
     
-    if not simspace_path:
-        logging.error("Missing required similarity space file from Phase 1")
+    if not all([simspace_path, model_dir, target_ligands_path]):
+        logging.error("Missing required Phase 1 files (need similarity space, models, and target ligands)")
         return False
-    
-    # Target ligands path is needed for affinity data merging (not for projection)
-    if not target_ligands_path:
-        logging.warning("Target ligands file not found - affinity cutoff filtering may not work")
 
     
     # Build output directory for Phase 2
@@ -258,14 +255,14 @@ def run_cutoff_analysis(config_path, phase1_workspace, phase2_workspace, base_co
     logging.info(f"  Output directory: {output_dir}")
     
     # Build command for project_and_analyze.py
-    # Phase 2 DATA REUSE mode: similarity space already contains projected actives
-    # Pass --target_ligands_repr_path ONLY for affinity data merging (not for projection)
+    # Phase 2 strategy: Reuse MF cloud + ZINC from Phase 1, but project actives with new cutoff
+    # This is much faster than full pipeline (no MF/ZINC feature calc, no DR fitting)
     cmd = [
         "python", "experimental_pipeline/project_and_analyze.py",
         "--simspace_csv_path", os.path.abspath(simspace_path),
-        "--target_ligands_repr_path", os.path.abspath(target_ligands_path) if target_ligands_path else "none",
-        # NOTE: Omit --model_dir_for_projection to trigger DATA REUSE mode
-        # NOTE: Omit --model_name_root_for_projection to trigger DATA REUSE mode
+        "--target_ligands_repr_path", os.path.abspath(target_ligands_path),
+        "--model_dir_for_projection", os.path.abspath(model_dir),
+        "--model_name_root_for_projection", f"{target_id}_{representation}_dim{dimension}",
         "--dr_method_key", dr_method_key,
         "--dr_short_name", dr_config["short_name"],
         "--simspace_dim", str(dimension),
