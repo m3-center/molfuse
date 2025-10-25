@@ -31,17 +31,33 @@ if [ ! -f "${CONFIG_LIST_FILE}" ]; then
 fi
 
 # --- Get Config File for This Array Task ---
+echo "Reading config for task ${SLURM_ARRAY_TASK_ID} from ${CONFIG_LIST_FILE}"
+echo "Total lines in config list: $(wc -l < ${CONFIG_LIST_FILE})"
+
 CONFIG_FILE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "${CONFIG_LIST_FILE}")
+
+echo "Config file extracted: '${CONFIG_FILE}'"
 
 if [ -z "${CONFIG_FILE}" ]; then
     echo "ERROR: No config file found for array task ${SLURM_ARRAY_TASK_ID}"
+    echo "Line number attempted: $((SLURM_ARRAY_TASK_ID + 1))"
+    echo "First 5 lines of config list:"
+    head -5 "${CONFIG_LIST_FILE}"
+    echo "Last 5 lines of config list:"
+    tail -5 "${CONFIG_LIST_FILE}"
     exit 1
 fi
 
 if [ ! -f "${CONFIG_FILE}" ]; then
     echo "ERROR: Config file does not exist: ${CONFIG_FILE}"
+    echo "Checking if path is relative vs absolute..."
+    echo "Current working directory: $(pwd)"
+    echo "Attempting to find file..."
+    find . -name "$(basename ${CONFIG_FILE})" 2>/dev/null | head -5
     exit 1
 fi
+
+echo "✓ Config file verified: ${CONFIG_FILE}"
 
 # --- Extract Seed from Config Filename ---
 CONFIG_BASENAME=$(basename "${CONFIG_FILE}" .json)
