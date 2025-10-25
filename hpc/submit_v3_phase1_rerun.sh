@@ -24,6 +24,10 @@
 # --- Configuration ---
 CONFIG_DIR="hyperparam_configs_v3_phase1"
 SLURM_SCRIPT="hpc/ummbas_v3_cpu.sh"
+WORKSPACE_DIR="experiment_workspace_v3_phase1"
+
+# Dry run mode: set to "true" to preview what would be submitted without actually submitting
+DRY_RUN="${DRY_RUN:-false}"
 
 # NOTE: Each config file already contains a specific seed.
 # We do NOT loop over seeds here - that would create duplicate jobs!
@@ -55,9 +59,15 @@ NUM_CONFIGS=$(ls -1 ${CONFIG_DIR}/*.json | wc -l)
 TOTAL_JOBS=${NUM_CONFIGS}
 
 echo "Configuration Directory: ${CONFIG_DIR}"
+echo "Workspace Directory: ${WORKSPACE_DIR}"
 echo "Number of Configs: ${NUM_CONFIGS}"
 echo "Total Jobs: ${TOTAL_JOBS} (expected: 455)"
 echo ""
+if [ "${DRY_RUN}" = "true" ]; then
+    echo "***** DRY RUN MODE *****"
+    echo "Will preview submissions without actually submitting to SLURM"
+    echo ""
+fi
 echo "CRITICAL CHANGES FROM ORIGINAL:"
 echo "  - MF cloud deduplicated (2.23× → 1.0×)"
 echo "  - Features UMAP nn: [10, 20, 50, 100, 500] (was [3, 5, 10, 20])"
@@ -65,11 +75,13 @@ echo "  - Fixed seed DISABLED (10× UMAP speedup)"
 echo "  - Fingerprints also rerun (same duplication issue)"
 echo "============================================================"
 
-read -p "Proceed with submission? (y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Submission cancelled."
-    exit 0
+if [ "${DRY_RUN}" != "true" ]; then
+    read -p "Proceed with submission? (y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Submission cancelled."
+        exit 0
+    fi
 fi
 
 # --- Create logs directory ---
@@ -102,14 +114,16 @@ for config_file in "${CONFIG_DIR}"/*.json; do
     seed=$(echo "${config_basename}" | grep -oP 'seed\K\d+' || echo "unknown")
     
     # Check if experiment already completed by looking for ranking metrics CSV
-    # Expected path pattern: experiment_workspace_v3_phase1_rerun/run_seedXX_*/TARGET/results/REPR/dim_N/METHOD/*_ranking_metrics.csv
-    workspace_pattern="experiment_workspace_v3_phase1_rerun/run_seed${seed}_*/*_ranking_metrics.csv"
+    # Pattern matches the specific workspace directory structure created by this config
+    # Example: experiment_workspace_v3_phase1/run_seed46_config_tyro_features_pca_dim10_seed46/TyrosineProteinKinaseABL1_P00519/results/features/dim_10/PCA/*_ranking_metrics.csv
+    workspace_pattern="${WORKSPACE_DIR}/run_seed${seed}_${config_basename}/*/*/*/*/*_ranking_metrics.csv"
     
     if ls ${workspace_pattern} 2>/dev/null | grep -q .; then
         echo "  ⊙ ${config_basename} -> SKIPPED (already completed)"
         echo "----------------------------------------" >> "${SUBMISSION_LOG}"
         echo "Config: ${config_basename}" >> "${SUBMISSION_LOG}"
         echo "Status: SKIPPED (ranking metrics found)" >> "${SUBMISSION_LOG}"
+        echo "Matched: $(ls ${workspace_pattern} 2>/dev/null | head -1)" >> "${SUBMISSION_LOG}"
         echo "" >> "${SUBMISSION_LOG}"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
@@ -123,22 +137,30 @@ for config_file in "${CONFIG_DIR}"/*.json; do
     echo "Config File: ${config_file}" >> "${SUBMISSION_LOG}"
     echo "Command: sbatch --job-name=\"${job_name}\" \"${SLURM_SCRIPT}\" \"${seed}\" \"${config_file}\"" >> "${SUBMISSION_LOG}"
     
-    # Submit the SLURM job with the seed from the config (EXACTLY like original Phase 1)
-    submit_output=$(sbatch --job-name="${job_name}" "${SLURM_SCRIPT}" "${seed}" "${config_file}" 2>&1)
-    submit_status=$?
-    
-    echo "Submit Output: ${submit_output}" >> "${SUBMISSION_LOG}"
-    echo "Exit Code: ${submit_status}" >> "${SUBMISSION_LOG}"
-    
-    if [ ${submit_status} -eq 0 ]; then
-        job_id=$(echo "${submit_output}" | grep -oP 'Submitted batch job \K\d+')
-        echo "Status: SUCCESS (Job ID: ${job_id})" >> "${SUBMISSION_LOG}"
-        echo "  ✓ ${config_basename} -> Job ${job_id}"
+    if [ "${DRY_RUN}" = "true" ]; then
+        # Dry run: just log what would be submitted
+        echo "DRY RUN - Would submit: ${config_basename}" >> "${SUBMISSION_LOG}"
+        echo "Status: DRY RUN (not submitted)" >> "${SUBMISSION_LOG}"
+        echo "  [DRY RUN] ${config_basename}"
         JOB_COUNT=$((JOB_COUNT + 1))
     else
-        echo "Status: FAILED" >> "${SUBMISSION_LOG}"
-        echo "  ✗ ${config_basename} FAILED: ${submit_output}"
-        FAILED_COUNT=$((FAILED_COUNT + 1))
+        # Real submission: Submit the SLURM job with the seed from the config
+        submit_output=$(sbatch --job-name="${job_name}" "${SLURM_SCRIPT}" "${seed}" "${config_file}" 2>&1)
+        submit_status=$?
+        
+        echo "Submit Output: ${submit_output}" >> "${SUBMISSION_LOG}"
+        echo "Exit Code: ${submit_status}" >> "${SUBMISSION_LOG}"
+        
+        if [ ${submit_status} -eq 0 ]; then
+            job_id=$(echo "${submit_output}" | grep -oP 'Submitted batch job \K\d+')
+            echo "Status: SUCCESS (Job ID: ${job_id})" >> "${SUBMISSION_LOG}"
+            echo "  ✓ ${config_basename} -> Job ${job_id}"
+            JOB_COUNT=$((JOB_COUNT + 1))
+        else
+            echo "Status: FAILED" >> "${SUBMISSION_LOG}"
+            echo "  ✗ ${config_basename} FAILED: ${submit_output}"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
     fi
     echo "" >> "${SUBMISSION_LOG}"
 done
@@ -159,9 +181,15 @@ echo "  squeue -u \$USER" | tee -a "${SUBMISSION_LOG}"
 echo "  squeue -u \$USER | wc -l" | tee -a "${SUBMISSION_LOG}"
 echo "" | tee -a "${SUBMISSION_LOG}"
 echo "Check completed experiments:" | tee -a "${SUBMISSION_LOG}"
-echo "  ls experiment_workspace_v3_phase1_rerun/run_seed*_*/*_ranking_metrics.csv | wc -l" | tee -a "${SUBMISSION_LOG}"
+echo "  ls ${WORKSPACE_DIR}/run_seed*_*/*/*/*/*/*_ranking_metrics.csv | wc -l" | tee -a "${SUBMISSION_LOG}"
 echo "" | tee -a "${SUBMISSION_LOG}"
 echo "Check submitted jobs:" | tee -a "${SUBMISSION_LOG}"
 echo "  sacct -u \$USER -S $(date +%Y-%m-%dT%H:%M:%S) --format=JobID,JobName%50,State" | tee -a "${SUBMISSION_LOG}"
 echo "" | tee -a "${SUBMISSION_LOG}"
+if [ "${DRY_RUN}" = "true" ]; then
+    echo "============================================================" | tee -a "${SUBMISSION_LOG}"
+    echo "DRY RUN COMPLETED - No jobs were actually submitted" | tee -a "${SUBMISSION_LOG}"
+    echo "To submit for real, run: bash ${0}" | tee -a "${SUBMISSION_LOG}"
+    echo "============================================================" | tee -a "${SUBMISSION_LOG}"
+fi
 echo "============================================================" | tee -a "${SUBMISSION_LOG}"
