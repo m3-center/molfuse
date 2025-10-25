@@ -465,6 +465,35 @@ def main():
     # Parse original configuration
     config = parse_original_config(args.original_run)
     
+    # VALIDATE: Check that original metrics file exists BEFORE starting expensive computation
+    logging.info("\n" + "="*80)
+    logging.info("PRE-VALIDATION: Checking original metrics file exists")
+    logging.info("="*80)
+    
+    original_results_dir = os.path.join(
+        args.original_run,
+        config['target_id'],  # FIX: Add target ID to path
+        "results",
+        config['representation'],
+        f"dim_{config['dimension']}",
+        config['dr_method'].replace('-', '_')
+    )
+    
+    dr_method_safe = config['dr_method'].replace('-', '_')
+    original_metrics_file = os.path.join(
+        original_results_dir,
+        f"{config['target_id']}_{config['representation']}_{dr_method_safe}_dim{config['dimension']}_ranking_metrics.csv"
+    )
+    
+    if not os.path.exists(original_metrics_file):
+        logging.error(f"✗ Original metrics file not found: {original_metrics_file}")
+        logging.error("✗ Cannot proceed without original results to compare against")
+        logging.error("✗ Please verify the original run directory path")
+        sys.exit(2)
+    
+    logging.info(f"✓ Original metrics file found: {original_metrics_file}")
+    logging.info("✓ Pre-validation passed - proceeding with expensive computation")
+    
     # Create output workspace
     os.makedirs(args.output_workspace, exist_ok=True)
     
@@ -486,15 +515,7 @@ def main():
         logging.info("LOADING METRICS FOR COMPARISON")
         logging.info("="*80)
         
-        # Original metrics
-        original_results_dir = os.path.join(
-            args.original_run,
-            "results",
-            config['representation'],
-            f"dim_{config['dimension']}",
-            config['dr_method'].replace('-', '_')
-        )
-        
+        # Original metrics (path already validated and constructed above)
         logging.info(f"Loading original metrics from: {original_results_dir}")
         original_metrics = load_metrics(
             original_results_dir,
@@ -524,7 +545,7 @@ def main():
         logging.info(f"\n✓ Comparison results saved to: {comparison_file}")
         
         # Exit code based on decision
-        if comparison['decision'] == 'minimal_impact':
+        if comparison['decision'] == 'minimal_impact': # type: ignore
             sys.exit(0)
         else:
             sys.exit(1)
