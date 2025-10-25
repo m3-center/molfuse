@@ -116,7 +116,7 @@ for config_file in "${CONFIG_DIR}"/*.json; do
     # Check if experiment already completed by looking for ranking metrics CSV
     # Pattern matches the specific workspace directory structure created by this config
     # Example: experiment_workspace_v3_phase1/run_seed46_config_tyro_features_pca_dim10_seed46/TyrosineProteinKinaseABL1_P00519/results/features/dim_10/PCA/*_ranking_metrics.csv
-    workspace_pattern="${WORKSPACE_DIR}/run_seed${seed}_${config_basename}/*/*/*/*/*_ranking_metrics.csv"
+    workspace_pattern="${WORKSPACE_DIR}/run_seed${seed}_${config_basename}/*/*/*/*/*/*_ranking_metrics.csv"
     
     if ls ${workspace_pattern} 2>/dev/null | grep -q .; then
         echo "  ⊙ ${config_basename} -> SKIPPED (already completed)"
