@@ -9,7 +9,7 @@
 # =============================================================================
 
 # --- Configuration ---
-CONFIG_DIR="hyperparam_configs_v3_phase1_rerun"
+CONFIG_DIR="hyperparam_configs_v3_phase1"
 SLURM_SCRIPT="hpc/ummbas_v3_cpu_array.sh"
 MAX_CONCURRENT=500  # Run max 500 tasks simultaneously
 
@@ -73,7 +73,7 @@ SUBMIT_OUTPUT=$(sbatch \
     --array=0-$((NUM_CONFIGS-1))%${MAX_CONCURRENT} \
     --output="slurm_logs/array_%A_task_%a.out" \
     --error="slurm_logs/array_%A_task_%a.err" \
-    --job-name="UMMBAS_v3_phase1_rerun_array" \
+    --job-name="UMMBAS_v3_phase1_array" \
     "${SLURM_SCRIPT}" "${CONFIG_LIST_FILE}" 2>&1)
 
 if [ $? -eq 0 ]; then
