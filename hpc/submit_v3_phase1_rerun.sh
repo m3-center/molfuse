@@ -91,7 +91,10 @@ for config_file in "${CONFIG_DIR}"/*.json; do
     seed=$(echo "${config_basename}" | grep -oP 'seed\K\d+' || echo "unknown")
     
     # Submit the SLURM job with the seed from the config
-    sbatch --job-name="${job_name}" "${SLURM_SCRIPT}" "${seed}" "${config_file}"
+    sbatch --job-name="${job_name}" \
+           --output="slurm_logs/${job_name}_%j.out" \
+           --error="slurm_logs/${job_name}_%j.err" \
+           "${SLURM_SCRIPT}" "${seed}" "${config_file}"
     
     if [ $? -eq 0 ]; then
         JOB_COUNT=$((JOB_COUNT + 1))

@@ -26,14 +26,6 @@ if [ -z "${RANDOM_SEED}" ] || [ -z "${CONFIG_FILE}" ]; then
     exit 1
 fi
 
-# --- Define Job Name ---
-CONFIG_BASENAME=$(basename "${CONFIG_FILE}" .json)
-JOB_NAME="UMMBAS_v3_${CONFIG_BASENAME}_seed${RANDOM_SEED}"
-
-#SBATCH --job-name=${JOB_NAME}
-#SBATCH --output=slurm_logs/%x_%j.out
-#SBATCH --error=slurm_logs/%x_%j.err
-
 # --- Environment Setup and Logging ---
 echo "========================================================================"
 echo "UMMBAS v3.0 - Single Experiment Job"
