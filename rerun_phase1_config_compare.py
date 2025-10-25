@@ -307,18 +307,33 @@ def run_project_and_analyze(config, target_workspace, output_simspace_dir, outpu
     )
     os.makedirs(output_results_dir, exist_ok=True)
     
+    # Get dr_method_key from original config
+    dr_methods = config['full_config'].get('dimensionality_reduction_methods', {})
+    dr_method_key = list(dr_methods.keys())[0]  # e.g., "umap_euclidean"
+    
+    # Get feature list
+    features_list = config['full_config']['global_settings'].get('rdkit_features_list_target', [])
+    
+    # Get k_for_knn and affinity_cutoff from original config (not hard-coded!)
+    k_for_knn_list = config['full_config']['global_settings'].get('k_for_knn_distance', [3, 5])
+    k_for_knn_str = ','.join(map(str, k_for_knn_list))
+    affinity_cutoff = config['full_config']['global_settings'].get('affinity_cutoff_nM', 100000)
+    
     cmd = [
         'python', 'experimental_pipeline/project_and_analyze.py',
         '--simspace_csv_path', simspace_csv,
-        '--model_dir', output_model_dir,
-        '--target_actives_path', target_actives_path,
+        '--dr_method_key', dr_method_key,
         '--dr_short_name', config['dr_method'],
         '--simspace_dim', str(config['dimension']),
+        '--k_for_knn', k_for_knn_str,
         '--output_dir', output_results_dir,
         '--target_id_name', config['target_id'],
         '--representation_type', config['representation'],
-        '--k_for_knn', '5,10,20',
-        '--affinity_cutoff_nM', '100000'
+        '--rdkit_features_list_target_str', json.dumps(features_list),
+        '--target_ligands_repr_path', target_actives_path,
+        '--model_dir_for_projection', output_model_dir,
+        '--model_name_root_for_projection', f"{config['target_id']}_{config['representation']}_dim{config['dimension']}",
+        '--affinity_cutoff', str(affinity_cutoff)
     ]
     
     logging.info(f"Running: {' '.join(cmd[:10])}...")
