@@ -75,12 +75,19 @@ fi
 # --- Create logs directory ---
 mkdir -p slurm_logs
 
+# Create submission log
+SUBMISSION_LOG="slurm_logs/submission_$(date +%Y%m%d_%H%M%S).log"
+echo "Submission started at $(date)" > "${SUBMISSION_LOG}"
+echo "Config directory: ${CONFIG_DIR}" >> "${SUBMISSION_LOG}"
+echo "" >> "${SUBMISSION_LOG}"
+
 # --- Submit All Jobs ---
 echo "Starting job submission..."
 echo "------------------------------------------------------------"
 
 JOB_COUNT=0
 FAILED_COUNT=0
+SUBMIT_ERRORS=()
 
 # Each config file already has a seed in it, so we just submit once per file
 for config_file in "${CONFIG_DIR}"/*.json; do
@@ -91,15 +98,24 @@ for config_file in "${CONFIG_DIR}"/*.json; do
     seed=$(echo "${config_basename}" | grep -oP 'seed\K\d+' || echo "unknown")
     
     # Submit the SLURM job with the seed from the config
-    sbatch --job-name="${job_name}" \
+    # Use absolute path for config file to avoid path issues
+    config_file_abs=$(readlink -f "${config_file}")
+    
+    submit_output=$(sbatch --job-name="${job_name}" \
            --output="slurm_logs/${job_name}_%j.out" \
            --error="slurm_logs/${job_name}_%j.err" \
-           "${SLURM_SCRIPT}" "${seed}" "${config_file}"
+           "${SLURM_SCRIPT}" "${seed}" "${config_file_abs}" 2>&1)
     
     if [ $? -eq 0 ]; then
+        job_id=$(echo "$submit_output" | grep -oP 'Submitted batch job \K\d+')
+        echo "SUCCESS: ${config_basename} -> Job ${job_id}" >> "${SUBMISSION_LOG}"
         JOB_COUNT=$((JOB_COUNT + 1))
     else
+        echo "FAILED: ${config_basename}" >> "${SUBMISSION_LOG}"
+        echo "  Error: ${submit_output}" >> "${SUBMISSION_LOG}"
         echo "ERROR: Failed to submit job for ${config_file}"
+        echo "  Error: ${submit_output}"
+        SUBMIT_ERRORS+=("${config_basename}: ${submit_output}")
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
 done
@@ -110,10 +126,23 @@ echo "============================================================"
 echo "Jobs submitted: ${JOB_COUNT}"
 echo "Jobs failed: ${FAILED_COUNT}"
 echo "============================================================"
+
+if [ ${FAILED_COUNT} -gt 0 ]; then
+    echo ""
+    echo "⚠️  SUBMISSION ERRORS (first 10):"
+    printf '%s\n' "${SUBMIT_ERRORS[@]}" | head -10
+    echo ""
+fi
+
+echo "Submission log: ${SUBMISSION_LOG}"
 echo ""
 echo "Monitor progress with:"
 echo "  squeue -u \$USER"
-echo "  python scripts/check_hyperparam_status.py --workspace experiment_workspace_v3_phase1"
+echo "  watch -n 10 'squeue -u \$USER | head -30'"
+echo "  tail -f ${SUBMISSION_LOG}"
+echo ""
+echo "Check for vanished jobs:"
+echo "  sacct -u \$USER -S 2025-10-25T18:00:00 --format=JobID,JobName%60,State,ExitCode | grep CANCELLED"
 echo ""
 echo "After completion, extract best configs with:"
 echo "  python extract_phase1_best_configs.py --workspace experiment_workspace_v3_phase1"
