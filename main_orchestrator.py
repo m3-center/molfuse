@@ -117,6 +117,7 @@ def main(config_path, random_seed_value):
     gs = config['global_settings']
     affinity_cutoff = gs.get("affinity_cutoff_nM")
     workspace_base_dir = gs['workspace_base_dir']
+    use_fixed_seed = gs.get("use_fixed_seed", True)  # Default True for backward compatibility
     
     # Determine representation mode directly from the config file
     representation_mode = config.get("representations", [None])[0]
@@ -223,6 +224,9 @@ def main(config_path, random_seed_value):
                         "--random_state", str(random_seed_value),
                         "--log_file_path", os.path.abspath(log_file_name) 
                         ]
+                    # Add --use_fixed_seed flag if multi-threading enabled (use_fixed_seed=False)
+                    if not use_fixed_seed:
+                        cmd_calc_simspace.append("--use_fixed_seed")
                     if os.path.exists(current_zinc_filtered_path): cmd_calc_simspace.extend(["--zinc_data_path", os.path.abspath(current_zinc_filtered_path)])
                     else: cmd_calc_simspace.extend(["--zinc_data_path", "None"])
                     

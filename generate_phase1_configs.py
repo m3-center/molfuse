@@ -9,7 +9,9 @@ Generates configs for:
   - n_neighbors: [10, 20, 50, 100, 500] (DROP 3, 5 due to 72hr timeout)
   - min_dist: [0.0, 0.001, 0.005, 0.01, 0.1]
   - NO FIXED SEED: Enable UMAP multi-threading for 10× speedup
-- Fingerprints: UNCHANGED (not affected by MF cloud duplicates)
+- Fingerprints-PCA: 2D (rerun with deduplicated data)
+- Fingerprints-UMAP-Jaccard: 2D with SAME hyperparameters [20, 50, 100] nn
+  - Also affected by 2.23× MF cloud duplication, must rerun
 
 CRITICAL CHANGES FROM ORIGINAL:
 1. Removed nn=3, 5 (computationally infeasible - 72hr timeout)

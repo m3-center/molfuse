@@ -310,12 +310,22 @@ def main():
     parser.add_argument("--n_neighbors", type=int, default=None)
     # Co-embedding removed in v2.0 - projection only
     parser.add_argument("--dr_method_configs_json_str", required=True)
-    parser.add_argument("--random_state", type=int, default=42)
+    parser.add_argument("--random_state", type=int, default=42,
+                       help="Random seed for reproducibility (only used if --use_fixed_seed is True)")
+    parser.add_argument("--use_fixed_seed", action='store_true', default=False,
+                       help="Enable fixed random seed (disables UMAP multi-threading for exact reproducibility)")
     args = parser.parse_args()
 
     # --- Initial Setup ---
     setup_script_logging(args.log_file_path)
     GPU_ENABLED = is_gpu_available()
+    
+    # Log seed usage for clarity
+    if args.use_fixed_seed:
+        logger.info(f"🔒 FIXED SEED MODE: random_state={args.random_state} (reproducible, single-threaded UMAP)")
+    else:
+        logger.info(f"⚡ MULTI-THREADED MODE: NO fixed seed (10× faster UMAP, non-reproducible due to race conditions)")
+        logger.info(f"   Note: Seed value {args.random_state} used for folder naming only, NOT for DR model initialization")
 
     features_list = json.loads(args.rdkit_features_list_target_str)
     dr_configs = json.loads(args.dr_method_configs_json_str)
@@ -355,10 +365,18 @@ def main():
         # v2.0: PCA works for both features and fingerprints (projection-only)
         # Note: For fingerprints, PCA treats binary vectors as numerical features
         # UMAP-Jaccard is preferred for fingerprints, but PCA is still valid for comparison
+        
+        # Conditionally add random_state based on use_fixed_seed flag
+        cuml_params = {'n_components': args.simspace_dim}
+        sklearn_params = {'n_components': args.simspace_dim}
+        if args.use_fixed_seed:
+            cuml_params['random_state'] = args.random_state
+            sklearn_params['random_state'] = args.random_state
+        
         pca_run_config = {
             'simspace_dim': args.simspace_dim,
-            'cuml_params': {'n_components': args.simspace_dim, 'random_state': args.random_state},
-            'sklearn_params': {'n_components': args.simspace_dim, 'random_state': args.random_state}
+            'cuml_params': cuml_params,
+            'sklearn_params': sklearn_params
         }
         out_paths = {
             'projection_model': os.path.join(args.output_model_dir, f"{base_name}_PCA_model.lzma")
@@ -395,9 +413,24 @@ def main():
                 low_memory = True
             else:
                 low_memory = False
-                
-            sklearn_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'low_memory': low_memory}
-            cuml_params = {'n_components': args.simspace_dim, 'random_state': args.random_state, 'n_neighbors': n_neighbors, 'min_dist': min_dist, 'metric': metric}
+            
+            # Conditionally add random_state based on use_fixed_seed flag
+            sklearn_params = {
+                'n_components': args.simspace_dim,
+                'n_neighbors': n_neighbors,
+                'min_dist': min_dist,
+                'low_memory': low_memory
+            }
+            cuml_params = {
+                'n_components': args.simspace_dim,
+                'n_neighbors': n_neighbors,
+                'min_dist': min_dist,
+                'metric': metric
+            }
+            
+            if args.use_fixed_seed:
+                sklearn_params['random_state'] = args.random_state
+                cuml_params['random_state'] = args.random_state
 
             umap_config = {
                 'repr_type': args.representation_type,
