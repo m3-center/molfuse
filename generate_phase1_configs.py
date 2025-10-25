@@ -30,7 +30,7 @@ import glob
 from itertools import product
 
 # Configuration
-OUTPUT_DIR = "hyperparam_configs_v3_phase1_rerun"
+OUTPUT_DIR = "hyperparam_configs_v3_phase1"
 BASE_CONFIG_PATH = "experiment_config.json"
 WORKSPACE_DIR = "experiment_workspace_v3_phase1"
 SEEDS = [42, 43, 44, 45, 46]
@@ -121,6 +121,7 @@ def create_pca_config(representation, dimension, seed, base_config):
     # Override dimensions and workspace
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
     config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase1/"
+    config["global_settings"]["use_fixed_seed"] = USE_FIXED_SEED
     
     return config
 
@@ -150,6 +151,7 @@ def create_umap_config(representation, metric, dimension, n_neighbors, min_dist,
     # Override dimensions and workspace
     config["global_settings"]["simspace_dims_to_test"] = [dimension]
     config["global_settings"]["workspace_base_dir"] = "experiment_workspace_v3_phase1/"
+    config["global_settings"]["use_fixed_seed"] = USE_FIXED_SEED
     
     return config
 
