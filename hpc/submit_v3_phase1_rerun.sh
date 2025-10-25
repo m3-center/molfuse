@@ -91,6 +91,7 @@ echo "------------------------------------------------------------" | tee -a "${
 
 JOB_COUNT=0
 FAILED_COUNT=0
+SKIPPED_COUNT=0
 
 # Each config file already has a seed in it, so we just submit once per file
 for config_file in "${CONFIG_DIR}"/*.json; do
@@ -99,6 +100,20 @@ for config_file in "${CONFIG_DIR}"/*.json; do
     
     # Extract seed from config filename (format: ..._seed42.json)
     seed=$(echo "${config_basename}" | grep -oP 'seed\K\d+' || echo "unknown")
+    
+    # Check if experiment already completed by looking for ranking metrics CSV
+    # Expected path pattern: experiment_workspace_v3_phase1_rerun/run_seedXX_*/TARGET/results/REPR/dim_N/METHOD/*_ranking_metrics.csv
+    workspace_pattern="experiment_workspace_v3_phase1_rerun/run_seed${seed}_*/*_ranking_metrics.csv"
+    
+    if ls ${workspace_pattern} 2>/dev/null | grep -q .; then
+        echo "  ⊙ ${config_basename} -> SKIPPED (already completed)"
+        echo "----------------------------------------" >> "${SUBMISSION_LOG}"
+        echo "Config: ${config_basename}" >> "${SUBMISSION_LOG}"
+        echo "Status: SKIPPED (ranking metrics found)" >> "${SUBMISSION_LOG}"
+        echo "" >> "${SUBMISSION_LOG}"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
+    fi
     
     # Log what we're about to submit
     echo "----------------------------------------" >> "${SUBMISSION_LOG}"
@@ -133,6 +148,7 @@ echo "Submission Complete" | tee -a "${SUBMISSION_LOG}"
 echo "Finished: $(date)" | tee -a "${SUBMISSION_LOG}"
 echo "============================================================" | tee -a "${SUBMISSION_LOG}"
 echo "Jobs submitted: ${JOB_COUNT}" | tee -a "${SUBMISSION_LOG}"
+echo "Jobs skipped (already completed): ${SKIPPED_COUNT}" | tee -a "${SUBMISSION_LOG}"
 echo "Jobs failed: ${FAILED_COUNT}" | tee -a "${SUBMISSION_LOG}"
 echo "============================================================" | tee -a "${SUBMISSION_LOG}"
 echo "" | tee -a "${SUBMISSION_LOG}"
@@ -141,6 +157,9 @@ echo "" | tee -a "${SUBMISSION_LOG}"
 echo "Monitor progress with:" | tee -a "${SUBMISSION_LOG}"
 echo "  squeue -u \$USER" | tee -a "${SUBMISSION_LOG}"
 echo "  squeue -u \$USER | wc -l" | tee -a "${SUBMISSION_LOG}"
+echo "" | tee -a "${SUBMISSION_LOG}"
+echo "Check completed experiments:" | tee -a "${SUBMISSION_LOG}"
+echo "  ls experiment_workspace_v3_phase1_rerun/run_seed*_*/*_ranking_metrics.csv | wc -l" | tee -a "${SUBMISSION_LOG}"
 echo "" | tee -a "${SUBMISSION_LOG}"
 echo "Check submitted jobs:" | tee -a "${SUBMISSION_LOG}"
 echo "  sacct -u \$USER -S $(date +%Y-%m-%dT%H:%M:%S) --format=JobID,JobName%50,State" | tee -a "${SUBMISSION_LOG}"
