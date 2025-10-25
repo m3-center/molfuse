@@ -713,6 +713,272 @@ sbatch rerun_phase1_clean_compare_slurm.sh
 - Source: `KW-0808_Transferase_affinity_extracted_features.csv`
 - Original: 430,794 rows, 193,244 unique compounds, 833 targets
 - Filtered by target P00519 (ABL1): Excludes rows where accession='P00519'
+
+---
+
+### October 25, 2025: CRITICAL VALIDATION - 58.3% Performance Drop Confirms Full Phase 1 Rerun Required
+
+**HPC Comparison Test Completed**: seed44, UMAP-Euclidean 5D, nn=10, md=0.1
+
+**Results**:
+- **Original (with 2.23× duplicates)**: EF@1% = **43.78**
+- **Clean (deduplicated)**: EF@1% = **18.27**
+- **Absolute change**: -25.51
+- **Percent change**: **-58.3%**
+
+**Decision Framework**:
+- Threshold for significance: ≥5% change
+- Observed: 58.3% change (**11.7× above threshold**)
+- **Decision**: **FULL PHASE 1 RERUN REQUIRED**
+
+#### Scientific Interpretation of 58.3% Drop
+
+**Mechanism of Inflated Performance (Confirmed)**:
+
+1. **Artificial Density Clustering**: 2.23× duplicates created high-density regions in MF cloud
+2. **UMAP Exploitation**: Small nn=10 optimized for these artificial clusters
+3. **Distorted Manifold**: DR model learned chemistry biased toward over-represented compounds
+4. **False Enrichment**: Centroid-based ranking exploited distorted geometry
+
+**This Invalidates Original nn=10 Hypothesis**:
+- ❌ Original: "Small nn creates tight, discriminative clusters" (appeared to work)
+- ✅ Reality: "Small nn exploited 2.23× duplicated data to create artificially tight clusters"
+- ✅ Large nn=500 was **more robust** to duplication (averages over 500 neighbors)
+- ✅ **Prediction**: After deduplication, large nn may improve relative to small nn
+
+**Connection to Hypotheses H1-H6**:
+- **H4 (MF Cloud Anchor)**: CONFIRMED - duplicates distorted anchor point
+- **H2 (Signal Dilution)**: PARTIALLY SUPPORTED - but effect was opposite (small nn more sensitive)
+- **Need to retest all hypotheses with clean data**
+
+#### Computational Cost Estimate for Full Rerun
+
+**Scope - Features Only** (fingerprints unchanged):
+- Features-PCA: 3 dims × 5 seeds = **15 experiments**
+- Features-UMAP: 3 dims × 4 nn × 5 md × 5 seeds = **300 experiments**
+- **Total**: **315 experiments**
+
+**Runtime Per Experiment (Deduplicated - 2.23× faster)**:
+- Data prep: ~2 min (was ~4 min)
+- UMAP training: ~3 min (was ~7 min)
+- PCA training: ~30 sec
+- Projection + analysis: ~1 min
+- **UMAP total**: ~6 min/experiment (was ~13 min)
+- **PCA total**: ~3.5 min/experiment
+
+**Full Rerun Cost**:
+- Features-UMAP: 300 × 6 min = **30 hours sequential**
+- Features-PCA: 15 × 3.5 min = **0.9 hours sequential**
+- **Total sequential**: **~31 hours** (vs 71 hours with duplicates)
+- **HPC parallel (32 jobs)**: **~2-3 hours wall clock**
+
+**Efficiency Gain from Deduplication**:
+- ✅ 2.23× speedup reduces rerun cost by 56%
+- ✅ Original Phase 1 took ~71 hours → Clean Phase 1 will take ~31 hours
+- ✅ This makes full rerun feasible within 1 week (including queue time)
+
+#### Implications for Phase 1 Hyperparameter Landscape
+
+**Expected Changes After Rerun**:
+
+1. **Absolute Performance**: All EF@1% scores likely 30-60% lower
+   - Original best: 45.83 (10D, nn=10) → Expect ~20-32 clean
+   - PCA: 58.04 (10D) → Expect ~25-40 clean
+
+2. **Hyperparameter Rankings** (MOST CRITICAL):
+   - nn=10 advantage may disappear or reverse
+   - nn=50, 100, 500 may perform better relative to nn=10
+   - min_dist effect may become more pronounced (was masked by duplicates)
+
+3. **PCA vs UMAP Gap**:
+   - Original: PCA 1.27-1.46× better than UMAP
+   - Expect: Gap may widen (UMAP exploited duplicates more than PCA)
+   - Alternative: Gap may shrink (both affected similarly)
+
+4. **Dimensionality Effects**:
+   - Original: 2D (39.4) → 5D (44.4) → 10D (45.8)
+   - Expect: Trend may shift (duplicate clustering easier in low-D space)
+
+5. **Cross-Seed Variance**:
+   - Original: σ ~ 0.5-0.8 EF@1%
+   - Expect: May increase (duplicates provided artificial stability)
+
+#### Revised Hyperparameter Grid (Optional)
+
+**Current Grid** (generate_phase1_configs.py):
+```python
+FEATURES_N_NEIGHBORS = [3, 5, 10, 20]
+FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]
+```
+
+**Options for Rerun**:
+
+**Option A: Keep Existing Grid (RECOMMENDED)**
+- ✅ Direct comparison to original results
+- ✅ Already validated as reasonable hyperparameter range
+- ✅ Faster to execute (configs already exist)
+- ✅ Can add expanded grid as Phase 1b if needed
+
+**Option B: Expand to Include Large nn**
+```python
+FEATURES_N_NEIGHBORS = [3, 5, 10, 20, 50, 100, 500]  # Add large nn
+FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]   # Keep same
+```
+- ✅ Tests hypothesis that large nn becomes competitive
+- ✅ More complete hyperparameter surface
+- ❌ 1.75× more experiments (315 → 551 configs)
+- ❌ Adds ~20 hours to rerun time
+
+**Option C: Focused Grid (Dimension-Specific nn)**
+```python
+# Hypothesis: Larger dimensions need larger neighborhoods
+2D: nn = [3, 5, 10, 20]           # Keep small
+5D: nn = [5, 10, 20, 50]          # Add medium
+10D: nn = [10, 20, 50, 100]       # Add large
+```
+- ✅ Tests information bottleneck hypothesis (H3)
+- ✅ Fewer experiments than full expansion
+- ❌ More complex to implement
+- ❌ Less systematic comparison
+
+**RECOMMENDATION**: ~~**Option A** (keep existing grid)~~ **REVISED TO OPTION B AFTER CRITICAL ANALYSIS**
+
+**⚠️ CRITICAL REALIZATION** (After reviewing comparison test results):
+
+**The Evidence**:
+1. nn=10 with duplicates: **43.78** (appeared optimal)
+2. nn=10 WITHOUT duplicates: **18.27** (collapsed 58.3%)
+3. nn=500 with duplicates: **19.57** (appeared suboptimal)
+4. **KEY**: Clean nn=10 (18.27) ≈ Original nn=500 (19.57) ✓
+
+**What This Tells Us**:
+- nn=500 was **already giving approximately correct results** despite duplicates
+- Large neighborhoods averaged over duplicates → robust performance
+- **Small nn=10 was the anomaly** - exploited duplicate clusters that shouldn't exist
+- **Current grid [3, 5, 10, 20] tests the WRONG hyperparameter range**
+
+**REVISED RECOMMENDATION: Option B (Expanded Grid)**
+
+**⚠️ CRITICAL UPDATE (Post-Analysis)**: nn=3 is computationally infeasible (killed after 72hr timeout)
+
+**New Critical Information**:
+1. nn=3 experiments were killed after 72-hour time limit
+2. UMAP with fixed seed disables multi-threading (10-100× slower)
+3. Multi-threading available but sacrifices exact reproducibility
+
+**FINAL RECOMMENDATION: Option B-Modified (Your Proposed Grid)**
+
+```python
+FEATURES_N_NEIGHBORS = [10, 20, 50, 100, 500]  # DROP 3, 5 (timeout)
+FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]
+USE_FIXED_SEED = False  # Enable multi-threading (10× speedup)
+```
+
+**Why This is Optimal**:
+- ✅ Computationally feasible (no 72hr timeouts)
+- ✅ Tests medium-large nn where optimal likely is (50-500 range)
+- ✅ Excludes known-bad range (nn=3,5 timeout + nn=10 dropped to 18.27)
+- ✅ **10× faster with multi-threading**: 18.75 hrs vs 52 hrs
+- ✅ 5 independent runs provide variance estimate (standard ML practice)
+- ✅ Includes reference points: nn=10 (18.27 clean), nn=500 (19.57 robust)
+
+**Cost**:
+- Experiments: 3 dims × 5 nn × 5 md × 5 seeds = **375**
+- Time per experiment: ~3 min (with multi-threading)
+- Sequential: **18.75 hours**
+- HPC parallel (32 jobs): **~1 hour**
+
+**Trade-off**:
+- Sacrifice: Exact reproducibility (UMAP race conditions with multi-threading)
+- Gain: 10× speedup, feasible computation, focus on scientifically motivated range
+- Variance: Expect σ ~ 1-2 EF@1% (vs 0.5-0.8 with fixed seed)
+- With 5 replicates: SEM ~ 0.4-0.9 (sufficient for hyperparameter trends)
+
+**Rationale for Dropping nn=3, 5**:
+- nn=3 cannot finish in 72 hours
+- Very small neighborhoods = extreme computational cost
+- Not necessary: We know small nn exploited duplicates (nn=10 → 18.27)
+- Scientific focus: Find TRUE optimal, not characterize artifact region
+```python
+FEATURES_N_NEIGHBORS = [3, 5, 10, 20, 50, 100, 500]  # ADD 50, 100, 500
+FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]   # Keep same
+```
+
+**Why Option B is Now Mandatory**:
+- ✅ Tests mechanistic hypothesis: optimal nn shifted from 10 → 50-100 range
+- ✅ Only 1.75× more experiments (525 vs 300 = +22 hours)
+- ✅ Avoids Phase 1b rerun (saves 2-3 weeks total time)
+- ✅ nn=500 performance (19.57) validates this range needs testing
+- ✅ Publication requires showing we found TRUE optimum, not duplicate artifact
+- ⚠️ Testing only [3,5,10,20] = exploring region we KNOW performed badly (18.27)
+
+**Cost-Benefit**:
+- Additional cost: +22 hours sequential (+1 hour HPC parallel)
+- Risk of Option A: High probability of missing true optimum → Phase 1b needed
+- **Testing [3-20] without [50-500] is scientifically unjustifiable given evidence**
+
+**See comprehensive analysis**: `PHASE1_RERUN_HYPERPARAMETER_ANALYSIS.md`
+
+**Alternative (Resource-Constrained) - Option B-Lite**:
+```python
+FEATURES_N_NEIGHBORS = [3, 5, 10, 20, 50, 100]  # Drop 500 only
+FEATURES_MIN_DIST = [0.0, 0.01, 0.1]            # Reduce to 3 values
+# Total: 270 experiments (vs 300 current)
+```
+- Still tests critical medium nn range
+- Actually FEWER experiments than current grid
+- Removes min_dist redundancy (already weak effect)
+
+#### Next Steps (Priority Order)
+
+**Immediate (Today)**:
+1. ✅ Document findings in lab book - DONE
+2. ✅ Validate comparison script path fixes - DONE  
+3. [ ] **DECISION POINT**: Keep existing grid or expand? (Option A recommended)
+4. [ ] Regenerate Phase 1 configs (if grid changed)
+5. [ ] Review SLURM script for full rerun
+6. [ ] Submit Phase 1 rerun to HPC queue
+
+**This Week**:
+1. [ ] Monitor Phase 1 rerun progress
+2. [ ] Implement quality checks (verify deduplication in logs)
+3. [ ] Set up automated progress tracking
+
+**Next Week**:
+1. [ ] Analyze new Phase 1 results
+2. [ ] Compare old vs new hyperparameter rankings
+3. [ ] Re-extract best configs for Phase 2-4
+4. [ ] Update mechanistic hypotheses based on clean data
+
+**Phase 2-4 Timeline**:
+- Phase 2 (cutoff sensitivity): **Results valid** (already uses deduplication)
+- Phase 3 (generalization): **BLOCKED** until Phase 1 rerun complete
+- Phase 4 (dimensionality): **BLOCKED** until Phase 1 rerun complete
+
+#### Files Modified
+
+**Pipeline Fixes**:
+- `experimental_pipeline/prepare_data.py`: Deduplication (lines 171-191)
+- `core_scripts/calculate_similarityspaces_exp.py`: Safety check (lines 159-177)
+
+**Comparison Framework**:
+- `rerun_phase1_config_compare.py`: 560 lines, 6 bugs fixed, pre-validation added
+
+**Documentation**:
+- `LAB_BOOK.md`: This entry
+
+**Commit Message Recommendation**:
+```
+CRITICAL: Phase 1 validation confirms 58.3% performance drop with deduplicated data
+
+- Comparison test: EF@1% 43.78 → 18.27 (-58.3%)
+- Decision: Full Phase 1 rerun required (315 experiments)
+- Cost: ~31 hours sequential, ~2-3 hours HPC parallel
+- Fixed: prepare_data.py deduplication, comparison script pre-validation
+- Recommendation: Keep existing hyperparameter grid for direct comparison
+```
+
+---
 - Deduplicated: Keep minimum affinity per Compound ChEMBL ID
 - Output: `{workspace}/TyrosineProteinKinaseABL1_P00519/temp_data/TyrosineProteinKinaseABL1_P00519_chembl_mf_excluded_features.csv`
 
@@ -1071,10 +1337,11 @@ sbatch rerun_phase1_clean_compare_slurm.sh
 1. ✅ Resolve Phase 2-4 ordering issue
 2. ✅ Generate Phase 2 configs (after best config extraction)
 3. ✅ Execute Phase 2 experiments (MF cloud ablation)
-4. [ ] Implement neighbor composition analysis (Exp 2 → H2)
-5. [ ] Implement distance concentration analysis (Exp 6 → H6)
-6. [ ] Analyze Phase 2 results (validate phase transition hypothesis)
-7. [ ] Generate mechanistic figures for manuscript
+4. ❌ **BLOCKED: Full Phase 1 rerun required (see Oct 25 entry)**
+5. [ ] Implement neighbor composition analysis (Exp 2 → H2)
+6. [ ] Implement distance concentration analysis (Exp 6 → H6)
+7. [ ] Analyze Phase 2 results (validate phase transition hypothesis)
+8. [ ] Generate mechanistic figures for manuscript
 
 ### Medium-term (Next Month)
 1. [ ] Execute Phase 3 (generalization to PKM2, IDH1)

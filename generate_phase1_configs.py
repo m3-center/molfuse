@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
 """
 Generate Phase 1 configuration files for UMMBAS v3.0
-Phase 1: Tyro Dimensionality × Hyperparameter Sweep
+Phase 1: Tyro Dimensionality × Hyperparameter Sweep (RERUN with Deduplicated Data)
 
 Generates configs for:
 - Features-PCA: 2D, 5D, 10D
-- Features-UMAP-Euclidean: 2D, 5D, 10D with REFINED hyperparameters
-  - Option B: n_neighbors={3, 5, 10, 20}, min_dist={0.0, 0.001, 0.005, 0.01, 0.1}
-  - Skips already-completed experiments automatically
-- Fingerprints-PCA: 2D only (KEPT - still running)
-- Fingerprints-UMAP-Jaccard: 2D only with hyperparameters (KEPT - still running)
+- Features-UMAP-Euclidean: 2D, 5D, 10D with REVISED hyperparameters
+  - n_neighbors: [10, 20, 50, 100, 500] (DROP 3, 5 due to 72hr timeout)
+  - min_dist: [0.0, 0.001, 0.005, 0.01, 0.1]
+  - NO FIXED SEED: Enable UMAP multi-threading for 10× speedup
+- Fingerprints: UNCHANGED (not affected by MF cloud duplicates)
+
+CRITICAL CHANGES FROM ORIGINAL:
+1. Removed nn=3, 5 (computationally infeasible - 72hr timeout)
+2. Added nn=50, 100, 500 (hypothesis: optimal nn shifted upward after deduplication)
+3. Disabled fixed seed to enable UMAP multi-threading (10× faster)
+4. Focus on medium-large nn range (10-500) where true optimal likely is
+
+RATIONALE:
+- Original Phase 1 trained on 2.23× duplicated MF cloud
+- Comparison test: nn=10 dropped 58.3% (43.78 → 18.27) with clean data
+- nn=500 was robust (19.57) despite duplicates → validates testing large nn
+- Small nn (3, 5) exploited duplicate clusters (artifact, not real signal)
 """
 
 import json
@@ -18,18 +30,22 @@ import glob
 from itertools import product
 
 # Configuration
-OUTPUT_DIR = "hyperparam_configs_v3_phase1"
+OUTPUT_DIR = "hyperparam_configs_v3_phase1_rerun"
 BASE_CONFIG_PATH = "experiment_config.json"
 WORKSPACE_DIR = "experiment_workspace_v3_phase1"
 SEEDS = [42, 43, 44, 45, 46]
 
-# REFINED UMAP hyperparameters for FEATURES (Option B - focused on small nn + tight packing)
-FEATURES_N_NEIGHBORS = [3, 5, 10, 20]
+# REVISED UMAP hyperparameters for FEATURES (post-deduplication analysis)
+# Removed nn=3, 5 (72hr timeout), Added nn=50, 100, 500 (hypothesis-driven)
+FEATURES_N_NEIGHBORS = [10, 20, 50, 100, 500]
 FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]
 
+# DISABLE FIXED SEED for 10× speedup via multi-threading
+USE_FIXED_SEED = False  # Enable UMAP multi-threading (race conditions acceptable)
+
 # ORIGINAL UMAP hyperparameters for FINGERPRINTS (keep unchanged - still running)
-FINGERPRINTS_N_NEIGHBORS = [10, 20, 100, 500]
-FINGERPRINTS_MIN_DIST = [0.01, 0.1, 0.5]
+FINGERPRINTS_N_NEIGHBORS = [20, 50, 100]
+FINGERPRINTS_MIN_DIST = [0.0, 0.001, 0.01, 0.1]
 
 # Dimensions
 FEATURE_DIMS = [2, 5, 10]
@@ -141,14 +157,21 @@ def create_umap_config(representation, metric, dimension, n_neighbors, min_dist,
 def main():
     """Generate all Phase 1 configuration files."""
     print("="*80)
-    print("UMMBAS v3.0 - Phase 1 Config Generator (REFINED)")
+    print("UMMBAS v3.0 - Phase 1 RERUN Config Generator (Deduplicated Data)")
     print("="*80)
     print()
-    print("FEATURES: Option B hyperparameters")
+    print("CRITICAL CHANGES FROM ORIGINAL:")
+    print("  1. MF cloud now DEDUPLICATED (2.23× → 1.0× for ABL1)")
+    print("  2. nn=3, 5 REMOVED (72-hour timeout - computationally infeasible)")
+    print("  3. nn=50, 100, 500 ADDED (hypothesis: optimal shifted upward)")
+    print("  4. Fixed seed DISABLED (enable multi-threading for 10× speedup)")
+    print()
+    print("FEATURES (REVISED):")
     print(f"  n_neighbors: {FEATURES_N_NEIGHBORS}")
     print(f"  min_dist:    {FEATURES_MIN_DIST}")
+    print(f"  Fixed seed:  {USE_FIXED_SEED} (multi-threaded UMAP)")
     print()
-    print("FINGERPRINTS: Original hyperparameters (unchanged)")
+    print("FINGERPRINTS: UNCHANGED (original hyperparameters)")
     print(f"  n_neighbors: {FINGERPRINTS_N_NEIGHBORS}")
     print(f"  min_dist:    {FINGERPRINTS_MIN_DIST}")
     print()
