@@ -7,7 +7,7 @@
 # =============================================================================
 
 # --- Configuration ---
-CONFIG_DIR="hyperparam_configs_v3_phase1_rerun"
+CONFIG_DIR="hyperparam_configs_v3_phase1"
 SLURM_SCRIPT="hpc/ummbas_v3_cpu_array.sh"
 BATCH_SIZE=50  # Maximum tasks per array job
 
