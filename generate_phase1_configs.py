@@ -39,7 +39,7 @@ SEEDS = [42, 43, 44, 45, 46]
 
 # REVISED UMAP hyperparameters for FEATURES (post-deduplication analysis)
 # Removed nn=3, 5 (72hr timeout), Added nn=50, 100, 500 (hypothesis-driven)
-FEATURES_N_NEIGHBORS = [10, 20, 50, 100, 500]
+FEATURES_N_NEIGHBORS = [5, 10, 20, 50, 100, 500]
 FEATURES_MIN_DIST = [0.0, 0.001, 0.005, 0.01, 0.1]
 
 # DISABLE FIXED SEED for 10× speedup via multi-threading
