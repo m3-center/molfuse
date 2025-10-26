@@ -1,3 +1,22 @@
+### October 26, 2025: Phase 1 config generator — replicates and full grids
+
+- Changes Made (Scripts)
+  - Updated `scripts/generate_molfuse_phase1_configs_v4.py` to generate 5 replicates for every configuration.
+  - Grids implemented:
+    - PCA: features and fingerprints, dims [2, 5, 10], 5 replicates each
+    - UMAP (features): Euclidean, dims [2, 5, 10], n_neighbors [5, 10, 50, 100, 500], min_dist [0.0, 0.01, 0.05, 0.1], 5 replicates
+    - UMAP (fingerprints): Jaccard, dims [2, 5, 10], n_neighbors [5, 10, 50, 100, 500], min_dist [0.0, 0.01, 0.05, 0.1], 5 replicates
+  - Each config includes a `replicate` field and a `run_name` with `_rep{n}` for separate run folders.
+  - Fingerprint CSV suffix fixed to `_ECFP4.csv` to match dataset files.
+
+- Rationale
+  - Replicates quantify variability (UMAP is stochastic with seedless parallelism) and enforce separate run directories.
+  - Full grids ensure coverage requested for both representations and metrics.
+
+- Next Steps
+  - Submit generated configs via `hpc/submit_molfuse_phase1.sh` for Phase 1 batch execution.
+  - Add a status checker to monitor replicate completion rates per hyperparameter.
+
 # UMMBAS v3.0 Lab Book
 
 **Period**: October 2025  

@@ -44,11 +44,15 @@ Notes:
 
 ## HPC usage (SLURM)
 
-1) Generate Phase 1 configs:
+1) Generate Phase 1 configs (replicates and full grids):
 
   python scripts/generate_molfuse_phase1_configs_v4.py
 
   Outputs to `configs/molfuse_phase1_grid/`.
+  - PCA: features and fingerprints, dims [2,5,10], 5 replicates
+  - UMAP (features): Euclidean, dims [2,5,10], n_neighbors [5,10,50,100,500], min_dist [0.0,0.01,0.05,0.1], 5 replicates
+  - UMAP (fingerprints): Jaccard, dims [2,5,10], n_neighbors [5,10,50,100,500], min_dist [0.0,0.01,0.05,0.1], 5 replicates
+  Each config includes a `replicate` tag and a unique `run_name` with `_rep{n}`; runs write to separate folders.
 
 2) Submit jobs:
 
