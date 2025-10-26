@@ -7,7 +7,6 @@ set -euo pipefail
 
 CONFIG_DIR="${1:-configs/molfuse_phase1_grid}"
 WORKSPACE_DIR="${2:-experiment_workspace_v4}"
-CONDA_ENV="${3:-ummbas_screening}"
 
 if [[ ! -d "$CONFIG_DIR" ]]; then
   echo "Config directory not found: $CONFIG_DIR" >&2
@@ -19,7 +18,7 @@ mkdir -p slurm_logs || true
 COUNT=0
 for cfg in "$CONFIG_DIR"/*.json; do
   if [[ ! -f "$cfg" ]]; then continue; fi
-  sbatch hpc/molfuse_phase1_cpu.sh "$cfg" "$WORKSPACE_DIR" "$CONDA_ENV"
+  sbatch hpc/molfuse_phase1_cpu.sh "$cfg" "$WORKSPACE_DIR"
   COUNT=$((COUNT+1))
   sleep 0.1
 done

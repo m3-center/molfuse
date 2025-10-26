@@ -16,7 +16,6 @@
 set -euo pipefail
 CONFIG_PATH="${1:-}"
 WORKSPACE_DIR="${2:-experiment_workspace_v4}"
-CONDA_ENV="${3:-ummbas_screening}"
 
 if [[ -z "$CONFIG_PATH" ]]; then
   echo "CONFIG_JSON path is required as first argument" >&2
@@ -25,5 +24,5 @@ fi
 
 mkdir -p slurm_logs || true
 
-mamba activate "$CONDA_ENV"
+source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
 python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
