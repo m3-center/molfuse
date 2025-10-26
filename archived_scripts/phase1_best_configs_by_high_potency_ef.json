@@ -1,0 +1,102 @@
+{
+  "features_pca_dim2": {
+    "representation": "features",
+    "method": "PCA",
+    "dimension": 2,
+    "high_ef_1_pct_mean": 36.64118651886723,
+    "high_ef_1_pct_std": 0.0,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "features_pca_dim5": {
+    "representation": "features",
+    "method": "PCA",
+    "dimension": 5,
+    "high_ef_1_pct_mean": 37.63992414118729,
+    "high_ef_1_pct_std": 0.0,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "features_pca_dim10": {
+    "representation": "features",
+    "method": "PCA",
+    "dimension": 10,
+    "high_ef_1_pct_mean": 36.82844982305224,
+    "high_ef_1_pct_std": 0.0,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "features_umap_euclidean_dim2": {
+    "representation": "features",
+    "method": "UMAP-Euclidean",
+    "dimension": 2,
+    "n_neighbors": 10,
+    "min_dist": 0.0,
+    "high_ef_1_pct_mean": 34.26918466585708,
+    "high_ef_1_pct_std": 1.259298343142596,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "features_umap_euclidean_dim5": {
+    "representation": "features",
+    "method": "UMAP-Euclidean",
+    "dimension": 5,
+    "n_neighbors": 5,
+    "min_dist": 0.0,
+    "high_ef_1_pct_mean": 57.56786076154225,
+    "high_ef_1_pct_std": 1.982054274997311,
+    "n_seeds": 4,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "features_umap_euclidean_dim10": {
+    "representation": "features",
+    "method": "UMAP-Euclidean",
+    "dimension": 10,
+    "n_neighbors": 5,
+    "min_dist": 0.0,
+    "high_ef_1_pct_mean": 58.23888760153854,
+    "high_ef_1_pct_std": 1.4692182343846685,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "fingerprints_pca_2d": {
+    "representation": "fingerprints",
+    "method": "PCA",
+    "dimension": 2,
+    "high_ef_1_pct_mean": 2.9085088259180556,
+    "high_ef_1_pct_std": 0.2257935327355507,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "fingerprints_umap_jaccard_2d": {
+    "representation": "fingerprints",
+    "method": "UMAP-Jaccard",
+    "dimension": 2,
+    "n_neighbors": 20,
+    "min_dist": 0.01,
+    "high_ef_1_pct_mean": 28.94836348531261,
+    "high_ef_1_pct_std": 1.746447769870288,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "best_pca_overall": {
+    "representation": "features",
+    "method": "PCA",
+    "dimension": 5,
+    "high_ef_1_pct_mean": 37.63992414118729,
+    "high_ef_1_pct_std": 0.0,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  },
+  "best_umap_overall": {
+    "representation": "features",
+    "method": "UMAP-Euclidean",
+    "dimension": 10,
+    "n_neighbors": 5,
+    "min_dist": 0.0,
+    "high_ef_1_pct_mean": 58.23888760153854,
+    "high_ef_1_pct_std": 1.4692182343846685,
+    "n_seeds": 5,
+    "selection_criterion": "high_potency_ef_1_pct"
+  }
+}
