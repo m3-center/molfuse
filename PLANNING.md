@@ -34,6 +34,11 @@
 - [ ] Validate orchestrator recomputation safeguard (freshness check) by rerunning a representative PCA-features config post-dedup; record EF@1% in LAB_BOOK.md
 - [ ] Add integrity assertion: verify MF cloud row count in simspace equals dedup source; abort with actionable message on mismatch
 
+### ⚙️ Scoring Optimization & Validation
+- [ ] Run benchmark: `analysis_scripts/benchmark_cdist_vs_kdtree.py` on representative PCA/UMAP configs (2D/5D/10D) with full MF cloud and large ZINC sample
+- [ ] Decide adoption: If exact NN matches `cdist` within tolerance and is faster, switch `project_and_analyze.py` to use exact NN (feature-flagged), retain `cdist` as fallback
+- [ ] Document change in `README.md` and `LAB_BOOK.md`; add a brief note in `ARCHIVE.md` if the brute-force path becomes deprecated
+
 ### 📋 Pending Tasks
 
 #### Phase 2: Affinity Cutoff Sensitivity (40 runs) **[REORDERED - was Phase 4]**

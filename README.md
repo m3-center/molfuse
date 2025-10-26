@@ -310,3 +310,48 @@ For questions or issues, please open a GitHub issue or contact [your email].
 **Version**: 3.0  
 **Last Updated**: October 2025  
 **Branch**: `3.0`
+
+## Benchmark: cdist vs KDTree/BallTree (exact NN)
+
+This repository includes a benchmark to compare the current scoring bottleneck (batched `scipy.spatial.distance.cdist`) against an exact 1-NN index using scikit-learn's `NearestNeighbors` with KDTree/BallTree. In low/medium dimensions (2–10), the KDTree/BallTree approach is typically faster and memory-friendlier while producing identical nearest-neighbor distances (within floating-point tolerance), so rankings and EF metrics remain unchanged.
+
+Script: `analysis_scripts/benchmark_cdist_vs_kdtree.py`
+
+Inputs and behavior
+- Reads a Phase 1/2 simspace CSV (MF cloud + ZINC) and splits MF vs ZINC automatically using `DataSource` or `MOLECULE ID`.
+- Optionally reads a projected actives CSV to benchmark both decoys and actives.
+- Computes min distance to MF cloud via both methods and compares timings and equality.
+- Outputs a JSON summary and optional CSV sample of distances.
+
+Example usage (HPC-friendly)
+
+```bash
+# ZINC-only benchmark (uses all MF cloud points, samples queries for speed)
+python analysis_scripts/benchmark_cdist_vs_kdtree.py \
+  --simspace_csv_path /path/to/simspace.csv \
+  --dr_short_name PCA \
+  --simspace_dim 5 \
+  --query_source zinc \
+  --sample_query 100000 \
+  --algorithm kd_tree \
+  --batch_size 5000 \
+  --tolerance 1e-6 \
+  --output_json kd_benchmark_zinc.json
+
+# Actives + ZINC (if you have the projected actives CSV)
+python analysis_scripts/benchmark_cdist_vs_kdtree.py \
+  --simspace_csv_path /path/to/simspace.csv \
+  --actives_csv_path /path/to/TARGET_actives_complete_features_PCA_dim5.csv \
+  --dr_short_name PCA \
+  --simspace_dim 5 \
+  --query_source both \
+  --sample_query 50000 \
+  --algorithm kd_tree \
+  --output_json kd_benchmark_both.json \
+  --save_sample_csv kd_benchmark_sample.csv
+```
+
+Notes
+- Exact NN only: `NearestNeighbors` with `algorithm=kd_tree`/`ball_tree` is exact for Euclidean distance. Results should match `cdist` within a small tolerance (defaults to 1e-6).
+- High dimensions: In very high-D (>~50), tree-based speedups may diminish; `cdist` can then be competitive.
+- Memory: The NN approach avoids allocating large N×M distance matrices.

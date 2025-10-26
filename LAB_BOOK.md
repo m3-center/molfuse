@@ -458,6 +458,25 @@ experiment_workspace_v3_phase1/
 
 ## Lab Book Entries
 
+### October 26, 2025: Benchmarking cdist vs Exact KDTree/BallTree for Scoring
+- Changes Made (Code or configuration)
+  - Added `analysis_scripts/benchmark_cdist_vs_kdtree.py` to compare the current scoring method (batched `scipy.spatial.distance.cdist`) against an exact 1-NN index using scikit-learn's `NearestNeighbors` (KDTree/BallTree) on real simspace data.
+  - Updated `README.md` with usage instructions and HPC-friendly examples.
+
+- Experiments Run
+  - Pending HPC execution on representative PCA-features and UMAP-features runs (2D/5D/10D) using full MF cloud and a large ZINC sample.
+  - Inputs: Phase 1/2 simspace CSV; optional projected actives CSV to include actives in the comparison.
+
+- Hypothesis
+  - Exact KDTree/BallTree will produce identical min-distance results to `cdist` (within a small numerical tolerance), and run faster with lower memory footprint at 2–10 dimensions.
+
+- Success Criteria
+  - Equality: `allclose=True` with max absolute difference ≤ 1e-6 and fraction exceeding tolerance ≈ 0%.
+  - Performance: NN method wall time < cdist wall time for both actives and ZINC decoys.
+
+- Next Steps
+  - If equality holds and speedup is material, replace `cdist` in `project_and_analyze.py` with an exact NN backend (feature-flagged), and document the change.
+
 ### October 26, 2025: PCA vs UMAP Dedup Divergence — Root Cause and Fix
 - Changes Made (Code or configuration)
   - Updated `main_orchestrator.py` Step 2b to avoid stale artifact reuse by checking input freshness before skipping similarity space recomputation.
