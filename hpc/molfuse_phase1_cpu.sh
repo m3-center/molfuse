@@ -2,16 +2,16 @@
 #SBATCH --job-name=molfuse_p1
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
+#SBATCH --ntasks-per-node=64
+#SBATCH --mem=128G
 #SBATCH --output=slurm_logs/%x_%j.out
 #SBATCH --error=slurm_logs/%x_%j.err
-#SBATCH --time=04:00:00
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=128G
+#SBATCH --time=0-12:00:00
 
 # Usage:
-# sbatch hpc/molfuse_phase1_cpu.sh <CONFIG_JSON> <WORKSPACE_DIR> [CONDA_ENV]
+# sbatch hpc/molfuse_phase1_cpu.sh <CONFIG_JSON> <WORKSPACE_DIR> 
 # Example:
-# sbatch hpc/molfuse_phase1_cpu.sh configs/molfuse_phase1_grid/ABL1_PCA_features_10d.json experiment_workspace_v4 ummbas_screening
+# sbatch hpc/molfuse_phase1_cpu.sh configs/molfuse_phase1_grid/ABL1_PCA_features_10d.json experiment_workspace_v4
 
 set -euo pipefail
 CONFIG_PATH="${1:-}"

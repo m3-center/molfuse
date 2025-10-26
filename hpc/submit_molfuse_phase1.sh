@@ -3,7 +3,7 @@
 # Usage: bash hpc/submit_molfuse_phase1.sh [CONFIG_DIR] [WORKSPACE_DIR] [CONDA_ENV]
 # Defaults: CONFIG_DIR=configs/molfuse_phase1_grid, WORKSPACE_DIR=experiment_workspace_v4, CONDA_ENV=ummbas_screening
 
-set -euo pipefail
+# set -euo pipefail
 
 CONFIG_DIR="${1:-configs/molfuse_phase1_grid}"
 WORKSPACE_DIR="${2:-experiment_workspace_v4}"
