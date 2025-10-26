@@ -2,7 +2,7 @@
 ##SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
-#SBATCH --mem=128G
+#SBATCH --mem=160G
 #SBATCH --time=0-24:00:00
 
 # Usage:
