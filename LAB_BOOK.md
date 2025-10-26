@@ -458,6 +458,32 @@ experiment_workspace_v3_phase1/
 
 ## Lab Book Entries
 
+### October 26, 2025: v4.0 (molfuse) refactor planning and invariants
+- Changes Made (Design)
+  - Initiated molfuse v4.0 scaffold to align HPC Phase 1/2 with the validated independent test harness.
+  - Established invariants:
+    - StandardScaler fits on MF+ZINC only; actives are projected using this scaler (no leakage).
+    - UMAP runs without a fixed seed (random_state=None) to enable multi-threaded execution on HPC.
+    - Exact 1-NN scoring backend in embedded space is the default; distance-based score = -min_distance.
+    - Affinity cutoff applies to MF cloud for scoring only; actives are never filtered by cutoff.
+    - Spearman’s rho(pActivity vs score) is computed and reported for actives.
+    - Target-preserving exclusion enforced: any compound associated with the target is excluded from MF cloud.
+  - Planned artifacts: structured run workspace, robust logging, potency-stratified (Phase 1) and cutoff sensitivity (Phase 2) analyses, plus a status checker.
+
+- Experiments Run
+  - None yet under v4.0; this is a planning entry. Independent harness results guide the invariants.
+
+- Observations and Results
+  - Independent test confirmed exact 1-NN equivalence to cdist with major speedups, motivating backend switch.
+  - Removing fixed seeds enables parallel UMAP, addressing prior runtime and occasional segfault issues.
+  - Clear misalignments identified in v3.0 (dedup policy, overlap removal, cutoff application) are rectified by v4.0 design.
+
+- Next Steps
+  - Scaffold package modules and CLI for Phase 1 end-to-end; add base config; perform a small local smoke test.
+  - Prepare HPC scripts for Phase 1/2; port potency and cutoff analyses; add status checker.
+
+---
+
 ### October 26, 2025: Benchmarking cdist vs Exact KDTree/BallTree for Scoring
 - Changes Made (Code or configuration)
   - Added `analysis_scripts/benchmark_cdist_vs_kdtree.py` to compare the current scoring method (batched `scipy.spatial.distance.cdist`) against an exact 1-NN index using scikit-learn's `NearestNeighbors` (KDTree/BallTree) on real simspace data.

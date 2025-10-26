@@ -14,6 +14,7 @@
 - **📊 Lab Book**: [`LAB_BOOK.md`](LAB_BOOK.md) - Experimental log and findings
 - **📋 Planning**: [`PLANNING.md`](PLANNING.md) - Task tracking and next steps
 - **🗄️ Archive**: [`ARCHIVE.md`](ARCHIVE.md) - Deprecated features and scripts
+ - **🔧 v4.0 Scaffold (molfuse)**: [`README_V4_MOLFUSE.md`](README_V4_MOLFUSE.md) - Invariants and new CLIs (Phase 1/2) under active development
 
 ## Abstract
 

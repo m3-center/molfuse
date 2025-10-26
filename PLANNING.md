@@ -1,12 +1,175 @@
-# UMMBAS v3.0 Planning & Task Tracking
+# molfuse v4.0 Planning & Task Tracking (formerly UMMBAS)
 
-**Last Updated**: October 18, 2025  
-**Branch**: 3.0  
-**Status**: Phase 1 analysis in progress
+**Last Updated**: October 26, 2025  
+**Branch**: 4.0  
+**Status**: v4.0 refactor planning; Phase 1/2 pipelines to be re-implemented
 
 ---
 
-## Task Checklist
+## v4.0 Refactor Overview (Scope and Objectives)
+
+We are refactoring the repository into “molfuse” (new name) with a clean, modular pipeline that matches the validated independent workflow while enabling independent execution of Phase 1 and Phase 2 on HPC. Key invariants:
+
+- StandardScaler fits on MF cloud + ZINC only; held-out actives are transformed with the same scaler (no leakage).
+- No fixed seed: UMAP runs with random_state=None to enable parallelism; PCA uses sklearn defaults.
+- Exact 1-NN (NearestNeighbors) scoring in embedded space; cdist available as fallback only for debugging.
+- Affinity cutoff applies to MF cloud for scoring only; actives are never filtered by affinity.
+- Report Spearman’s rho between pActivity and score on actives.
+- Enforce target-preserving exclusion: compounds linked to the target are held-out, never in MF cloud.
+- Strong logging and deterministic workspace layout; analysis scripts for Phase 1 and Phase 2 included; status checker provided.
+
+---
+
+## v4.0 Architecture Plan
+
+### Package layout (new)
+
+```
+molfuse/
+   data/
+      readers.py              # Chunked CSV IO; schema validation
+      features.py             # Feature selection (rdkit list or fallback detector)
+      splits.py               # Build held-out set, target-preserving exclusion, overlap removal
+   dr/
+      scaling.py              # StandardScaler/PassthroughScaler helpers
+      pca.py                  # Projection-only PCA fit/transform
+      umap.py                 # Projection-only UMAP fit/transform (random_state=None)
+   scoring/
+      neighbors.py            # Exact 1-NN scoring + detailed k-NN + centroid distance
+   metrics/
+      enrichment.py           # ROC-AUC, PR-AUC, EF@1/5/10
+      correlations.py         # Spearman rho vs Standard Value (nM) → pActivity
+   phases/
+      phase1.py               # Hyperparameter/dim sweeps; projection-only
+      phase2.py               # Cutoff sweeps; reuse Phase 1 models/simspaces
+      common.py               # Shared orchestration utilities
+   io/
+      artifacts.py            # Save/load scalers/models/simspaces (compress_pickle)
+      layout.py               # Run/workspace layout resolution
+      logging.py              # Run-scoped logging setup
+   analysis/
+      phase1_potency.py       # Port of potency-stratified analysis (v4 API)
+      phase2_cutoffs.py       # Port of Phase 2 cutoff analysis/plots (v4 API)
+      status_check.py         # Live status checker (progress across runs)
+   cli/
+      molfuse_phase1.py       # CLI for Phase 1 execution
+      molfuse_phase2.py       # CLI for Phase 2 execution
+      molfuse_prepare.py      # Optional: prepare filtered MF/ZINC files
+configs/
+   base.json                 # Paths, features list, MF KW CSV, defaults
+   phase1_grid.json          # Dims and UMAP grids (features/fingerprints)
+   phase2_cutoffs.json       # Cutoff list for Phase 2
+hpc/
+   molfuse_phase1_cpu.sh     # SLURM single-job runner
+   molfuse_phase2_cpu.sh     # SLURM single-job runner
+   submit_phase1.sh          # Grid submit helper
+   submit_phase2.sh          # Grid submit helper
+workspace_v4/
+docs/
+   README.md                 # Main usage + HPC guides
+   README_PHASE1.md          # Phase 1 usage and outputs
+   README_PHASE2.md          # Phase 2 usage and outputs
+```
+
+Notes:
+- All UMAP runs are parallel (no fixed seed). Logs explicitly state non-determinism.
+- Fingerprints: UMAP-Jaccard only, no scaling; PCA allowed but documented as baseline.
+- Features: UMAP-Euclidean; StandardScaler required.
+
+### Config schema (unified)
+
+```
+{
+   "project_name": "molfuse",
+   "workspace_root": "workspace_v4/",
+   "targets": [
+      {"id_name": "TyrosineProteinKinaseABL1_P00519", "display_name": "ABL1", "uniprot_id": "P00519",
+       "mf_canonical_name": "Transferase", "mf_filename_segment": "Transferase", "kw_code": "KW-0808"}
+   ],
+   "data_paths": {
+      "chembl_affinity_full_csv": "...",
+      "chembl_target_mapping_csv": "...",
+      "mf_features_dir": "datasets/molecular_function_features_fingerprints/",
+      "zinc_features_csv": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
+      "molecular_function_keywords_csv": "datasets/chembl/molecular_function_keywords.csv"
+   },
+   "rdkit_features_list": ["MolWt", "TPSA", "NumAromaticRings", ...],
+   "umap": {"init": "spectral", "low_memory": false},
+   "scoring": {"backend": "nn", "k_for_knn": [1,5,10]},
+   "phase_defaults": {
+      "simspace_dims_features": [2,5,10],
+      "simspace_dims_fingerprints": [2],
+      "features_umap_grid": {"n_neighbors": [10,20,50,100,500], "min_dist": [0.0,0.001,0.005,0.01,0.1]},
+      "fingerprints_umap_grid": {"n_neighbors": [20,50,100], "min_dist": [0.0,0.001,0.01,0.1]}
+   },
+   "phase2": {"affinity_cutoff_nM_list": [100,1000,10000,100000]},
+   "logging": {"level": "INFO"}
+}
+```
+
+Fallback feature detection mirrors the independent test (accept_ratio configurable) when rdkit_features_list is empty.
+
+### Phase 1 (projection-only, hyperparam sweep)
+- Build held-out actives from base ChEMBL via target mapping; enforce target-preserving exclusion.
+- Filter MF file by accession != target, then drop any Compound IDs in the held-out set (safety).
+- Remove ZINC overlaps by SMILES against MF cloud and actives.
+- Feature selection: prefer curated list; else fallback intersection of mostly-numeric columns; coerce to numeric; drop rows with any NaN across selected features; log losses.
+- Fit StandardScaler on MF+ZINC only (features); Passthrough for fingerprints.
+- Train DR on MF+ZINC only; UMAP random_state=None for parallelism; save models.
+- Project held-out actives with the saved scaler+model.
+- Apply affinity cutoff to MF cloud for scoring only; actives never filtered.
+- Score by exact 1-NN to MF cloud; compute ROC-AUC, PR-AUC, EF@1/5/10, Spearman rho; save detailed distances.
+- Artifacts: models/, simspaces/, results/ with consistent filenames; logs per run.
+
+### Phase 2 (cutoff sweeps)
+- Reuse Phase 1 models and MF+ZINC simspaces.
+- For each cutoff: filter MF cloud, rescore actives+ZINC, recompute metrics and Spearman rho; save outputs.
+
+### Analyses (included in v4.0)
+- Phase 1 potency-stratified enrichment (port of `analyze_potency_stratified_enrichment.py`) under `molfuse/analysis/phase1_potency.py` with CLI wrapper; PNG+PDF outputs; multiprocessing.
+- Phase 2 cutoff sensitivity analysis (port of `analyze_phase2_cutoff_sensitivity.py`) under `molfuse/analysis/phase2_cutoffs.py` with the same figures (curves, heatmap, quality–quantity, tier-specific EF curves); CLI wrapper.
+- Status checker (port of `check_hyperparam_status.py`) under `molfuse/analysis/status_check.py`: scans workspace_v4, reports completed/running/failed, extracts metrics, and groups by repr/method/dim.
+
+### HPC integration
+- `hpc/molfuse_phase1_cpu.sh` and `hpc/molfuse_phase2_cpu.sh` for single-job runs; no seeds passed to UMAP; logs to slurm_logs/ and run logs.
+- `hpc/submit_phase1.sh` and `hpc/submit_phase2.sh` enumerate grids from configs and submit arrays.
+
+---
+
+## v4.0 Task Checklist
+
+### 🚧 Refactor scaffolding
+- [ ] Create molfuse/ package structure and empty modules
+- [ ] Add cli/ entry points for Phase 1 and Phase 2
+- [ ] Add configs/base.json, phase1_grid.json, phase2_cutoffs.json (skeletons)
+- [ ] Add hpc scripts and submit helpers
+- [ ] Update README.md and docs/ for v4.0 usage
+
+### 🧪 Phase 1 (first target: ABL1)
+- [ ] Implement data.splits with target-preserving exclusion and overlap removal
+- [ ] Implement dr.scaling/pca/umap (projection-only; UMAP parallel)
+- [ ] Implement scoring.neighbors and metrics (EFs, AUCs, Spearman)
+- [ ] Wire phases.phase1 to run the sweep grid; log artifacts
+
+### 🧪 Phase 2 (reuse Phase 1 models)
+- [ ] Implement phases.phase2 cutoff sweeps; reuse simspaces/models
+- [ ] Verify MF cutoff filtering logic and metrics
+
+### 📊 Analyses
+- [ ] Port potency-stratified analysis (Phase 1) to molfuse/analysis/phase1_potency.py
+- [ ] Port cutoff sensitivity analysis (Phase 2) to molfuse/analysis/phase2_cutoffs.py
+- [ ] Port status checker to molfuse/analysis/status_check.py
+
+### 🔧 Quality gates
+- [ ] Add end-to-end dry-run on small ZINC sample (local)
+- [ ] Validate logging, artifacts, and metrics on a single config
+- [ ] HPC smoke test: 1-2 jobs per phase
+
+---
+
+---
+
+## Task Checklist (legacy v3.0 — archived)
 
 ### ✅ Completed Tasks
 
