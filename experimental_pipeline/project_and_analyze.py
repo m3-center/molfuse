@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc as sklearn_auc
 from core_scripts.utils import PassthroughScaler
+from sklearn.neighbors import NearestNeighbors
 
 # CUML imports
 try:
@@ -79,7 +80,7 @@ def project_target_ligands_with_models(target_ligands_repr_df_input, scaler_mode
     return df_projected_ligands_full_info.reset_index(drop=True)
 
 
-def calculate_compound_scores(compounds_df_with_coords, mf_cloud_coords_df, dr_short_name, simspace_dim):
+def calculate_compound_scores(compounds_df_with_coords, mf_cloud_coords_df, dr_short_name, simspace_dim, backend="nn"):
     output_df = compounds_df_with_coords.copy()
     output_df['min_dist_to_mf_cloud'] = np.nan
     output_df['score'] = np.nan
@@ -100,35 +101,53 @@ def calculate_compound_scores(compounds_df_with_coords, mf_cloud_coords_df, dr_s
         logging.error(f"Could not convert coordinate columns to float for distance calculation: {ve}")
         return output_df
     if mf_cloud_points.shape[0] > 0 and projected_points_all.shape[0] > 0:
-        all_min_distances = []
-        num_projected_points = projected_points_all.shape[0]
-        for i in range(0, num_projected_points, CDIST_BATCH_SIZE):
-            batch_projected_points = projected_points_all[i:i+CDIST_BATCH_SIZE]
-            logging.debug(f"Processing cdist batch {i//CDIST_BATCH_SIZE + 1}/{(num_projected_points -1)//CDIST_BATCH_SIZE + 1}, size: {batch_projected_points.shape[0]}")
+        if backend == "nn":
             try:
-                pairwise_distances_batch = distance.cdist(batch_projected_points, mf_cloud_points, 'euclidean')
-                min_distances_batch = np.min(pairwise_distances_batch, axis=1)
-                all_min_distances.append(min_distances_batch)
-            except MemoryError as me:
-                logging.error(f"MemoryError during cdist batch processing (batch size {CDIST_BATCH_SIZE}): {me}. Try reducing CDIST_BATCH_SIZE.")
-                num_failed_in_batch = batch_projected_points.shape[0]
-                all_min_distances.append(np.full(num_failed_in_batch, np.nan))
-            except Exception as e:
-                logging.error(f"Exception during cdist batch processing: {e}")
-                num_failed_in_batch = batch_projected_points.shape[0]
-                all_min_distances.append(np.full(num_failed_in_batch, np.nan))
-        if all_min_distances:
-            min_distances_combined = np.concatenate(all_min_distances)
-            if len(min_distances_combined) == len(output_df):
+                nn = NearestNeighbors(n_neighbors=1, algorithm='auto', metric='euclidean')
+                nn.fit(mf_cloud_points)
+                # Process queries in batches to manage memory on very large sets
+                num_projected_points = projected_points_all.shape[0]
+                all_min_distances = []
+                for i in range(0, num_projected_points, CDIST_BATCH_SIZE):
+                    batch_projected_points = projected_points_all[i:i+CDIST_BATCH_SIZE]
+                    dists, _ = nn.kneighbors(batch_projected_points, return_distance=True)
+                    all_min_distances.append(dists.astype(np.float32).ravel())
+                min_distances_combined = np.concatenate(all_min_distances)
                 output_df['min_dist_to_mf_cloud'] = min_distances_combined
-                output_df['score'] = -min_distances_combined 
-            else:
-                logging.error(f"Length mismatch after cdist batching: expected {len(output_df)}, got {len(min_distances_combined)}. Scores will be NaN.")
+                output_df['score'] = -min_distances_combined
+            except Exception as e:
+                logging.error(f"Exception during NearestNeighbors processing: {e}. Falling back to cdist.")
+                backend = "cdist"
+        if backend == "cdist":
+            all_min_distances = []
+            num_projected_points = projected_points_all.shape[0]
+            for i in range(0, num_projected_points, CDIST_BATCH_SIZE):
+                batch_projected_points = projected_points_all[i:i+CDIST_BATCH_SIZE]
+                logging.debug(f"Processing cdist batch {i//CDIST_BATCH_SIZE + 1}/{(num_projected_points -1)//CDIST_BATCH_SIZE + 1}, size: {batch_projected_points.shape[0]}")
+                try:
+                    pairwise_distances_batch = distance.cdist(batch_projected_points, mf_cloud_points, 'euclidean')
+                    min_distances_batch = np.min(pairwise_distances_batch, axis=1)
+                    all_min_distances.append(min_distances_batch)
+                except MemoryError as me:
+                    logging.error(f"MemoryError during cdist batch processing (batch size {CDIST_BATCH_SIZE}): {me}. Try reducing CDIST_BATCH_SIZE.")
+                    num_failed_in_batch = batch_projected_points.shape[0]
+                    all_min_distances.append(np.full(num_failed_in_batch, np.nan))
+                except Exception as e:
+                    logging.error(f"Exception during cdist batch processing: {e}")
+                    num_failed_in_batch = batch_projected_points.shape[0]
+                    all_min_distances.append(np.full(num_failed_in_batch, np.nan))
+            if all_min_distances:
+                min_distances_combined = np.concatenate(all_min_distances)
+                if len(min_distances_combined) == len(output_df):
+                    output_df['min_dist_to_mf_cloud'] = min_distances_combined
+                    output_df['score'] = -min_distances_combined 
+                else:
+                    logging.error(f"Length mismatch after cdist batching: expected {len(output_df)}, got {len(min_distances_combined)}. Scores will be NaN.")
     else:
         logging.debug("No points in MF cloud or projected points after type conversion/filtering.")
     return output_df
 
-def calculate_detailed_distances_for_actives(projected_actives_df, mf_cloud_coords_df, k_for_knn_list, dr_short_name, simspace_dim):
+def calculate_detailed_distances_for_actives(projected_actives_df, mf_cloud_coords_df, k_for_knn_list, dr_short_name, simspace_dim, backend="nn"):
     # Ensure essential ID columns are preserved, even if they don't exist in input
     id_cols_to_try = ['SMILES', 'Compound ChEMBL ID']
     existing_id_cols = [col for col in id_cols_to_try if col in projected_actives_df.columns]
@@ -150,15 +169,31 @@ def calculate_detailed_distances_for_actives(projected_actives_df, mf_cloud_coor
     mf_cloud_points = mf_cloud_coords_df[coord_cols].values
     if mf_cloud_points.shape[0] > 0 and projected_points.shape[0] > 0:
         try:
-            pairwise_distances = distance.cdist(projected_points, mf_cloud_points, 'euclidean')
-            output_df['min_dist_to_mf_cloud'] = np.min(pairwise_distances, axis=1)
-            for k_val in k_for_knn_list:
-                if mf_cloud_points.shape[0] >= k_val:
-                    sorted_pairwise_dists = np.sort(pairwise_distances, axis=1)
-                    output_df[f'avg_dist_top_{k_val}_in_mf_cloud'] = np.mean(sorted_pairwise_dists[:, :k_val], axis=1)
-            mf_cloud_centroid = np.mean(mf_cloud_points, axis=0)
-            dist_to_centroid_vals = distance.cdist(projected_points, mf_cloud_centroid.reshape(1, -1), 'euclidean')
-            output_df['dist_to_mf_cloud_centroid'] = dist_to_centroid_vals.flatten()
+            if backend == "nn":
+                k_max = max(k_for_knn_list) if k_for_knn_list else 1
+                k_eff = min(k_max, mf_cloud_points.shape[0])
+                nn = NearestNeighbors(n_neighbors=k_eff, algorithm='auto', metric='euclidean')
+                nn.fit(mf_cloud_points)
+                dists, _ = nn.kneighbors(projected_points, return_distance=True)
+                # dists shape: (n_queries, k_eff) sorted ascending
+                output_df['min_dist_to_mf_cloud'] = dists[:, 0]
+                for k_val in k_for_knn_list:
+                    if mf_cloud_points.shape[0] >= k_val:
+                        output_df[f'avg_dist_top_{k_val}_in_mf_cloud'] = np.mean(dists[:, :k_val], axis=1)
+                # Centroid distance
+                mf_cloud_centroid = np.mean(mf_cloud_points, axis=0)
+                dist_to_centroid_vals = distance.cdist(projected_points, mf_cloud_centroid.reshape(1, -1), 'euclidean')
+                output_df['dist_to_mf_cloud_centroid'] = dist_to_centroid_vals.flatten()
+            else:
+                pairwise_distances = distance.cdist(projected_points, mf_cloud_points, 'euclidean')
+                output_df['min_dist_to_mf_cloud'] = np.min(pairwise_distances, axis=1)
+                for k_val in k_for_knn_list:
+                    if mf_cloud_points.shape[0] >= k_val:
+                        sorted_pairwise_dists = np.sort(pairwise_distances, axis=1)
+                        output_df[f'avg_dist_top_{k_val}_in_mf_cloud'] = np.mean(sorted_pairwise_dists[:, :k_val], axis=1)
+                mf_cloud_centroid = np.mean(mf_cloud_points, axis=0)
+                dist_to_centroid_vals = distance.cdist(projected_points, mf_cloud_centroid.reshape(1, -1), 'euclidean')
+                output_df['dist_to_mf_cloud_centroid'] = dist_to_centroid_vals.flatten()
         except MemoryError as me:
             logging.error(f"MemoryError in calculate_detailed_distances_for_actives: {me}. Results for this section will be NaN.")
         except Exception as e:
@@ -337,6 +372,8 @@ def main():
     parser.add_argument("--model_name_root_for_projection", default=None)
     parser.add_argument("--affinity_cutoff", type=float, default=100000.0, 
                         help="Affinity cutoff in nM. Only held-out actives with 'Standard Value (nM)' at or below this value will be used for analysis. Default is 100,000 nM (100 uM).")
+    parser.add_argument("--distance_backend", choices=["cdist", "nn"], default="nn",
+                        help="Backend for min distance calculations: 'nn' uses exact NearestNeighbors (KDTree/BallTree), 'cdist' uses scipy.spatial.distance.cdist. 'nn' is typically much faster in low/moderate dimensions and produces identical results.")
     
     args = parser.parse_args()
     
@@ -598,8 +635,14 @@ def main():
     else:
         logging.warning("Could not split main simspace data. Ranking may be incorrect.")
         
-    df_target_actives_scored = calculate_compound_scores(df_projected_target_actives, mf_cloud_coords, args.dr_short_name, args.simspace_dim)
-    df_zinc_decoys_scored = calculate_compound_scores(df_zinc_decoys_with_coords, mf_cloud_coords, args.dr_short_name, args.simspace_dim)
+    df_target_actives_scored = calculate_compound_scores(
+        df_projected_target_actives, mf_cloud_coords, args.dr_short_name, args.simspace_dim,
+        backend=args.distance_backend
+    )
+    df_zinc_decoys_scored = calculate_compound_scores(
+        df_zinc_decoys_with_coords, mf_cloud_coords, args.dr_short_name, args.simspace_dim,
+        backend=args.distance_backend
+    )
 
     if not df_target_actives_scored.empty: df_target_actives_scored['TYPE'] = 'HELDOUT_ACTIVE'
     if not df_zinc_decoys_scored.empty : df_zinc_decoys_scored['TYPE'] = 'DECOY'       
@@ -729,7 +772,10 @@ def main():
 
     k_for_knn_list_int = [int(k.strip()) for k in args.k_for_knn.split(',')]
     if not df_projected_target_actives.empty and not mf_cloud_coords.empty:
-        df_detailed_active_distances = calculate_detailed_distances_for_actives(df_projected_target_actives, mf_cloud_coords, k_for_knn_list_int, args.dr_short_name, args.simspace_dim)
+        df_detailed_active_distances = calculate_detailed_distances_for_actives(
+            df_projected_target_actives, mf_cloud_coords, k_for_knn_list_int, args.dr_short_name, args.simspace_dim,
+            backend=args.distance_backend
+        )
         detailed_distances_path = os.path.join(args.output_dir, f"{args.target_id_name}_{args.representation_type}_{args.dr_short_name.replace('-', '_')}_dim{args.simspace_dim}_detailed_active_distances.csv")
         try: df_detailed_active_distances.to_csv(detailed_distances_path, index=False); logging.info(f"Saved detailed distances for ACTIVES to: {detailed_distances_path}")
         except Exception as e: logging.error(f"Failed to save detailed active distances CSV: {e}")
