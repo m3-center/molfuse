@@ -1,8 +1,8 @@
 #!/bin/bash
 ##SBATCH --partition=hpc
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=32
-#SBATCH --mem=360G
+#SBATCH --ntasks-per-node=64
+#SBATCH --mem=170G
 #SBATCH --time=0-24:00:00
 
 # Usage:
