@@ -15,6 +15,7 @@
 - **📋 Planning**: [`PLANNING.md`](PLANNING.md) - Task tracking and next steps
 - **🗄️ Archive**: [`ARCHIVE.md`](ARCHIVE.md) - Deprecated features and scripts
  - **🔧 v4.0 Scaffold (molfuse)**: [`README_V4_MOLFUSE.md`](README_V4_MOLFUSE.md) - Invariants and new CLIs (Phase 1/2) under active development
+ - **📰 Publication Synthesis**: [`PUBLICATION.md`](PUBLICATION.md) - High-level summary, hypotheses, and v4 invariants
 
 ## Abstract
 

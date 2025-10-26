@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import logging
+import gc
 
 import numpy as np
 import pandas as pd
@@ -207,6 +208,7 @@ def main() -> None:
         coerce_and_drop(df_act, "Actives")
 
         # Fit/prepare scaler for features
+        logger.info("Starting StandardScaler fit on MF+ZINC (features)")
         scaler = fit_scaler_on_mf_zinc(df_mf, df_zinc, common_feats)
         logger.info("Fitted StandardScaler on MF+ZINC (features)")
         X_mf = scaler.transform(df_mf[common_feats].to_numpy(dtype=float))
@@ -222,6 +224,21 @@ def main() -> None:
         scaler_path = ws["artifacts"] / "scaler.joblib"
         joblib.dump(scaler, scaler_path)
         logger.info(f"Saved scaler to {scaler_path}")
+
+        # Step 1 memory free: drop heavy feature columns from DataFrames (keep metadata only)
+        drop_mf = [c for c in common_feats if c in df_mf.columns]
+        drop_zinc = [c for c in common_feats if c in df_zinc.columns]
+        drop_act = [c for c in common_feats if c in df_act.columns]
+        if drop_mf:
+            df_mf.drop(columns=drop_mf, inplace=True, errors="ignore")
+        if drop_zinc:
+            df_zinc.drop(columns=drop_zinc, inplace=True, errors="ignore")
+        if drop_act:
+            df_act.drop(columns=drop_act, inplace=True, errors="ignore")
+        logger.info(
+            f"Freed feature columns from DataFrames (kept IDs/SMILES). Dropped: MF={len(drop_mf)}, ZINC={len(drop_zinc)}, Actives={len(drop_act)}"
+        )
+        gc.collect()
     elif representation == "fingerprints":
         # Parse fingerprint strings (comma-separated 0/1) into numeric arrays
         def find_fp_col(df: pd.DataFrame) -> Optional[str]:
@@ -283,7 +300,7 @@ def main() -> None:
             logger.info(f"{label}: parsed fingerprints: rows {before}->{after}, fp_len={expected_len}")
             return X, pd.Index(valid_idx)
 
-        # Parse MF and ZINC
+    # Parse MF and ZINC
         X_mf, idx_mf = parse_fp_series(df_mf[fp_col], "MF")
         df_mf = df_mf.loc[idx_mf].copy()
         X_zinc, idx_zinc = parse_fp_series(df_zinc[fp_col], "ZINC")
@@ -302,12 +319,31 @@ def main() -> None:
         scaler_path = ws["artifacts"] / "scaler.joblib"
         joblib.dump({"type": "passthrough"}, scaler_path)
         logger.info(f"Saved passthrough scaler marker to {scaler_path}")
+
+        # Step 1 memory free: drop fingerprint column from DataFrames (keep metadata only)
+        if fp_col in df_mf.columns:
+            df_mf.drop(columns=[fp_col], inplace=True, errors="ignore")
+        if fp_col in df_zinc.columns:
+            df_zinc.drop(columns=[fp_col], inplace=True, errors="ignore")
+        if fp_col in df_act.columns:
+            df_act.drop(columns=[fp_col], inplace=True, errors="ignore")
+        logger.info("Freed fingerprint column from DataFrames (kept IDs/SMILES)")
+        gc.collect()
     else:
         raise ValueError(f"Unsupported representation: {representation}")
 
     # DR fit on MF+ZINC, projection for actives
     X_train = np.vstack([X_mf, X_zinc])
+    # Step 1 extension: free per-set matrices now that the concatenated training matrix exists
+    try:
+        del X_mf
+        del X_zinc
+    except Exception:
+        pass
+    gc.collect()
+    logger.info("Freed X_mf and X_zinc after building X_train (concat)")
     if method == "pca":
+        logger.info(f"Starting PCA fit: dim={dim}")
         model, Z_train = fit_pca(X_train, n_components=dim)
         Z_act = model.transform(X_act)
         logger.info(f"PCA fitted: dim={dim}")
@@ -315,6 +351,9 @@ def main() -> None:
         joblib.dump(model, model_path)
         logger.info(f"Saved PCA model to {model_path}")
     elif method == "umap":
+        logger.info(
+            f"Starting UMAP fit: dim={dim}, n_neighbors={int(umap_params.get('n_neighbors', 50))}, min_dist={float(umap_params.get('min_dist', 0.01))}, metric={umap_params.get('metric', 'jaccard' if representation=='fingerprints' else 'euclidean')}"
+        )
         model, Z_train = fit_umap(
             X_train,
             n_components=dim,
@@ -332,6 +371,22 @@ def main() -> None:
         logger.info(f"Saved UMAP model to {model_path}")
     else:
         raise ValueError(f"Unsupported method: {method}")
+
+    # Step 2 memory free: drop the concatenated training matrix after DR fit
+    try:
+        del X_train
+    except Exception:
+        pass
+    gc.collect()
+    logger.info("Freed X_train (concat) from memory after DR fit")
+
+    # Also drop raw actives matrix after projection
+    try:
+        del X_act
+    except Exception:
+        pass
+    gc.collect()
+    logger.info("Freed X_act (raw) after projection")
 
     # Split Z_train back to Z_mf, Z_zinc
     n_mf = len(df_mf)

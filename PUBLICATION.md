@@ -1,12 +1,34 @@
-# UMMBAS v3.0 — Publication Synthesis
+# molfuse (UMMBAS v4) — Publication Synthesis
 
 Last Updated: October 26, 2025
 
 ## Abstract
 
-We present UMMBAS, an ultra-large, molecular function–guided virtual screening framework that learns a similarity space from a broad “MF cloud” (compounds active on proteins sharing the target’s molecular function) together with >1.29M ZINC decoys. The model follows a projection-only strategy: dimensionality reduction (PCA or UMAP) is fit on MF+ZINC, then held-out target ligands are projected and ranked by distance to the MF cloud. In Phase 1 (hyperparameter sweep), PCA consistently outperformed UMAP when trained on the full MF cloud. A critical data-integrity investigation revealed that source MF files contained duplicate Compound ChEMBL IDs (multiple targets per compound). After deduplicating the MF cloud by taking the minimum affinity per compound, UMAP performance dropped by 58.3% in a controlled comparison, indicating the original results were inflated by duplicate-driven density artifacts. An orchestration fix now enforces freshness-based recomputation of similarity spaces to prevent stale artifact reuse across reruns.
+We present MolFuSE, an ultra-large, molecular function–guided virtual screening framework that learns a similarity space from a broad “MF cloud” (compounds active on proteins sharing the target’s molecular function) together with >1.29M ZINC decoys. The design follows a strict projection-only strategy: dimensionality reduction (PCA or UMAP) is fit on MF+ZINC, then held-out target ligands are projected and ranked by exact 1-NN distance to the MF cloud. UMAP runs are seedless (random_state=None) to enable parallelism; deduplication and overlap removal are enforced strictly by SMILES.
 
-These findings reinforce the central role of MF cloud composition in determining optimal dimensionality reduction and establish a reproducible foundation for subsequent phases (cutoff sensitivity, MF cloud ablation, and cross-protein generalization). The present work emphasizes rigor over leaderboard performance: we document both successes and failure modes to map the problem space transparently.
+## v4 (molfuse) Invariants and Representation Details
+
+- Projection-only: scaler/DR fit on MF+ZINC; held-out actives are only projected (no leakage).
+- UMAP is seedless (random_state=None) for HPC parallel execution; PCA uses sklearn defaults.
+- Scoring uses exact 1-NN in embedded space; distance-based score = -min_distance.
+- Deduplication is SMILES-only; MF–ZINC and Actives–(MF/ZINC) overlaps are removed by SMILES.
+- Affinity cutoff applies to MF cloud for scoring only; actives are never filtered by cutoff.
+- Representations and distances:
+  - Features: RDKit descriptors scaled with StandardScaler; PCA/UMAP with Euclidean distance.
+  - Fingerprints: 2048-bit ECFP4; UMAP with Jaccard distance; PCA treated as a baseline.
+- Replicates: 5 independent runs per configuration to quantify variability.
+
+### RDKit Feature Descriptors Used (features representation)
+
+The features representation uses the following descriptor columns (extracted from dataset headers without loading full matrices):
+
+- DipoleMoment, ABC, nAcid, nBase, nAromAtom, nAtom, nH, nC, nN, nO, nS, nP, nX
+- nBonds, nBondsO, nBondsS, nBondsD, nBondsT, nBondsA, nBondsM, nBondsKS, nBondsKD
+- EState_VSA7, nHBAcc, nHBDon, Lipinski, apol, bpol
+- nRing, n3Ring, n4Ring, n5Ring, n6Ring, n7Ring, n8Ring, nRot
+- Diameter, TopoShapeIndex, Vabc, MW
+
+Non-feature metadata columns (e.g., SMILES, accession, IDs) are excluded from modeling.
 
 ## Standing Research Questions and Primary Hypotheses
 
@@ -17,17 +39,10 @@ These findings reinforce the central role of MF cloud composition in determining
 - RQ3: To what extent do results generalize across proteins sharing or not sharing the same MF?
   - H3: Same-MF transfer is stronger than cross-MF; dimensionality choice remains target- and MF-dependent.
 
-## Strongest Current Evidence
-
-- Deduplication integrity: Source MF file contained 2.23× row duplication (430,794 rows → 193,244 unique compounds). Dedup by min affinity per compound.
-- Controlled comparison (seed44, UMAP-5D, nn=10, md=0.1): EF@1% dropped from 43.78 → 18.27 (−58.3%) after deduplication.
-- Mechanism: Duplicates created artificial high-density regions that small-nn UMAP exploited; larger nn values were more robust.
-- Orchestration safeguard: main_orchestrator now recomputes similarity spaces when MF/ZINC inputs are newer than existing outputs; prevents stale PCA/UMAP divergence post-dedup.
-
 ## Notes for Methods
 
 - Projection-only design to avoid data leakage: fit on MF+ZINC, project held-out actives.
-- Features: 39–40 RDKit descriptors with StandardScaler; Fingerprints: 2048-bit ECFP4.
+- Features: 40 RDKit descriptors with StandardScaler; Fingerprints: 2048-bit ECFP4.
 - Metrics: EF@1% primary; ROC-AUC and PR-AUC secondary; 5 replicates per config.
 
 ## Next Updates (Planned)

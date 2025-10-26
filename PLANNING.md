@@ -171,6 +171,11 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 
 ---
 
+### 📚 Documentation
+- [x] PUBLICATION.md: Update to v4 (molfuse) and list RDKit feature descriptors (via header-only read)
+- [ ] README.md: Add v4 invariants quick link and PUBLICATION reference
+- [ ] ARCHIVE.md: Initialize and document deprecated items (cdist brute-force path; ID-based dedup)
+
 ---
 
 ## Task Checklist (legacy v3.0 — archived)

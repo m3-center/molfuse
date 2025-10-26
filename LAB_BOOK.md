@@ -1,3 +1,36 @@
+### October 26, 2025: PUBLICATION v4 updates — invariants and features list
+
+- Changes Made (Documentation)
+  - Updated `PUBLICATION.md` to v4 (molfuse) naming and added explicit invariants: seedless UMAP, exact 1-NN scoring, SMILES-only dedup, MF–ZINC overlap removal, projection-only design, and replicate policy.
+  - Documented representations and metrics: features (RDKit + Euclidean), fingerprints (ECFP4 + Jaccard), 5 replicates per config.
+  - Added the explicit list of RDKit descriptor columns used by the features representation by reading only CSV headers (no full dataset loads): DipoleMoment, ABC, nAcid, nBase, nAromAtom, nAtom, nH, nC, nN, nO, nS, nP, nX, nBonds, nBondsO, nBondsS, nBondsD, nBondsT, nBondsA, nBondsM, nBondsKS, nBondsKD, EState_VSA7, nHBAcc, nHBDon, Lipinski, apol, bpol, nRing, n3Ring, n4Ring, n5Ring, n6Ring, n7Ring, n8Ring, nRot, Diameter, TopoShapeIndex, Vabc, MW.
+
+- Experiments Run
+  - None (documentation-only update).
+
+- Observations and Results
+  - The descriptor list matches the 40-column features schema we use in v4; we explicitly excluded non-feature metadata columns (IDs, SMILES, accession) in documentation for clarity.
+
+- Next Steps
+  - Reflect v4 invariants in README and planning checklists as the CLI stabilizes; keep PUBLICATION synced as new evidence accumulates from Phase 1 reruns.
+
+### October 26, 2025: Phase 1 CLI — memory freeing (steps 1–2) and start-logging
+
+- Changes Made (Code)
+  - Implemented explicit memory cleanup in `molfuse/cli/phase1.py`:
+    - Step 1: After building numeric arrays, drop feature/fingerprint columns from DataFrames to retain only metadata (IDs/SMILES); `gc.collect()` called.
+    - Step 1 extension: After constructing `X_train = vstack([X_mf, X_zinc])`, free `X_mf` and `X_zinc` immediately to reduce peak memory before DR fit.
+    - Step 2: After DR fit completes, free `X_train` and (post-projection) free `X_act`; `gc.collect()` called after each.
+  - Added explicit START logs for major operations: StandardScaler fit, PCA fit, UMAP fit (with hyperparameters).
+
+- Expected Impact
+  - Peak memory reduced by avoiding duplicate DataFrame + ndarray coexistence and by dropping per-set matrices once the concatenated training matrix exists.
+  - No changes to metrics or outputs; behavior is otherwise identical.
+
+- Verification Plan
+  - Run a representative Phase 1 config and inspect `logs/run.log` for the new START messages and memory-free checkpoints.
+  - Monitor RSS during DR fit to confirm lower peak vs prior runs (nn=50/100/500 cases).
+
 ### October 26, 2025: Phase 1 config generator — replicates and full grids
 
 - Changes Made (Scripts)
