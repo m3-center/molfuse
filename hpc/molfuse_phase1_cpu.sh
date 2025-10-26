@@ -25,12 +25,5 @@ fi
 
 mkdir -p slurm_logs || true
 
-# Run using the requested environment without activating shell rc files
-if command -v mamba >/dev/null 2>&1; then
-  mamba run -n "$CONDA_ENV" python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
-elif command -v conda >/dev/null 2>&1; then
-  conda run -n "$CONDA_ENV" --no-capture-output python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
-else
-  echo "Neither mamba nor conda found in PATH. Falling back to system python." >&2
-  python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
-fi
+mamba activate "$CONDA_ENV"
+python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
