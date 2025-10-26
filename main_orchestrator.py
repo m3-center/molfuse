@@ -209,9 +209,26 @@ def main(config_path, random_seed_value):
                 
                 # Check if main similarity space already exists (skip expensive recalculation)
                 comprehensive_simspace_csv_PROJECTION = os.path.join(simspaces_output_dir_dim, f"{target_id_name}_{repr_type}_dim{simspace_dim_val}_similarity_space.csv")
-                if os.path.exists(comprehensive_simspace_csv_PROJECTION):
-                    logging.info(f"        --- Step 2b: SKIPPING Similarity Space Calculation (already exists: {os.path.basename(comprehensive_simspace_csv_PROJECTION)}) ---")
+
+                # Safety: Recompute if inputs (prepared MF/ZINC) are newer than the existing simspace CSV
+                def _needs_recompute(simspace_csv_path: str, mf_path: str, zinc_path: str) -> bool:
+                    if not os.path.exists(simspace_csv_path):
+                        return True
+                    try:
+                        simspace_mtime = os.path.getmtime(simspace_csv_path)
+                        mf_mtime = os.path.getmtime(mf_path) if os.path.exists(mf_path) else 0
+                        zinc_mtime = os.path.getmtime(zinc_path) if os.path.exists(zinc_path) else 0
+                        # Recompute if either input is newer than the simspace
+                        return (mf_mtime > simspace_mtime) or (zinc_mtime > simspace_mtime)
+                    except Exception as e:
+                        logging.warning(f"        Could not compare file mtimes for recompute check: {e}. Will recompute to be safe.")
+                        return True
+
+                if os.path.exists(comprehensive_simspace_csv_PROJECTION) and not _needs_recompute(comprehensive_simspace_csv_PROJECTION, current_chembl_mf_filtered_path, current_zinc_filtered_path):
+                    logging.info(f"        --- Step 2b: SKIPPING Similarity Space Calculation (already exists and up-to-date: {os.path.basename(comprehensive_simspace_csv_PROJECTION)}) ---")
                 else:
+                    if os.path.exists(comprehensive_simspace_csv_PROJECTION):
+                        logging.info(f"        --- Step 2b: Recomputing Similarity Space (inputs updated since last build) ---")
                     logging.info(f"        --- Step 2b: Calculating Similarity Spaces ---")
                     cmd_calc_simspace = [ "python", "core_scripts/calculate_similarityspaces_exp.py",
                         "--chembl_mf_data_path", os.path.abspath(current_chembl_mf_filtered_path),

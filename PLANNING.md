@@ -31,6 +31,8 @@
 
 - [ ] Analyze Phase 1 results with potency stratification
 - [ ] Extract best configurations for Phase 2-4 (`extract_phase1_best_configs.py`)
+- [ ] Validate orchestrator recomputation safeguard (freshness check) by rerunning a representative PCA-features config post-dedup; record EF@1% in LAB_BOOK.md
+- [ ] Add integrity assertion: verify MF cloud row count in simspace equals dedup source; abort with actionable message on mismatch
 
 ### 📋 Pending Tasks
 
@@ -74,6 +76,7 @@
 - [ ] Add automated error detection and recovery
 - [ ] Create validation scripts for output files
 - [ ] Optimize memory usage for large-scale experiments
+- [ ] Unit test: simulate input mtime update and assert simspace recomputation is triggered (orchestrator)
 
 ---
 
