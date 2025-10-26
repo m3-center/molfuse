@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #SBATCH --job-name=molfuse_p1
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
@@ -14,7 +14,6 @@
 # sbatch hpc/molfuse_phase1_cpu.sh configs/molfuse_phase1_grid/ABL1_PCA_features_10d.json experiment_workspace_v4 ummbas_screening
 
 set -euo pipefail
-
 CONFIG_PATH="${1:-}"
 WORKSPACE_DIR="${2:-experiment_workspace_v4}"
 CONDA_ENV="${3:-ummbas_screening}"
@@ -26,13 +25,12 @@ fi
 
 mkdir -p slurm_logs || true
 
-# Activate environment
+# Run using the requested environment without activating shell rc files
 if command -v mamba >/dev/null 2>&1; then
-  source ~/.bashrc || true
-  mamba activate "$CONDA_ENV" || conda activate "$CONDA_ENV"
+  mamba run -n "$CONDA_ENV" python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
+elif command -v conda >/dev/null 2>&1; then
+  conda run -n "$CONDA_ENV" --no-capture-output python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 else
-  source ~/.bashrc || true
-  conda activate "$CONDA_ENV"
+  echo "Neither mamba nor conda found in PATH. Falling back to system python." >&2
+  python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 fi
-
-python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
