@@ -544,12 +544,12 @@ def main():
                         # Take MINIMUM affinity (best binding) for each compound
                         original_affinity_count = len(mf_affinity_data)
                         mf_affinity_data = mf_affinity_data.groupby('Compound ChEMBL ID', as_index=False).agg({
-                            'Standard Value (nM)': 'min'
+                            'Standard Value (nM)': 'median'
                         })
                         unique_compound_count = len(mf_affinity_data)
                         
                         if original_affinity_count > unique_compound_count:
-                            logging.info(f"  Aggregated {original_affinity_count:,} records → {unique_compound_count:,} unique compounds (using minimum affinity)")
+                            logging.info(f"  Aggregated {original_affinity_count:,} records → {unique_compound_count:,} unique compounds (using median affinity)")
                         
                         # Merge affinity data into MF cloud
                         original_mf_count = len(mf_cloud_df_full)
