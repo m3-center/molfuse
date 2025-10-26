@@ -125,6 +125,13 @@ A significant challenge in ligand-based drug discovery is the scarcity of known 
 
 ---
 
+## Recent Change (Oct 26, 2025): Freshness-Based Recompute Safeguard
+
+- The orchestrator now recomputes similarity spaces when upstream inputs (deduplicated MF/ZINC CSVs) are newer than the existing simspace CSV. This prevents stale artifact reuse across reruns and ensures deduplication propagates to PCA and UMAP consistently.
+- No API changes; behavior is automatic. Logs indicate whether a simspace was reused (up-to-date) or recomputed due to input freshness.
+
+---
+
 ## Repository Structure
 
 ```

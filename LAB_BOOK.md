@@ -458,6 +458,25 @@ experiment_workspace_v3_phase1/
 
 ## Lab Book Entries
 
+### October 26, 2025: PCA vs UMAP Dedup Divergence — Root Cause and Fix
+- Changes Made (Code or configuration)
+  - Updated `main_orchestrator.py` Step 2b to avoid stale artifact reuse by checking input freshness before skipping similarity space recomputation.
+    - Mechanism: Compare modification times of prepared MF/ZINC inputs vs the existing similarity space CSV; recompute if inputs are newer or on comparison error.
+  - No changes to DR algorithms or scoring; fix is orchestration-only.
+
+- Experiments Run
+  - Pending: Rerun a representative PCA-features configuration post-dedup (same seed/dimension as prior UMAP validation) to verify EF@1% reflects deduplication.
+  - Pending: Sanity check that MF cloud row count in loaded simspace matches deduplicated source (to be added as a runtime integrity assertion).
+
+- Observations and Results
+  - Root cause identified for PCA's unchanged EF@1% after dedup vs UMAP's 58.3% drop: reuse of a pre-dedup similarity space/model due to an existence-only skip in the orchestrator.
+  - Divergence mechanism: UMAP runs were recomputed after deduplication; PCA runs reused stale simspace artifacts, preserving inflated performance.
+  - Expected outcome after fix: PCA EF@1% should drop substantially when recomputed on the deduplicated MF cloud, aligning with UMAP directionally.
+
+Notes
+- This fix enforces data-to-artifact freshness; adds no new dependencies and preserves projection-only design.
+- Follow-up guardrail: add an integrity assertion in `project_and_analyze.py` to compare MF cloud size in simspace against the temp_data source; fail fast on mismatch.
+
 ### October 8, 2025: Phase 1 Preliminary Analysis
 - Initial 180/260 experiments completed
 - PCA dominates UMAP by 1.27-1.46× across all dimensions
