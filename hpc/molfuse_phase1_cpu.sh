@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #SBATCH --job-name=molfuse_p1
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
