@@ -2,7 +2,7 @@
 
 **Purpose**: This file documents deprecated features, scripts, and experiments that are no longer in active use in the v3.0 pipeline.
 
-**Last Updated**: October 18, 2025
+**Last Updated**: October 26, 2025
 
 ---
 
@@ -100,6 +100,19 @@ This directory contains deprecated scripts that have been moved from active loca
 **Status**: Active, moved to correct location  
 **Current Location**: `hpc/setup_hpc_workspaces.sh`  
 **Reason**: Still in use for HPC workspace setup, moved from root to hpc/ directory for better organization
+
+---
+
+## Deprecated Pipeline Behaviors
+
+### Existence-Only Skip for Similarity Space Reuse → REPLACED
+**Deprecated**: October 26, 2025  
+**Replacement**: Freshness-based recomputation in `main_orchestrator.py` (compare input vs output modification times)  
+**Reason**: Existence-only checks allowed reuse of stale pre-dedup similarity spaces/models, causing PCA vs UMAP divergence in post-dedup analyses. Freshness checks ensure recomputation when MF/ZINC inputs change.
+
+**Impact**:
+- Eliminates risk of stale artifacts after data preparation changes
+- No user-facing API change; decision is logged during Step 2b
 
 ---
 
