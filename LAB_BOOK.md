@@ -477,6 +477,20 @@ Notes
 - This fix enforces data-to-artifact freshness; adds no new dependencies and preserves projection-only design.
 - Follow-up guardrail: add an integrity assertion in `project_and_analyze.py` to compare MF cloud size in simspace against the temp_data source; fail fast on mismatch.
 
+### October 26, 2025: Phase 1 Dedup Policy Change — Median Affinity per Compound
+- Changes Made (Code or configuration)
+  - Updated `experimental_pipeline/prepare_data.py` MF cloud deduplication: aggregate duplicates by median of 'Standard Value (nM)' per 'Compound ChEMBL ID' (was minimum).
+  - Updated fallback merge in `experimental_pipeline/project_and_analyze.py` to also use median when reconstructing affinity for cutoff filtering, ensuring consistency.
+
+- Rationale
+  - Median provides robustness to outliers and measurement noise across multiple targets/tests per compound, avoiding overweighting single extremely potent readings.
+
+- Expected Impact
+  - MF cloud composition will shift modestly versus min-aggregation; anticipate small changes to distance distributions and EF metrics. PCA likely minimally affected; UMAP sensitivity depends on local density shifts.
+
+- Validation Plan
+  - Recreate Phase 1 simspaces with median dedup; compare EF@1% and variance vs prior min-based runs on a small subset before broader reruns. Document deltas.
+
 ### October 8, 2025: Phase 1 Preliminary Analysis
 - Initial 180/260 experiments completed
 - PCA dominates UMAP by 1.27-1.46× across all dimensions
