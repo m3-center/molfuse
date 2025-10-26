@@ -1,4 +1,4 @@
-# UMMBAS v3.0 - Molecular Function-Guided Virtual Screening
+# UMMBAS v4.0 - Molecular Function-Guided Virtual Screening
 
 **Ultra-large Molecular function-Mediated Biologically-informed Affinity Screening**
 
