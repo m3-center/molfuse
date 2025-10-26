@@ -484,6 +484,20 @@ experiment_workspace_v3_phase1/
 
 ---
 
+### October 26, 2025: Phase 1 cutoff empty-set policy (fail-fast)
+- Changes Made (Behavior)
+  - When the affinity cutoff filters the MF set to zero compounds, Phase 1 now fails fast with a clear error and logs (`phase1_error.json`).
+  - Config override: `on_empty_cutoff` can be set to `"fallback"` to use the full MF for scoring (legacy behavior) if desired.
+
+- Rationale
+  - Silent fallback can mask misconfigured cutoffs or unit/column issues; explicit failure improves experimental rigor and reproducibility.
+
+- Implications
+  - Runs with overly strict cutoffs or missing/NaN affinity values will terminate with actionable diagnostics instead of silently changing the scoring population.
+  - Default invariant behavior remains unchanged for successful filters; scaler is still fit on MF+ZINC only; actives are never filtered.
+
+---
+
 ### October 26, 2025: Benchmarking cdist vs Exact KDTree/BallTree for Scoring
 - Changes Made (Code or configuration)
   - Added `analysis_scripts/benchmark_cdist_vs_kdtree.py` to compare the current scoring method (batched `scipy.spatial.distance.cdist`) against an exact 1-NN index using scikit-learn's `NearestNeighbors` (KDTree/BallTree) on real simspace data.
@@ -1435,6 +1449,53 @@ CRITICAL: Phase 1 validation confirms 58.3% performance drop with deduplicated d
 4. [ ] Submit manuscript
 
 ---
+
+### October 26, 2025: Phase 1 CLI — File logging, SMILES-only dedup, and embeddings saved
+
+- Changes Made (Code)
+  - Added run-scoped file logging to `molfuse/cli/phase1.py` writing to `logs/run.log` with INFO-level messages for each major step:
+    - Input row counts (MF, ZINC, Actives)
+    - Target-preserving exclusion stats
+    - Overlap removal by SMILES (Actives vs MF/ZINC; MF vs ZINC)
+    - Deduplication counts (strictly by SMILES)
+    - Feature coercion and NaN drops per set
+    - Scaler/DR fit details (method, dim, UMAP hyperparams)
+    - Affinity cutoff pass counts and fallback policy usage
+    - ZINC sampling counts (if enabled)
+    - Metrics path and ranked CSV path
+  - Switched deduplication policy to SMILES-only (canonical_smiles/SMILES). One row per unique molecule; removed prior Compound-ID-based aggregation from the v4 CLI.
+  - Enforced SMILES-based MF–ZINC overlap removal.
+  - Saved similarity space coordinates for all three sets:
+    - `artifacts/embedding_mf.csv`, `artifacts/embedding_zinc.csv`, `artifacts/embedding_actives.csv` with `z0..z{dim-1}`.
+
+- Experiments Run
+  - Local execution on ABL1 example config completed successfully; verified presence of run.log, metrics.json, ranked_scores.csv, and three embedding CSVs.
+
+- Observations and Results
+  - Logging reveals substantial row drops from NaN coercion on some features; this will help triage feature lists or imputations later if needed.
+  - SMILES-only dedup eliminates repeated actives previously observed in rankings; MF–ZINC overlap removal prevents trivial 0.0 distances.
+
+- Next Steps
+  - Apply the same logging/embedding conventions to Phase 2 CLI (when implemented) and to analysis scripts that reuse embeddings.
+  - Consider optional Parquet outputs for embeddings to accelerate downstream analysis on HPC.
+
+---
+
+### October 26, 2025: Example config adapted for fingerprints + UMAP (Jaccard)
+
+- Changes Made (Configuration)
+  - Updated `configs/molfuse_phase1_example.json` to demonstrate the fingerprint pathway with `representation: "fingerprints"` and `method: "umap"` using `metric: "jaccard"`.
+  - Switched CSV paths from `*_extracted_features.csv` to `*_extracted_fingerprints.csv` to match repository dataset layout.
+  - Adjusted `run_name` to reflect UMAP (10D, nn=50, md=0.01) and added a clarifying note in `README_V4_MOLFUSE.md` about toggling between fingerprints and features.
+
+- Rationale
+  - The v4 invariants include explicit support for fingerprints with UMAP-Jaccard. Having the example config default to this variant ensures quick validation of the non-feature pathway and reduces ambiguity about required fields (`representation`, `umap_params.metric`).
+
+- Observations
+  - Phase 1 CLI auto-selects `metric="jaccard"` for fingerprints when unspecified; we set it explicitly for clarity and reproducibility in the example.
+
+- Next Steps
+  - Provide a second example config for features+PCA if needed, or document a minimal diff to convert the example back to features (already added to README_V4).
 
 **End of Lab Book**
 

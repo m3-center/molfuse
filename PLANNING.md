@@ -150,10 +150,14 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 - [ ] Implement dr.scaling/pca/umap (projection-only; UMAP parallel)
 - [ ] Implement scoring.neighbors and metrics (EFs, AUCs, Spearman)
 - [ ] Wire phases.phase1 to run the sweep grid; log artifacts
+ - [x] Add run-scoped file logging and save embeddings (MF/ZINC/Actives)
+ - [x] Persist scaler/model artifacts (joblib) in run artifacts
+ - [x] Create Phase 1 config generator and SLURM scripts
 
 ### 🧪 Phase 2 (reuse Phase 1 models)
 - [ ] Implement phases.phase2 cutoff sweeps; reuse simspaces/models
 - [ ] Verify MF cutoff filtering logic and metrics
+ - [ ] Mirror Phase 1 logging and embedding outputs in Phase 2
 
 ### 📊 Analyses
 - [ ] Port potency-stratified analysis (Phase 1) to molfuse/analysis/phase1_potency.py

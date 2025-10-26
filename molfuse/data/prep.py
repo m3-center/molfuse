@@ -18,13 +18,32 @@ NON_FEATURE_COLUMNS = {
 }
 
 
-def select_feature_columns(df: pd.DataFrame) -> List[str]:
+def select_feature_columns(df: pd.DataFrame, min_numeric_fraction: float = 0.95) -> List[str]:
     """
-    Select feature columns from a DataFrame by excluding known non-feature columns
-    and keeping numeric columns only.
+    Select feature columns by:
+    - Excluding known non-feature columns
+    - Including columns with numeric dtype
+    - Including object/mixed-type columns if they become numeric after coercion for
+      at least `min_numeric_fraction` of their non-null entries.
+
+    This makes selection robust to pandas mixed-type inference in CSVs.
     """
     candidates = [c for c in df.columns if c not in NON_FEATURE_COLUMNS]
-    numeric = [c for c in candidates if pd.api.types.is_numeric_dtype(df[c])]
+    numeric: List[str] = []
+    for c in candidates:
+        s = df[c]
+        # Fast path: already numeric dtype
+        if pd.api.types.is_numeric_dtype(s):
+            numeric.append(c)
+            continue
+        # Robust path: attempt numeric coercion and accept if mostly numeric
+        coerced = pd.to_numeric(s, errors="coerce")
+        nonnull = int(s.notna().sum())
+        if nonnull == 0:
+            continue
+        numeric_count = int(coerced.notna().sum())
+        if numeric_count / nonnull >= min_numeric_fraction:
+            numeric.append(c)
     return numeric
 
 

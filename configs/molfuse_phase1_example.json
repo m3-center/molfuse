@@ -1,18 +1,19 @@
 {
-  "run_name": "ABL1_PCA_features_10d",
+  "run_name": "ABL1_UMAP_fingerprints_10d_nn50_md0p01",
   "target": "TyrosineProteinKinaseABL1_P00519",
-  "method": "pca",
+  "method": "umap",
   "dim": 10,
-  "mf_features_csv": "datasets/molecular_function_features_fingerprints/KW-0808_Transferase_affinity_extracted_features.csv",
-  "zinc_features_csv": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
-  "actives_features_csv": "datasets/molecular_function_features_fingerprints/chembl/ABL1_P00519_actives_extracted_features.csv",
-  "sample_zinc": 50000,
+  "mf_features_csv": "datasets/molecular_function_features_fingerprints/KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv",
+  "zinc_features_csv": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
+  "sample_zinc": 5000,
   "umap_params": {
     "n_neighbors": 50,
     "min_dist": 0.01,
-    "metric": "euclidean",
+    "metric": "jaccard",
     "random_state": null
   },
   "affinity_cutoff_nM": 100000,
-  "notes": "v4.0 example: update actives_features_csv path per your dataset layout"
+  "on_empty_cutoff": "error",
+  "representation": "fingerprints",
+  "notes": "v4.0 example: fingerprints with UMAP (Jaccard); adjust paths if your filenames differ"
 }
