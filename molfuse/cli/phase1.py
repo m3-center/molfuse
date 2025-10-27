@@ -92,25 +92,6 @@ def main() -> None:
     ch.setFormatter(fmt)
     logger.addHandler(ch)
     
-    # Check if run already completed
-    completion_marker = ws["logs"] / "phase1_summary.json"
-    if completion_marker.exists():
-        try:
-            with completion_marker.open("r") as f:
-                summary = json.load(f)
-            # Validate it's not corrupted
-            if "config" in summary and "metrics_path" in summary:
-                logger.info("="*80)
-                logger.info("RUN ALREADY COMPLETED - SKIPPING")
-                logger.info(f"Completion marker found: {completion_marker}")
-                logger.info(f"Metrics: {summary.get('metrics_path', 'N/A')}")
-                logger.info("="*80)
-                return
-            else:
-                logger.warning(f"Completion marker exists but appears corrupted, proceeding with run")
-        except Exception as e:
-            logger.warning(f"Could not read completion marker ({e}), proceeding with run")
-    
     logger.info("Phase 1 started")
     representation = cfg.get("representation", "features").lower()  # "features" | "fingerprints"
 
@@ -567,7 +548,6 @@ def main() -> None:
     (ws["logs"] / "phase1_summary.json").write_text(json.dumps(summary, indent=2))
     logger.info("="*80)
     logger.info("PHASE 1 COMPLETED SUCCESSFULLY")
-    logger.info(f"Completion marker saved: {ws['logs'] / 'phase1_summary.json'}")
     logger.info("="*80)
 
 
