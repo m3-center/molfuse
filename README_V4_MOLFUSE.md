@@ -30,12 +30,17 @@ Outputs and logging:
 ## Try it
 
 - Phase 1 (end-to-end; derives actives from MF file by accession when `actives_features_csv` is missing or not found):
+
+  ```console
   python -m molfuse.cli.phase1 --config configs/molfuse_phase1_example.json --workspace ./experiment_workspace_v4
+  ```  
 
   Note: The example config is set to fingerprints + UMAP with Jaccard. To run a features baseline instead, set `representation: "features"`, switch `method: "pca"` or keep `method: "umap"` with `metric: "euclidean"`, and point CSVs to `*_extracted_features.csv`.
 
 - Phase 2 (logs cutoff config):
+  ```console
   python -m molfuse.cli.phase2 --config configs/molfuse_phase1_example.json --workspace ./experiment_workspace_v4
+  ```  
 
 Notes:
 - If your config omits `actives_features_csv` or points to a non-existent file, the CLI will split the MF file by target accession (e.g., P00519) to derive actives and exclude them from MF training.

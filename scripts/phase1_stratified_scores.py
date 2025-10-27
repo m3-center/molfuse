@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""
+Phase 1 Potency-Stratified Scores (v4 molfuse)
+
+- For each completed Phase 1 run, compute EF@1/5/10 for potency tiers (High, Medium, Weak)
+- Uses ranked_scores.csv for rankings and dataset CSVs for affinity values
+- Works even if only some runs have finished
+
+Tiers (nM):
+- High:   0.1 <= nM <= 100
+- Medium: 100 <  nM <= 1000
+- Weak:   1000 < nM <= 100000
+
+Usage:
+  python scripts/phase1_stratified_scores.py \
+      --workspace_dir experiment_workspace_v4 \
+      --phase phase1 \
+      --output_dir reporting/phase1_stratified
+
+Notes:
+- Reads actives from actives_features_csv if provided in logs/phase1_summary.json.
+  Otherwise derives actives by filtering mf_features_csv by accession parsed from target.
+- Joins by Compound ChEMBL ID when available, else by SMILES/canonical_smiles.
+- Self-contained; does not import archived modules.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import logging
+
+import numpy as np
+import pandas as pd
+
+# Plotting (headless safe)
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+try:
+    import seaborn as sns  # type: ignore
+    _HAVE_SNS = True
+except Exception:
+    sns = None  # type: ignore
+    _HAVE_SNS = False
+
+
+def _setup_logger(out_dir: Path) -> logging.Logger:
+    logger = logging.getLogger("phase1_stratified")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    fh = logging.FileHandler(out_dir / "stratified.log", mode="w")
+    sh = logging.StreamHandler()
+    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fh.setFormatter(fmt)
+    sh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.addHandler(sh)
+    return logger
+
+
+def _read_json(p: Path) -> Optional[dict]:
+    try:
+        with p.open("r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _extract_accession(target: str) -> Optional[str]:
+    m = re.match(r".*_([A-Z0-9]+)$", target)
+    return m.group(1) if m else None
+
+
+def _read_actives_df(summary_cfg: dict, target: str, logger: logging.Logger) -> Optional[pd.DataFrame]:
+    # Prefer explicit actives_features_csv
+    actives_path = summary_cfg.get("actives_features_csv")
+    if actives_path:
+        p = Path(actives_path)
+        if p.exists():
+            try:
+                df = pd.read_csv(p, usecols=[
+                    "Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"
+                ], low_memory=False)
+                logger.info(f"Loaded actives CSV: {p} (rows={len(df)})")
+                return df
+            except Exception as e:
+                logger.info(f"Failed reading actives CSV {p}: {e}")
+    # Derive from mf_features_csv by accession
+    mf_path = summary_cfg.get("mf_features_csv")
+    if mf_path:
+        acc = _extract_accession(target)
+        if not acc:
+            return None
+        p = Path(mf_path)
+        if p.exists():
+            try:
+                usecols = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
+                df_all = pd.read_csv(p, usecols=usecols, low_memory=False)
+                if "accession" in df_all.columns:
+                    df = df_all[df_all["accession"] == acc].copy()
+                    logger.info(f"Derived actives from MF by accession={acc}: rows={len(df)}")
+                    return df
+            except Exception as e:
+                logger.info(f"Failed reading/deriving actives from MF {p}: {e}")
+    return None
+
+
+def _assign_potency_tier(nm: float) -> Optional[str]:
+    try:
+        v = float(nm)
+    except Exception:
+        return None
+    if v < 0.1 or v > 100000:
+        return None
+    if v <= 100.0:
+        return "High"
+    if v <= 1000.0:
+        return "Medium"
+    return "Weak"
+
+
+def _join_affinity_to_actives(ranked: pd.DataFrame, actives_df: pd.DataFrame) -> pd.DataFrame:
+    # Filter actives rows from ranked and pick an identifier to join
+    ra = ranked[ranked["source"] == "actives"].copy()
+    key = None
+    for k in ["Compound ChEMBL ID", "canonical_smiles", "SMILES"]:
+        if k in ra.columns and k in actives_df.columns:
+            key = k
+            break
+    if key is None:
+        return ra.assign(potency_tier=pd.Series(dtype=object))
+    # Build minimal actives map
+    aff = actives_df[[k for k in [key, "Standard Value (nM)"] if k in actives_df.columns]].copy()
+    aff = aff.dropna(subset=[key]).drop_duplicates(subset=[key])
+    merged = ra.merge(aff, on=key, how="left")
+    # Assign tiers
+    merged["potency_tier"] = merged["Standard Value (nM)"].apply(_assign_potency_tier)
+    return merged
+
+
+def _ef_at_percent(ranked: pd.DataFrame, tier: str, pct: float) -> Optional[float]:
+    # EF@p% = hits_top_k_tier / (p * N_tier)
+    if ranked.empty:
+        return None
+    N_total = len(ranked)
+    k = max(1, int(np.ceil(pct * N_total)))
+    topk = ranked.head(k)
+    ra = ranked[(ranked["source"] == "actives") & (ranked["potency_tier"].notna())]
+    N_tier = int((ra["potency_tier"] == tier).sum())
+    if N_tier == 0:
+        return None
+    hits = int(((topk["source"] == "actives") & (topk["potency_tier"] == tier)).sum())
+    ef = hits / (pct * N_tier)
+    return float(ef)
+
+
+def _per_run_stratified(ranked_path: Path, summary_cfg: dict, target: str, out_dir: Path, logger: logging.Logger) -> Optional[dict]:
+    if not ranked_path.exists():
+        return None
+    ranked = pd.read_csv(ranked_path, low_memory=False)
+    actives_df = _read_actives_df(summary_cfg, target, logger)
+    if actives_df is None or actives_df.empty:
+        logger.info("No actives dataframe available; skipping stratified computation for this run")
+        return None
+    # Join potency tiers to actives rows
+    ranked = _join_affinity_to_actives(ranked, actives_df)
+    # Compute EF@1/5/10 for each tier
+    out: Dict[str, object] = {"run_ranked": str(ranked_path)}
+    for tier in ["High", "Medium", "Weak"]:
+        out[f"EF1_{tier}"] = _ef_at_percent(ranked, tier, 0.01)
+        out[f"EF5_{tier}"] = _ef_at_percent(ranked, tier, 0.05)
+        out[f"EF10_{tier}"] = _ef_at_percent(ranked, tier, 0.10)
+    # Save per-run CSV
+    per_run_csv = out_dir / f"{ranked_path.parent.parent.name}_stratified.csv"
+    cols_keep = [c for c in ["source", "score", "distance", "potency_tier", "Compound ChEMBL ID", "canonical_smiles", "SMILES"] if c in ranked.columns]
+    ranked[cols_keep].to_csv(per_run_csv, index=False)
+    logger.info(f"Saved per-run stratified table: {per_run_csv}")
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Phase 1 Potency-Stratified Scores (v4 molfuse)")
+    ap.add_argument("--workspace_dir", type=str, required=True, help="Path to experiment_workspace_v4")
+    ap.add_argument("--phase", type=str, default="phase1", help="Phase subdirectory (default: phase1)")
+    ap.add_argument("--output_dir", type=str, default="reporting/phase1_stratified", help="Output directory for stratified summaries")
+    args = ap.parse_args()
+
+    workspace_dir = Path(args.workspace_dir).resolve()
+    out_dir = Path(args.output_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logger = _setup_logger(out_dir)
+
+    phase_dir = workspace_dir / args.phase
+    if not phase_dir.exists():
+        logger.info(f"Phase directory not found: {phase_dir}")
+        return
+
+    rows: List[Dict] = []
+    for run_dir in sorted([p for p in phase_dir.iterdir() if p.is_dir()]):
+        ranked_path = run_dir / "artifacts" / "ranked_scores.csv"
+        summary = _read_json(run_dir / "logs" / "phase1_summary.json")
+        metrics = _read_json(run_dir / "metrics" / "metrics.json")
+        if metrics is None:
+            continue
+        target = str(metrics.get("target", "UNKNOWN"))
+        cfg = summary.get("config", {}) if (summary and isinstance(summary.get("config"), dict)) else {}
+        logger.info(f"RUN: {run_dir.name}")
+        res = _per_run_stratified(ranked_path, cfg, target, out_dir, logger)
+        if res is None:
+            continue
+        res.update({
+            "run_name": run_dir.name,
+            "target": target,
+        })
+        rows.append(res)
+
+    if not rows:
+        logger.info("No stratified results produced (no eligible runs)")
+        return
+
+    df = pd.DataFrame(rows)
+    out_csv = out_dir / "phase1_stratified_summary.csv"
+    df.to_csv(out_csv, index=False)
+    logger.info(f"Saved stratified summary: {out_csv} (rows={len(df)})")
+
+    # Tiered bar plots (aggregate across runs)
+    logger.info("START: tiered bar plots (EF@1/5/10)")
+    try:
+        # Build long-form dataframe: columns [tier, metric, value]
+        recs: List[Dict] = []
+        for _, r in df.iterrows():
+            for tier in ("High", "Medium", "Weak"):
+                for m_name, col in (("EF@1%", f"EF1_{tier}"), ("EF@5%", f"EF5_{tier}"), ("EF@10%", f"EF10_{tier}")):
+                    val = r.get(col, np.nan)
+                    try:
+                        val_f = float(val) if val is not None else np.nan
+                    except Exception:
+                        val_f = np.nan
+                    recs.append({"tier": tier, "metric": m_name, "value": val_f})
+        dfl = pd.DataFrame(recs)
+        # Plot one figure per metric
+        plots_dir = out_dir / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        for metric in ("EF@1%", "EF@5%", "EF@10%"):
+            sub = dfl[dfl["metric"] == metric].copy()
+            if sub.empty:
+                continue
+            # Aggregate
+            agg = sub.groupby("tier", as_index=False)["value"].agg(["mean", "std"]).reset_index()
+            fig, ax = plt.subplots(figsize=(6, 4))
+            if _HAVE_SNS and sns is not None:
+                sns.barplot(data=sub, x="tier", y="value", ax=ax, errorbar=("sd"), capsize=0.1)
+            else:
+                tiers = ["High", "Medium", "Weak"]
+                means = [sub[sub["tier"] == t]["value"].mean() for t in tiers]
+                stds = [sub[sub["tier"] == t]["value"].std() for t in tiers]
+                x = np.arange(len(tiers))
+                ax.bar(x, means, yerr=stds, capsize=4, width=0.6, color=["#4daf4a", "#377eb8", "#984ea3"])  # green/blue/purple
+                ax.set_xticks(x)
+                ax.set_xticklabels(tiers)
+            ax.set_title(f"Tiered {metric}")
+            ax.set_ylabel(metric)
+            ax.set_xlabel("Potency tier")
+            fig.tight_layout()
+            fig.savefig(plots_dir / f"tier_bars_{metric.replace('@','at').replace('%','pct').replace('/','_')}.png", dpi=300)
+            fig.savefig(plots_dir / f"tier_bars_{metric.replace('@','at').replace('%','pct').replace('/','_')}.pdf")
+            plt.close(fig)
+        logger.info("Finished tiered bar plots")
+    except Exception as e:
+        logger.info(f"Tiered bar plots failed: {e}")
+
+
+if __name__ == "__main__":
+    main()
