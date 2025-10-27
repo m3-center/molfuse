@@ -614,11 +614,13 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
         
         bars = ax.bar(x, means, yerr=stds, capsize=5, width=0.6, color=colors, alpha=0.8, edgecolor="black", linewidth=1.2)
         
-        # Annotate bars with values
-        for bar, mean_val in zip(bars, means):
+        # Annotate bars with values (use fixed offset relative to y_max to avoid clipping)
+        for bar, mean_val, std_val in zip(bars, means, stds):
             if np.isfinite(mean_val):
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width()/2, height + max(stds)*0.1,
+                # Position text just above error bar, with fallback to bar height
+                text_y = height + std_val + (y_max * 0.02)  # 2% of y_max as offset
+                ax.text(bar.get_x() + bar.get_width()/2, text_y,
                        f"{mean_val:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
         
         ax.set_xticks(x)
