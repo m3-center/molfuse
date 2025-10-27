@@ -22,8 +22,6 @@
 # Common overrides: OUTPUT_DIR, N_TARGET, N_MF, N_ZINC, ENABLE_SWEEP (0/1)
 #
 
-set -euo pipefail
-
 # Resolve repo root and move there so relative paths work
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -48,23 +46,7 @@ PR_TARGET_GUARD=${PR_TARGET_GUARD:-0.2}
 PR_MF=${PR_MF:-0.6}
 PR_ZINC=${PR_ZINC:-0.8}
 
-# Try to activate the requested environment
-# Prefer mamba; fallback to conda if mamba not available
-if command -v mamba >/dev/null 2>&1; then
-  # On many clusters, a bashrc contains the mamba hook
-  source "$HOME/.bashrc" 2>/dev/null || true
-  mamba activate ummbas-screening-mordredcommunity 2>/dev/null || conda activate ummbas-screening-mordredcommunity
-else
-  # Fallback for conda without mamba
-  if [ -f "$HOME/mambaforge/etc/profile.d/conda.sh" ]; then
-    source "$HOME/mambaforge/etc/profile.d/conda.sh"
-  elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/miniconda3/etc/profile.d/conda.sh"
-  elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/anaconda3/etc/profile.d/conda.sh"
-  fi
-  conda activate ummbas-screening-mordredcommunity
-fi
+mamba activate ummbas-screening-mordredcommunity
 
 mkdir -p "${OUTPUT_DIR}"
 
