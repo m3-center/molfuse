@@ -794,7 +794,6 @@ def main():
         str(out_dir/"plots"/"distance_cdf_compare_methods.png"),
         str(out_dir/"plots"/"distance_cdf_compare_methods.pdf"),
     ] + [str(p) for p in dedicated])
-    ])
 
     # Write manifest
     (out_dir/"plots_manifest.json").write_text(json.dumps(manifest, indent=2))

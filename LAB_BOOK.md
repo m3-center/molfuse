@@ -23,6 +23,13 @@
   - Execute on HPC workspaces and select figures for manuscript drafts.
   - Optionally facet EF bars by target/cutoff when Phase 2/3 data are integrated.
 
+#### Addendum (later on Oct 27)
+
+- Bugfix: PCA bars missing from `bars_ef1_combined` due to NaNs in UMAP-only keys during grouping. Fixed by grouping with `dropna=False` so PCA rows aren’t dropped.
+- Clarification: Distance CDF now explicitly labeled as “ZINC → MF; method comparison”.
+- New outputs: Four separate histograms requested — `distance_hist_umap_best_features.*`, `distance_hist_umap_avg_features.*`, `distance_hist_umap_best_fingerprints.*`, `distance_hist_umap_avg_fingerprints.*` — each overlays ZINC vs ACTIVES min-distance distributions in [0, 0.5].
+- Heatmap polish: Panels with only a single hyperparameter cell (1×1 pivot) are hidden to avoid confusing, non-informative tiles (removes the odd “fourth” heatmap).
+
 ### October 26, 2025: PUBLICATION v4 updates — invariants and features list
 
 - Changes Made (Documentation)
