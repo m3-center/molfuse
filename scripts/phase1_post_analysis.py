@@ -333,7 +333,7 @@ def plot_bars_combined(
         handles, labels = axes[-1].get_legend_handles_labels()
         if handles:
             fig.legend(handles, labels, title="Representation", loc="center left", bbox_to_anchor=(1.0, 0.5))
-    fig.suptitle(f"{label} (mean ± sd)")
+        fig.suptitle(f"{label} (mean ± sd)")
         fig.tight_layout(rect=(0,0,0.85,0.95))
         p_png = out_dir / f"bars_{metric}_combined.png"
         p_pdf = out_dir / f"bars_{metric}_combined.pdf"
