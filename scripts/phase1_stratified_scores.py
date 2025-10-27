@@ -437,7 +437,13 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     ef1_medium = compute_ef_at_percent(ranked_df, tier="Medium", top_pct=0.01)
     ef1_weak = compute_ef_at_percent(ranked_df, tier="Weak", top_pct=0.01)
     
-    logger.info(f"  EF@1%: All={ef1_all:.2f if ef1_all else 'N/A'}, High={ef1_high:.2f if ef1_high else 'N/A'}, Medium={ef1_medium:.2f if ef1_medium else 'N/A'}, Weak={ef1_weak:.2f if ef1_weak else 'N/A'}")
+    # Format EF values for logging
+    ef1_all_str = f"{ef1_all:.2f}" if ef1_all is not None else "N/A"
+    ef1_high_str = f"{ef1_high:.2f}" if ef1_high is not None else "N/A"
+    ef1_medium_str = f"{ef1_medium:.2f}" if ef1_medium is not None else "N/A"
+    ef1_weak_str = f"{ef1_weak:.2f}" if ef1_weak is not None else "N/A"
+    
+    logger.info(f"  EF@1%: All={ef1_all_str}, High={ef1_high_str}, Medium={ef1_medium_str}, Weak={ef1_weak_str}")
     
     # Extract config
     run_config = extract_run_config(summary_json, metrics_json)
