@@ -1,4 +1,13 @@
-#!/usr/bin/env bash
+#!/bin/bash
+#SBATCH --job-name=mordred_eval
+#SBATCH --partition=hpc
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=64
+#SBATCH --mem=32G
+#SBATCH --time=0-08:00:00
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
+
 #
 # SLURM submission script for the standalone Mordred full-feature evaluator
 # Runs tests/mordred_full_feature_eval/mordred_full_feature_compare.py on HPC.
@@ -12,14 +21,6 @@
 # To override variables, pass them via --export=ALL,VAR=VALUE,...
 # Common overrides: OUTPUT_DIR, N_TARGET, N_MF, N_ZINC, ENABLE_SWEEP (0/1)
 #
-#SBATCH --job-name=mordred_eval
-#SBATCH --partition=hpc
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
-#SBATCH --mem=32G
-#SBATCH --time=0-08:00:00
-#SBATCH --output=slurm_logs/%x_%j.out
-#SBATCH --error=slurm_logs/%x_%j.err
 
 set -euo pipefail
 
