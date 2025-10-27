@@ -293,14 +293,16 @@ The standalone post-analysis utility scans a v4 workspace and generates consolid
   - Inputs: `--workspace_dir experiment_workspace_v4` and optional `--phase` (default `phase1`)
   - Outputs: CSV summaries, best-config JSON, and combined plots under `reporting/phase1_post_analysis/plots/`
   - Combined figures (shared axes):
-    - Bars: EF@1%, EF@5%, EF@10% across dims (columns) with method on x and representation as hue
-    - UMAP heatmaps: grid by representation × dimension with a shared colorbar
+    - Bars: EF@1% across dims (columns) with method on x (PCA, UMAP avg, UMAP best) and representation as hue; EF@5/10 removed from defaults
+    - UMAP heatmaps: grid by representation × dimension with a shared colorbar; panels with only one hyperparameter cell are hidden
     - Seed variability: grid by method × dimension, violin/box (seaborn optional)
-    - Distance diagnostics: dual-range histograms (0–1 and 0–5) and CDF with percentile markers
+    - Distance diagnostics:
+      1) Method-comparison CDF and histogram for ZINC only, in a fixed range (default [0, 0.5])
+      2) Four dedicated histograms (best/avg × features/fingerprints), each overlaying ZINC vs ACTIVES
   - Flags:
-    - `--metrics ef1,ef5,ef10` (defaults to all three)
-    - `--no-sharey` to disable shared y-axis on bars
-    - `--distance_xranges 0-1,0-5` to control histogram ranges
+  - `--metrics ef1` (default)
+  - `--no-sharey` to disable shared y-axis on bars
+  - `--distance_xranges 0-0.5` to control fixed-range distance plots
 
 Example:
 

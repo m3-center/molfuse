@@ -39,17 +39,27 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# Consistent style for all figures
+# Publication-quality style for all figures
 matplotlib.rcParams.update({
     "figure.dpi": 120,
     "savefig.dpi": 300,
     "axes.grid": True,
-    "grid.alpha": 0.2,
+    "grid.alpha": 0.3,
+    "grid.linewidth": 0.5,
     "axes.titlesize": 12,
     "axes.labelsize": 11,
+    "axes.titleweight": "bold",
     "legend.fontsize": 9,
+    "legend.framealpha": 0.9,
     "xtick.labelsize": 9,
     "ytick.labelsize": 9,
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
+    "axes.linewidth": 1.2,
+    "xtick.major.width": 1.0,
+    "ytick.major.width": 1.0,
+    "lines.linewidth": 2.0,
+    "patch.linewidth": 0.5,
 })
 
 from typing import Any
@@ -363,16 +373,17 @@ def plot_bars_combined(
             "ef10": "EF@10%",
         }.get(metric, metric)
         axes[0].set_ylabel(label)
-        # Legend outside
-        handles, labels = axes[-1].get_legend_handles_labels()
+        # Legend outside with proper spacing
+        handles, labels_leg = axes[-1].get_legend_handles_labels()
         if handles:
-            fig.legend(handles, labels, title="Representation", loc="center left", bbox_to_anchor=(1.0, 0.5))
-        fig.suptitle(f"{label} (mean ± sd)")
-        fig.tight_layout(rect=(0,0,0.85,0.95))
+            fig.legend(handles, labels_leg, title="Representation", loc="center left", 
+                      bbox_to_anchor=(1.0, 0.5), frameon=True, fontsize=10)
+        fig.suptitle(f"{label} (mean ± sd)", fontsize=14, fontweight='bold')
+        fig.tight_layout(rect=(0, 0, 0.88, 0.96))
         p_png = out_dir / f"bars_{metric}_combined.png"
         p_pdf = out_dir / f"bars_{metric}_combined.pdf"
-        fig.savefig(p_png)
-        fig.savefig(p_pdf)
+        fig.savefig(p_png, bbox_inches='tight', dpi=300)
+        fig.savefig(p_pdf, bbox_inches='tight')
         plt.close(fig)
         saved.extend([p_png, p_pdf])
 
@@ -386,13 +397,28 @@ def plot_umap_heatmaps(df_g: pd.DataFrame, out_dir: Path) -> None:
         return
     reps = sorted(sub["representation"].dropna().unique().tolist())
     dims = sorted(sub["dim"].dropna().unique().astype(int).tolist())
-    nrows, ncols = max(1, len(reps)), max(1, len(dims))
+    
+    # Fixed layout: 2 rows (features, fingerprints) x N columns (dimensions)
+    nrows = 2
+    ncols = len(dims)
+    
     # Shared color scale across all panels
     vmin = float(sub["ef1_mean"].min()) if np.isfinite(sub["ef1_mean"].min()) else None
     vmax = float(sub["ef1_mean"].max()) if np.isfinite(sub["ef1_mean"].max()) else None
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.8*ncols, 4.2*nrows), squeeze=False)
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 4.5*nrows), squeeze=False)
     mappable = None
-    for i, rep in enumerate(reps):
+    
+    # Row 0: features, Row 1: fingerprints
+    rep_order = ["features", "fingerprints"]
+    
+    for i, rep in enumerate(rep_order):
+        if rep not in reps:
+            # Hide entire row if representation not present
+            for j in range(ncols):
+                axes[i][j].set_visible(False)
+            continue
+            
         for j, d in enumerate(dims):
             ax = axes[i][j]
             ss = sub[(sub["representation"] == rep) & (sub["dim"] == d)]
@@ -412,29 +438,41 @@ def plot_umap_heatmaps(df_g: pd.DataFrame, out_dir: Path) -> None:
             except Exception:
                 pass
             if _HAVE_SNS and sns is not None:
-                hm = sns.heatmap(pivot, annot=False, cmap="viridis", vmin=vmin, vmax=vmax, cbar=False, ax=ax)
+                hm = sns.heatmap(pivot, annot=True, fmt=".1f", cmap="viridis", 
+                                vmin=vmin, vmax=vmax, cbar=False, ax=ax, 
+                                annot_kws={"fontsize": 8})
                 mappable = hm.collections[0]
             else:
                 im = ax.imshow(pivot.values, aspect="auto", cmap="viridis", origin="upper", vmin=vmin, vmax=vmax)
                 ax.set_yticks(range(len(pivot.index)))
-                ax.set_yticklabels([str(x) for x in pivot.index])
+                ax.set_yticklabels([str(x) for x in pivot.index], fontsize=9)
                 ax.set_xticks(range(len(pivot.columns)))
-                ax.set_xticklabels([str(x) for x in pivot.columns])
+                ax.set_xticklabels([str(x) for x in pivot.columns], fontsize=9)
                 mappable = im
+            
+            # Titles only on top row
             if i == 0:
-                ax.set_title(f"dim={d}")
+                ax.set_title(f"dim={d}", fontsize=11, fontweight='bold')
+            
+            # Y-label (representation name and axis label) only on leftmost column
             if j == 0:
-                ax.set_ylabel(f"{rep}\nmin_dist")
-            ax.set_xlabel("n_neighbors")
+                ax.set_ylabel(f"{rep}\numap_min_dist", fontsize=10, fontweight='bold')
+            else:
+                ax.set_ylabel("")
+                
+            ax.set_xlabel("n_neighbors", fontsize=9)
 
-    # Shared colorbar
+    # Shared colorbar on the right
     if mappable is not None:
-        cbar = fig.colorbar(mappable, ax=axes, location="right", shrink=0.9)
-        cbar.set_label("EF@1% (mean)")
-    fig.suptitle("UMAP EF@1% heatmaps (shared scale)")
-    fig.tight_layout(rect=(0,0,0.92,0.95))
-    fig.savefig(out_dir / "umap_heatmap_grid.png")
-    fig.savefig(out_dir / "umap_heatmap_grid.pdf")
+        cbar_ax = fig.add_axes((0.92, 0.15, 0.02, 0.7))
+        cbar = fig.colorbar(mappable, cax=cbar_ax)
+        cbar.set_label("EF@1% (mean)", fontsize=11, fontweight='bold')
+        cbar.ax.tick_params(labelsize=9)
+    
+    fig.suptitle("UMAP Hyperparameter Sensitivity: EF@1%", fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 0.91, 0.96))
+    fig.savefig(out_dir / "umap_heatmap_grid.png", dpi=300, bbox_inches='tight')
+    fig.savefig(out_dir / "umap_heatmap_grid.pdf", bbox_inches='tight')
     plt.close(fig)
 
 
@@ -460,21 +498,29 @@ def plot_seed_variability(df: pd.DataFrame, out_dir: Path) -> None:
                 ax.set_visible(False)
                 continue
             if _HAVE_SNS and sns is not None:
-                sns.violinplot(data=sub, x="representation", y="ef_1%", ax=ax, inner="quartile")
+                sns.violinplot(data=sub, x="representation", y="ef_1%", ax=ax, 
+                              inner="quartile", palette="Set2", linewidth=1.5)
             else:
                 groups = sorted(sub["representation"].dropna().unique().tolist())
                 data = [sub[sub["representation"]==g]["ef_1%"].dropna().to_numpy() for g in groups]
-                ax.boxplot(data, labels=groups)
+                bp = ax.boxplot(data, labels=groups, patch_artist=True)
+                # Style boxplots
+                for patch in bp['boxes']:
+                    patch.set_facecolor('#8fbce6')
+                    patch.set_alpha(0.7)
             if i == 0:
-                ax.set_title(f"dim={d}")
+                ax.set_title(f"dim={d}", fontsize=11, fontweight='bold')
             if j == 0:
-                ax.set_ylabel(f"{m.upper()}\nEF@1%")
-            ax.set_xlabel("Representation")
+                ax.set_ylabel(f"{m.upper()}\nEF@1%", fontsize=10, fontweight='bold')
+            else:
+                ax.set_ylabel("")
+            ax.set_xlabel("Representation", fontsize=10)
+            ax.grid(True, alpha=0.3, axis='y')
 
-    fig.suptitle("Seed variability — EF@1%")
-    fig.tight_layout(rect=(0,0,0.98,0.95))
-    fig.savefig(out_dir / "seed_variability_grid.png")
-    fig.savefig(out_dir / "seed_variability_grid.pdf")
+    fig.suptitle("Seed Variability — EF@1%", fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(out_dir / "seed_variability_grid.png", dpi=300, bbox_inches='tight')
+    fig.savefig(out_dir / "seed_variability_grid.pdf", bbox_inches='tight')
     plt.close(fig)
 
 
@@ -626,45 +672,34 @@ def _plot_distance_hist_cdf_by_label(
         "UMAP best fingerprints": "#ff7f0e",  # orange
         "UMAP avg fingerprints": "#ffbb78",   # light orange
     }
-
-    # Histogram (method comparison, ZINC only)
-    fig, ax = plt.subplots(figsize=(7.5, 4))
-    for lab in labels:
-        dd = df_dist[(df_dist["label"] == lab) & (df_dist.get("source", "zinc") == "zinc")]["distance"].dropna().to_numpy(dtype=float)
-        if dd.size == 0:
-            continue
-        mask = (dd >= xmin) & (dd <= xmax)
-        ax.hist(dd[mask], bins=80, range=(xmin, xmax), density=True, alpha=0.45,
-                label=lab, color=color_map.get(lab, None))
-    ax.set_xlim(xmin, xmax)
-    ax.set_xlabel("min-distance to MF cloud")
-    ax.set_ylabel("density")
-    ax.set_title(f"Histogram (ZINC → MF) [{xmin:g},{xmax:g}]")
-    ax.legend(loc="upper right")
-    fig.tight_layout()
-    fig.savefig(plots_dir / "distance_hist_compare_methods.png")
-    fig.savefig(plots_dir / "distance_hist_compare_methods.pdf")
+    
+    # Method comparison CDF - now with subplots for ZINC vs ACTIVES
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    for idx, source in enumerate(["zinc", "actives"]):
+        ax = axes[idx]
+        for lab in labels:
+            dd = df_dist[(df_dist["label"] == lab) & (df_dist["source"] == source)]["distance"].dropna().to_numpy(dtype=float)
+            if dd.size == 0:
+                continue
+            dd_sorted = np.sort(dd)
+            y = np.linspace(0, 1, len(dd_sorted), endpoint=True)
+            ax.plot(dd_sorted, y, label=lab, color=color_map.get(lab, None), linewidth=2)
+        
+        ax.set_xlim(xmin, xmax)
+        ax.set_xlabel("min-distance to MF cloud", fontsize=11)
+        ax.set_ylabel("CDF", fontsize=11)
+        ax.set_title(f"{source.upper()} → MF", fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        if idx == 1:  # legend on right panel
+            ax.legend(loc="lower right", fontsize=9, frameon=True)
+    
+    fig.suptitle("Distance CDF: Method Comparison", fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(plots_dir / "distance_cdf_compare_methods.png", dpi=300, bbox_inches='tight')
+    fig.savefig(plots_dir / "distance_cdf_compare_methods.pdf", bbox_inches='tight')
     plt.close(fig)
-
-    # CDF (method comparison, ZINC only)
-    fig, ax = plt.subplots(figsize=(7.5, 4))
-    for lab in labels:
-        dd = df_dist[(df_dist["label"] == lab) & (df_dist.get("source", "zinc") == "zinc")]["distance"].dropna().to_numpy(dtype=float)
-        if dd.size == 0:
-            continue
-        dd_sorted = np.sort(dd)
-        y = np.linspace(0, 1, len(dd_sorted), endpoint=True)
-        ax.plot(dd_sorted, y, label=lab, color=color_map.get(lab, None))
-    ax.set_xlim(xmin, xmax)
-    ax.set_xlabel("min-distance to MF cloud")
-    ax.set_ylabel("CDF")
-    ax.set_title("Distance CDF (ZINC → MF; method comparison)")
-    ax.legend(loc="lower right")
-    fig.tight_layout()
-    fig.savefig(plots_dir / "distance_cdf_compare_methods.png")
-    fig.savefig(plots_dir / "distance_cdf_compare_methods.pdf")
-    plt.close(fig)
-    logger.info("Saved distance hist/CDF plots for PCA vs UMAP variants")
+    logger.info("Saved improved distance CDF plot with ZINC vs ACTIVES comparison")
 
 
 def _plot_umap_histograms_split(
@@ -673,48 +708,64 @@ def _plot_umap_histograms_split(
     logger: logging.Logger,
     x_range: Tuple[float, float] = (0.0, 0.5),
 ) -> List[Path]:
-    """Create four separate histograms:
-    - UMAP best features
-    - UMAP avg features
-    - UMAP best fingerprints
-    - UMAP avg fingerprints
-    Each overlays ZINC vs ACTIVES min-distance distributions.
+    """Create a grid of histograms showing ZINC vs ACTIVES for each method.
+    Layout: 5 methods in columns (PCA, UMAP best features, UMAP avg features, 
+    UMAP best fingerprints, UMAP avg fingerprints)
     """
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     xmin, xmax = x_range
-    cfgs = [
-        ("UMAP best features", "distance_hist_umap_best_features"),
-        ("UMAP avg features", "distance_hist_umap_avg_features"),
-        ("UMAP best fingerprints", "distance_hist_umap_best_fingerprints"),
-        ("UMAP avg fingerprints", "distance_hist_umap_avg_fingerprints"),
+    
+    method_labels = [
+        "PCA",
+        "UMAP best features",
+        "UMAP avg features", 
+        "UMAP best fingerprints",
+        "UMAP avg fingerprints",
     ]
-    saved: List[Path] = []
-    for label, fname in cfgs:
+    
+    # Create 1x5 subplot grid
+    fig, axes = plt.subplots(1, 5, figsize=(18, 4), sharey=True)
+    
+    for idx, label in enumerate(method_labels):
+        ax = axes[idx]
         sub = df_dist[df_dist["label"] == label]
+        
         if sub.empty:
-            logger.info(f"No distance samples for '{label}', skipping dedicated histogram")
+            logger.info(f"No distance samples for '{label}', skipping")
+            ax.set_visible(False)
             continue
-        fig, ax = plt.subplots(figsize=(7.5, 4))
-        for src, color, alpha in [("zinc", "#4c72b0", 0.55), ("actives", "#dd8452", 0.55)]:
+        
+        # Plot ZINC and ACTIVES overlaid
+        for src, color, alpha, zorder in [("zinc", "#5A7FC0", 0.6, 1), ("actives", "#E85D2D", 0.7, 2)]:
             dd = sub[sub["source"] == src]["distance"].dropna().to_numpy(dtype=float)
             if dd.size == 0:
                 continue
             mask = (dd >= xmin) & (dd <= xmax)
-            ax.hist(dd[mask], bins=80, range=(xmin, xmax), density=True, alpha=alpha, label=src.upper(), color=color)
+            ax.hist(dd[mask], bins=60, range=(xmin, xmax), density=True, 
+                   alpha=alpha, label=src.upper(), color=color, zorder=zorder, edgecolor='white', linewidth=0.3)
+        
         ax.set_xlim(xmin, xmax)
-        ax.set_xlabel("min-distance to MF cloud")
-        ax.set_ylabel("density")
-        ax.set_title(f"Histogram [{xmin:g},{xmax:g}] — {label}")
-        ax.legend(loc="upper right")
-        fig.tight_layout()
-        p_png = plots_dir / f"{fname}.png"
-        p_pdf = plots_dir / f"{fname}.pdf"
-        fig.savefig(p_png)
-        fig.savefig(p_pdf)
-        plt.close(fig)
-        saved.extend([p_png, p_pdf])
-    return saved
+        ax.set_xlabel("min-distance to MF", fontsize=10)
+        ax.set_title(label, fontsize=10, fontweight='bold')
+        ax.grid(True, alpha=0.25, axis='y')
+        
+        if idx == 4:  # legend on last panel
+            ax.legend(loc="upper right", fontsize=9, frameon=True)
+    
+    axes[0].set_ylabel("Density", fontsize=11)
+    fig.suptitle(f"Distance Distributions: ZINC vs ACTIVES [{xmin:g}, {xmax:g}]", 
+                fontsize=13, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    
+    p_png = plots_dir / "distance_hist_grid_all_methods.png"
+    p_pdf = plots_dir / "distance_hist_grid_all_methods.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches='tight')
+    fig.savefig(p_pdf, bbox_inches='tight')
+    plt.close(fig)
+    logger.info(f"Saved distance histogram grid: {p_png}")
+    
+    return [p_png, p_pdf]
 
 
 def main():
@@ -786,11 +837,9 @@ def main():
         xmin, xmax = 0.0, 0.5
     df_dist_labeled = _collect_distance_samples_by_label(workspace_dir, args.phase, df_runs, df_grouped, logger, sources=["zinc", "actives"]) 
     _plot_distance_hist_cdf_by_label(df_dist_labeled, out_dir, logger, x_range=(xmin, xmax))
-    # Four dedicated histograms requested (best/avg × features/fingerprints), overlaying ZINC vs ACTIVES
+    # Grid histogram showing all methods
     dedicated = _plot_umap_histograms_split(df_dist_labeled, out_dir, logger, x_range=(xmin, xmax))
     manifest.setdefault("distances", []).extend([
-        str(out_dir/"plots"/"distance_hist_compare_methods.png"),
-        str(out_dir/"plots"/"distance_hist_compare_methods.pdf"),
         str(out_dir/"plots"/"distance_cdf_compare_methods.png"),
         str(out_dir/"plots"/"distance_cdf_compare_methods.pdf"),
     ] + [str(p) for p in dedicated])

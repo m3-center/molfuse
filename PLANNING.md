@@ -165,6 +165,11 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 - [ ] Port status checker to molfuse/analysis/status_check.py
  - [x] Phase 1 post-analysis plotting overhaul in `scripts/phase1_post_analysis.py` (combined bars, shared-scale heatmaps, seed-variability grid, fixed-range distance plots; CLI flags + plots manifest)
  - [x] Post-analysis refinements: EF@1% only (remove EF@5/EF@10 from default outputs); bars now include PCA and a distinct "UMAP (best)" category; distance plots compare PCA vs UMAP best/avg per representation over [0, 0.5]
+ - [x] Post-analysis fixes (Oct 27 addendum):
+    - Ensure PCA appears in `bars_ef1_combined` (groupby now `dropna=False` to retain PCA rows)
+    - Add four dedicated histograms (best/avg × features/fingerprints) overlaying ZINC vs ACTIVES
+    - Clarify distance CDF title (explicitly ZINC→MF) and restrict to ZINC for method comparison
+    - Hide non-informative 1×1 UMAP heatmap panels to remove confusing extra tile
 
 ### 🔧 Quality gates
 - [ ] Add end-to-end dry-run on small ZINC sample (local)
