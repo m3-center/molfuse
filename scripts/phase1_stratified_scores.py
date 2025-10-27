@@ -130,38 +130,68 @@ def _assign_potency_tier(nm: float) -> Optional[str]:
     return "Weak"
 
 
-def _join_affinity_to_actives(ranked: pd.DataFrame, actives_df: pd.DataFrame) -> pd.DataFrame:
-    # Filter actives rows from ranked and pick an identifier to join
-    ra = ranked[ranked["source"] == "actives"].copy()
-    # Prefer Compound ID if present in both
-    if ("Compound ChEMBL ID" in ra.columns) and ("Compound ChEMBL ID" in actives_df.columns):
-        key = "Compound ChEMBL ID"
-        aff = actives_df[[k for k in [key, "Standard Value (nM)"] if k in actives_df.columns]].copy()
-        aff = aff.dropna(subset=[key]).drop_duplicates(subset=[key])
-        merged = ra.merge(aff, on=key, how="left")
-    else:
-        # Build a common smiles join key across frames
-        def build_join_smiles(df: pd.DataFrame) -> pd.Series:
-            if "canonical_smiles" in df.columns and df["canonical_smiles"].notna().any():
-                return df["canonical_smiles"].astype(str)
-            if "SMILES" in df.columns and df["SMILES"].notna().any():
-                return df["SMILES"].astype(str)
-            return pd.Series([None] * len(df))
+def _normalize_colnames(df: pd.DataFrame) -> Dict[str, str]:
+    """Return a mapping of normalized lower-case names to original names."""
+    return {c.lower().strip(): c for c in df.columns}
 
-        ra = ra.copy()
-        act = actives_df.copy()
-        ra["__join_smiles__"] = build_join_smiles(ra)
-        act["__join_smiles__"] = build_join_smiles(act)
-        if ra["__join_smiles__"].isna().all() or act["__join_smiles__"].isna().all():
-            # Cannot join, return with empty potency_tier
+
+def _pick_first_present(mapping: Dict[str, str], candidates: List[str]) -> Optional[str]:
+    for k in candidates:
+        if k in mapping:
+            return mapping[k]
+    return None
+
+
+def _join_affinity_to_actives(ranked: pd.DataFrame, actives_df: pd.DataFrame) -> pd.DataFrame:
+    """Attach potency tiers to the actives rows in `ranked` by robustly joining to `actives_df`.
+
+    Join strategy: prefer a ChEMBL compound ID; fallback to canonical SMILES (case-insensitive); last resort leaves tier NaN.
+    """
+    ra = ranked[ranked["source"] == "actives"].copy()
+    if ra.empty:
+        return ranked.assign(potency_tier=pd.Series(dtype=object))
+
+    # Normalize column name lookups
+    rmap = _normalize_colnames(ra)
+    amap = _normalize_colnames(actives_df)
+
+    # Candidate ID fields (various spellings seen across CSVs)
+    id_candidates = [
+        "compound chembl id", "compound_chembl_id", "molecule chembl id", "molecule_chembl_id",
+    ]
+    r_id_col = _pick_first_present(rmap, id_candidates)
+    a_id_col = _pick_first_present(amap, id_candidates)
+
+    if r_id_col and a_id_col:
+        # ID-based join
+        aff = actives_df[[a_id_col] + [c for c in ["Standard Value (nM)"] if c in actives_df.columns]].copy()
+        # Normalize ID text for join
+        ra["__join_id__"] = ra[r_id_col].astype(str).str.upper().str.strip()
+        aff["__join_id__"] = aff[a_id_col].astype(str).str.upper().str.strip()
+        aff = aff.dropna(subset=["__join_id__"]).drop_duplicates(subset=["__join_id__"])  # one potency per compound (assumed median in prep)
+        merged = ra.merge(aff[["__join_id__", "Standard Value (nM)"]], on="__join_id__", how="left")
+        merged.drop(columns=["__join_id__"], inplace=True, errors="ignore")
+    else:
+        # SMILES-based join
+        r_smiles_col = _pick_first_present(rmap, ["canonical_smiles", "smiles"])  # ranked
+        a_smiles_col = _pick_first_present(amap, ["canonical_smiles", "smiles"])  # actives
+        if not r_smiles_col or not a_smiles_col:
             return ra.assign(potency_tier=pd.Series(dtype=object))
+        ra["__join_smiles__"] = ra[r_smiles_col].astype(str).str.strip()
+        act = actives_df.copy()
+        act["__join_smiles__"] = act[a_smiles_col].astype(str).str.strip()
         aff = act[[c for c in ["__join_smiles__", "Standard Value (nM)"] if c in act.columns]].copy()
-        aff = aff.dropna(subset=["__join_smiles__"]).drop_duplicates(subset=["__join_smiles__"]).copy()
-        merged = ra.merge(aff, left_on="__join_smiles__", right_on="__join_smiles__", how="left")
+        aff = aff.dropna(subset=["__join_smiles__"]).drop_duplicates(subset=["__join_smiles__"])  # unique
+        merged = ra.merge(aff, on="__join_smiles__", how="left")
         merged.drop(columns=["__join_smiles__"], inplace=True, errors="ignore")
-    # Assign tiers
+
+    # Assign potency tiers (may be NaN if potency unavailable)
     merged["potency_tier"] = merged["Standard Value (nM)"].apply(_assign_potency_tier)
-    return merged
+    # Stitch back with ZINC rows
+    rz = ranked[ranked["source"] != "actives"].copy()
+    out = pd.concat([merged, rz], ignore_index=True)
+    # Preserve original sorting order; caller will re-sort anyway
+    return out
 
 
 def _ef_at_percent(ranked: pd.DataFrame, tier: str, pct: float) -> Optional[float]:
@@ -186,6 +216,20 @@ def _ef_at_percent(ranked: pd.DataFrame, tier: str, pct: float) -> Optional[floa
     return float(ef)
 
 
+def _overall_ef_at_percent(ranked: pd.DataFrame, pct: float) -> Optional[float]:
+    if ranked.empty:
+        return None
+    N_total = int(len(ranked))
+    k = max(1, int(np.ceil(pct * N_total)))
+    topk = ranked.head(k)
+    N_actives = int((ranked["source"] == "actives").sum())
+    if N_actives == 0:
+        return None
+    hits = int((topk["source"] == "actives").sum())
+    ef = (hits * N_total) / (k * N_actives)
+    return float(ef)
+
+
 def _per_run_stratified(ranked_path: Path, summary_cfg: dict, target: str, out_dir: Path, logger: logging.Logger) -> Optional[dict]:
     if not ranked_path.exists():
         return None
@@ -201,6 +245,17 @@ def _per_run_stratified(ranked_path: Path, summary_cfg: dict, target: str, out_d
         return None
     # Join potency tiers to actives rows
     ranked = _join_affinity_to_actives(ranked, actives_df)
+    # Debug diagnostics: counts and compositions
+    N_total = int(len(ranked))
+    k = max(1, int(np.ceil(0.01 * N_total)))
+    N_actives = int((ranked["source"] == "actives").sum())
+    topk = ranked.head(k)
+    comp_all = ranked[ranked["source"] == "actives"]["potency_tier"].value_counts(dropna=True).to_dict()
+    comp_top = topk[topk["source"] == "actives"]["potency_tier"].value_counts(dropna=True).to_dict()
+    overall_ef1 = _overall_ef_at_percent(ranked, 0.01)
+    logger.info(f"EF@1% overall: {overall_ef1:.3f} | N_total={N_total}, k={k}, N_actives={N_actives}")
+    logger.info(f"Actives tier counts (all): {comp_all}")
+    logger.info(f"Actives tier counts (top1%): {comp_top}")
     # Extract config/meta for plotting later
     method = None
     dim = None
@@ -230,6 +285,7 @@ def _per_run_stratified(ranked_path: Path, summary_cfg: dict, target: str, out_d
         out[f"EF1_{tier}"] = _ef_at_percent(ranked, tier, 0.01)
         out[f"EF5_{tier}"] = _ef_at_percent(ranked, tier, 0.05)
         out[f"EF10_{tier}"] = _ef_at_percent(ranked, tier, 0.10)
+    out["EF1_overall"] = overall_ef1
     # Save per-run CSV
     per_run_csv = out_dir / f"{ranked_path.parent.parent.name}_stratified.csv"
     cols_keep = [c for c in ["source", "score", "distance", "potency_tier", "Compound ChEMBL ID", "canonical_smiles", "SMILES"] if c in ranked.columns]
