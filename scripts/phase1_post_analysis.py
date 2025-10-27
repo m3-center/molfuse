@@ -636,6 +636,10 @@ def main():
         top5 = df_grouped.sort_values("ef1_mean", ascending=False).head(5)
         f.write(top5.to_string(index=False))
         f.write("\n")
+        f.write("\nAll sorted (by EF@1% mean):\n")
+        topall = df_grouped.sort_values("ef1_mean", ascending=False)
+        f.write(topall.to_string(index=False))
+        f.write("\n")
     logger.info(f"Saved report: {report_txt}")
     logger.info("DONE")
 

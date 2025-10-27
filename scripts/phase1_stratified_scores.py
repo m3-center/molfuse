@@ -165,10 +165,16 @@ def _join_affinity_to_actives(ranked: pd.DataFrame, actives_df: pd.DataFrame) ->
 
 
 def _ef_at_percent(ranked: pd.DataFrame, tier: str, pct: float) -> Optional[float]:
-    # EF@p% = hits_top_k_tier / (p * N_tier)
+    """Compute EF@p% for a potency tier.
+
+    EF definition used here:
+      EF@p% = (hits_top_k_tier / N_tier) / (k / N_total) = hits_top_k_tier * N_total / (k * N_tier)
+    where k = ceil(p * N_total) and N_total counts all rows (actives + zinc) in ranked_scores.
+    This equals hits / (p * N_tier) when k == p*N_total; we keep the exact form to avoid rounding bias.
+    """
     if ranked.empty:
         return None
-    N_total = len(ranked)
+    N_total = int(len(ranked))
     k = max(1, int(np.ceil(pct * N_total)))
     topk = ranked.head(k)
     ra = ranked[(ranked["source"] == "actives") & (ranked["potency_tier"].notna())]
@@ -176,7 +182,7 @@ def _ef_at_percent(ranked: pd.DataFrame, tier: str, pct: float) -> Optional[floa
     if N_tier == 0:
         return None
     hits = int(((topk["source"] == "actives") & (topk["potency_tier"] == tier)).sum())
-    ef = hits / (pct * N_tier)
+    ef = (hits * N_total) / (k * N_tier)
     return float(ef)
 
 
@@ -184,14 +190,42 @@ def _per_run_stratified(ranked_path: Path, summary_cfg: dict, target: str, out_d
     if not ranked_path.exists():
         return None
     ranked = pd.read_csv(ranked_path, low_memory=False)
+    # Ensure correct order (top ranked first): prefer score desc, else distance asc
+    if "score" in ranked.columns:
+        ranked = ranked.sort_values(by="score", ascending=False, kind="mergesort").reset_index(drop=True)
+    elif "distance" in ranked.columns:
+        ranked = ranked.sort_values(by="distance", ascending=True, kind="mergesort").reset_index(drop=True)
     actives_df = _read_actives_df(summary_cfg, target, logger)
     if actives_df is None or actives_df.empty:
         logger.info("No actives dataframe available; skipping stratified computation for this run")
         return None
     # Join potency tiers to actives rows
     ranked = _join_affinity_to_actives(ranked, actives_df)
+    # Extract config/meta for plotting later
+    method = None
+    dim = None
+    rep = None
+    nn = None
+    md = None
+    try:
+        # Try to read from summary config
+        method = str(summary_cfg.get("method")) if "method" in summary_cfg else None
+        dim_val = summary_cfg.get("dim") if "dim" in summary_cfg else None
+        try:
+            dim = int(dim_val) if dim_val is not None and str(dim_val).strip() != "" else None
+        except Exception:
+            dim = None
+        if isinstance(summary_cfg.get("representation"), str):
+            rep = str(summary_cfg.get("representation")).lower()
+        umap_params = summary_cfg.get("umap_params", {}) or {}
+        nn = umap_params.get("n_neighbors")
+        md = umap_params.get("min_dist")
+    except Exception:
+        pass
+
     # Compute EF@1/5/10 for each tier
-    out: Dict[str, object] = {"run_ranked": str(ranked_path)}
+    out: Dict[str, object] = {"run_ranked": str(ranked_path), "method": method, "dim": dim, "representation": rep,
+                              "umap_n_neighbors": nn, "umap_min_dist": md}
     for tier in ["High", "Medium", "Weak"]:
         out[f"EF1_{tier}"] = _ef_at_percent(ranked, tier, 0.01)
         out[f"EF5_{tier}"] = _ef_at_percent(ranked, tier, 0.05)
@@ -204,11 +238,157 @@ def _per_run_stratified(ranked_path: Path, summary_cfg: dict, target: str, out_d
     return out
 
 
+def _plot_stratified_ef1_all_umap_vs_pca(df: pd.DataFrame, out_dir: Path, logger: logging.Logger) -> None:
+    """Plot PCA vs all UMAP hyperparameters (separate) with potency tiers on x-axis.
+    Creates one figure per representation; columns = dimensions; hue = method+params.
+    """
+    dfx = df.copy()
+    dfx["representation"] = dfx["representation"].fillna("features")
+    dfx["method"] = dfx["method"].fillna("unknown").str.lower()
+    # Long dataframe for EF@1%
+    recs: List[Dict] = []
+    for _, r in dfx.iterrows():
+        for tier in ("High","Medium","Weak"):
+            val = r.get(f"EF1_{tier}")
+            if pd.notna(val):
+                label = "PCA" if r.get("method") == "pca" else f"UMAP(nn={r.get('umap_n_neighbors')}, md={r.get('umap_min_dist')})"
+                recs.append({
+                    "representation": r.get("representation"),
+                    "dim": r.get("dim"),
+                    "group": label,
+                    "tier": tier,
+                    "value": float(val) if val is not None else np.nan,
+                })
+    if not recs:
+        logger.info("No EF@1% records available for plotting (all-UMAP vs PCA)")
+        return
+    lf = pd.DataFrame(recs)
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    for rep in sorted(lf["representation"].unique()):
+        sub_rep = lf[lf["representation"] == rep]
+        dims = sorted([int(d) for d in sub_rep["dim"].dropna().unique()])
+        ncols = max(1, len(dims))
+        fig, axes = plt.subplots(1, ncols, figsize=(5.2*ncols, 4.2), sharey=True)
+        if ncols == 1:
+            axes = [axes]  # type: ignore
+        for ax, d in zip(axes, dims):
+            s = sub_rep[sub_rep["dim"] == d]
+            if s.empty:
+                ax.set_visible(False)
+                continue
+            if _HAVE_SNS and sns is not None:
+                sns.barplot(data=s, x="tier", y="value", hue="group", ax=ax, errorbar=("sd"), capsize=0.1)
+            else:
+                groups = sorted(s["group"].unique())
+                tiers = ["High","Medium","Weak"]
+                x = np.arange(len(tiers))
+                width = 0.8/max(1,len(groups))
+                for i,g in enumerate(groups):
+                    vals = [s[(s["tier"]==t) & (s["group"]==g)]["value"].mean() for t in tiers]
+                    stds = [s[(s["tier"]==t) & (s["group"]==g)]["value"].std() for t in tiers]
+                    ax.bar(x + (i-(len(groups)-1)/2)*width, vals, yerr=stds, width=width, capsize=3, label=g)
+                ax.set_xticks(x)
+                ax.set_xticklabels(tiers)
+            ax.set_title(f"dim={d}")
+            ax.set_xlabel("Potency tier")
+            ax.set_ylabel("EF@1%")
+        handles, labels = axes[-1].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.02,0.5))
+        fig.suptitle(f"PCA vs all UMAP (by hyperparams) — {rep}")
+        fig.tight_layout(rect=(0,0,0.92,0.95))
+        fig.savefig(plots_dir / f"strat_ef1_all_umap_vs_pca_{rep}.png")
+        fig.savefig(plots_dir / f"strat_ef1_all_umap_vs_pca_{rep}.pdf")
+        plt.close(fig)
+
+
+def _plot_stratified_ef1_best_umap_vs_pca(df: pd.DataFrame, out_dir: Path, logger: logging.Logger) -> None:
+    """Plot PCA vs best UMAP per tier with potency tiers on x-axis.
+    Best selected per (representation, dim, tier) by mean EF@1% across runs.
+    """
+    dfx = df.copy()
+    dfx["representation"] = dfx["representation"].fillna("features")
+    dfx["method"] = dfx["method"].fillna("unknown").str.lower()
+
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    for rep in sorted(dfx["representation"].unique()):
+        sub_rep = dfx[dfx["representation"] == rep]
+        dims = sorted([int(d) for d in sub_rep["dim"].dropna().unique()])
+        ncols = max(1, len(dims))
+        fig, axes = plt.subplots(1, ncols, figsize=(5.2*ncols, 4.2), sharey=True)
+        if ncols == 1:
+            axes = [axes]  # type: ignore
+        for ax, d in zip(axes, dims):
+            sdim = sub_rep[sub_rep["dim"] == d]
+            # Build table of candidates
+            records = []
+            for tier in ("High","Medium","Weak"):
+                # PCA mean
+                pca_vals = sdim[sdim["method"]=="pca"][f"EF1_{tier}"]
+                pca_mean = float(pca_vals.mean()) if len(pca_vals)>0 else np.nan
+                # Best UMAP per tier
+                umap = sdim[sdim["method"]=="umap"].copy()
+                if umap.empty:
+                    continue
+                # group by hyperparams
+                g = umap.groupby(["umap_n_neighbors","umap_min_dist"], dropna=False)[f"EF1_{tier}"]
+                umap_best = g.mean().sort_values(ascending=False).head(1)
+                if len(umap_best) == 0:
+                    continue
+                (best_nn, best_md), best_val = umap_best.index[0], float(umap_best.iloc[0])
+                records.append({
+                    "tier": tier,
+                    "PCA": pca_mean,
+                    f"UMAP(nn={best_nn}, md={best_md})": best_val,
+                })
+            if not records:
+                ax.set_visible(False)
+                continue
+            wide = pd.DataFrame(records)
+            long = wide.melt(id_vars=["tier"], var_name="group", value_name="value")
+            if _HAVE_SNS and sns is not None:
+                sns.barplot(data=long, x="tier", y="value", hue="group", ax=ax, errorbar=None)
+            else:
+                groups = [c for c in wide.columns if c != "tier"]
+                tiers = ["High","Medium","Weak"]
+                x = np.arange(len(tiers))
+                width = 0.8/max(1,len(groups))
+                for i,gname in enumerate(groups):
+                    vals = []
+                    for t in tiers:
+                        srow = wide[wide["tier"]==t][gname]
+                        if srow.empty:
+                            vals.append(np.nan)
+                        else:
+                            try:
+                                vals.append(float(srow.iloc[0]))
+                            except Exception:
+                                vals.append(np.nan)
+                    ax.bar(x + (i-(len(groups)-1)/2)*width, vals, width=width, label=gname)
+                ax.set_xticks(x)
+                ax.set_xticklabels(tiers)
+            ax.set_title(f"dim={d}")
+            ax.set_xlabel("Potency tier")
+            ax.set_ylabel("EF@1%")
+        handles, labels = axes[-1].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.02,0.5))
+        fig.suptitle(f"PCA vs best UMAP — {rep}")
+        fig.tight_layout(rect=(0,0,0.92,0.95))
+        fig.savefig(plots_dir / f"strat_ef1_best_umap_vs_pca_{rep}.png")
+        fig.savefig(plots_dir / f"strat_ef1_best_umap_vs_pca_{rep}.pdf")
+        plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Phase 1 Potency-Stratified Scores (v4 molfuse)")
     ap.add_argument("--workspace_dir", type=str, required=True, help="Path to experiment_workspace_v4")
     ap.add_argument("--phase", type=str, default="phase1", help="Phase subdirectory (default: phase1)")
     ap.add_argument("--output_dir", type=str, default="reporting/phase1_stratified", help="Output directory for stratified summaries")
+    ap.add_argument("--metrics", type=str, default="ef1", help="Comma-separated list of metrics to plot (ef1,ef5,ef10). Default: ef1 only")
     args = ap.parse_args()
 
     workspace_dir = Path(args.workspace_dir).resolve()
@@ -249,14 +429,27 @@ def main():
     df.to_csv(out_csv, index=False)
     logger.info(f"Saved stratified summary: {out_csv} (rows={len(df)})")
 
-    # Tiered bar plots (aggregate across runs)
-    logger.info("START: tiered bar plots (EF@1/5/10)")
+    # Plot required comparisons for EF@1% by default
+    logger.info("START: stratified EF@1% comparison plots")
+    _plot_stratified_ef1_all_umap_vs_pca(df, out_dir, logger)
+    _plot_stratified_ef1_best_umap_vs_pca(df, out_dir, logger)
+
+    # Optional simple tier bars for selected metrics
+    do_metrics = [m.strip().lower() for m in str(args.metrics).split(",") if m.strip()]
+    if not do_metrics:
+        do_metrics = ["ef1"]
+    logger.info(f"Tiered bar plots for metrics: {do_metrics}")
     try:
         # Build long-form dataframe: columns [tier, metric, value]
         recs: List[Dict] = []
         for _, r in df.iterrows():
             for tier in ("High", "Medium", "Weak"):
-                for m_name, col in (("EF@1%", f"EF1_{tier}"), ("EF@5%", f"EF5_{tier}"), ("EF@10%", f"EF10_{tier}")):
+                pairs = [("EF@1%", f"EF1_{tier}")]
+                if "ef5" in do_metrics:
+                    pairs.append(("EF@5%", f"EF5_{tier}"))
+                if "ef10" in do_metrics:
+                    pairs.append(("EF@10%", f"EF10_{tier}"))
+                for m_name, col in pairs:
                     val = r.get(col, np.nan)
                     try:
                         val_f = float(val) if val is not None else np.nan
@@ -264,10 +457,15 @@ def main():
                         val_f = np.nan
                     recs.append({"tier": tier, "metric": m_name, "value": val_f})
         dfl = pd.DataFrame(recs)
-        # Plot one figure per metric
+        # Plot one figure per selected metric
         plots_dir = out_dir / "plots"
         plots_dir.mkdir(parents=True, exist_ok=True)
-        for metric in ("EF@1%", "EF@5%", "EF@10%"):
+        metrics_to_plot = ["EF@1%"]
+        if "ef5" in do_metrics:
+            metrics_to_plot.append("EF@5%")
+        if "ef10" in do_metrics:
+            metrics_to_plot.append("EF@10%")
+        for metric in metrics_to_plot:
             sub = dfl[dfl["metric"] == metric].copy()
             if sub.empty:
                 continue

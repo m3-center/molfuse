@@ -285,6 +285,34 @@ python scripts/analyze_potency_stratified_enrichment.py \
 - **Key Finding**: [`docs/MF_CLOUD_IMPACT_ANALYSIS.md`](docs/MF_CLOUD_IMPACT_ANALYSIS.md) - MF cloud phase transition analysis
 - **HPC Guide**: [`hpc/README.md`](hpc/README.md) - Cluster-specific instructions
 
+### Phase 1 Post-analysis (v4, molfuse)
+
+The standalone post-analysis utility scans a v4 workspace and generates consolidated figures with consistent scales:
+
+- `scripts/phase1_post_analysis.py`
+  - Inputs: `--workspace_dir experiment_workspace_v4` and optional `--phase` (default `phase1`)
+  - Outputs: CSV summaries, best-config JSON, and combined plots under `reporting/phase1_post_analysis/plots/`
+  - Combined figures (shared axes):
+    - Bars: EF@1%, EF@5%, EF@10% across dims (columns) with method on x and representation as hue
+    - UMAP heatmaps: grid by representation × dimension with a shared colorbar
+    - Seed variability: grid by method × dimension, violin/box (seaborn optional)
+    - Distance diagnostics: dual-range histograms (0–1 and 0–5) and CDF with percentile markers
+  - Flags:
+    - `--metrics ef1,ef5,ef10` (defaults to all three)
+    - `--no-sharey` to disable shared y-axis on bars
+    - `--distance_xranges 0-1,0-5` to control histogram ranges
+
+Example:
+
+```bash
+python scripts/phase1_post_analysis.py \
+  --workspace_dir experiment_workspace_v4 \
+  --phase phase1 \
+  --output_dir reporting/phase1_post_analysis \
+  --metrics ef1,ef5,ef10 \
+  --distance_xranges 0-1,0-5
+```
+
 ---
 
 ## Citation

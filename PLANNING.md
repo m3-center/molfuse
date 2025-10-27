@@ -163,6 +163,7 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 - [ ] Port potency-stratified analysis (Phase 1) to molfuse/analysis/phase1_potency.py
 - [ ] Port cutoff sensitivity analysis (Phase 2) to molfuse/analysis/phase2_cutoffs.py
 - [ ] Port status checker to molfuse/analysis/status_check.py
+ - [x] Phase 1 post-analysis plotting overhaul in `scripts/phase1_post_analysis.py` (combined bars, shared-scale heatmaps, seed-variability grid, fixed-range distance plots; CLI flags + plots manifest)
 
 ### 🔧 Quality gates
 - [ ] Add end-to-end dry-run on small ZINC sample (local)
@@ -174,6 +175,7 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 ### 📚 Documentation
 - [x] PUBLICATION.md: Update to v4 (molfuse) and list RDKit feature descriptors (via header-only read)
 - [ ] README.md: Add v4 invariants quick link and PUBLICATION reference
+ - [x] README.md: Document post-analysis usage and new flags
 - [ ] ARCHIVE.md: Initialize and document deprecated items (cdist brute-force path; ID-based dedup)
 
 ---

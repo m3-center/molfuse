@@ -1,3 +1,27 @@
+### October 27, 2025: Phase 1 post-analysis visualization overhaul (v4)
+
+- Changes Made (Code)
+  - `scripts/phase1_post_analysis.py` revamped to produce consolidated, comparable figures:
+    - Combined EF bar plots per metric (EF@1/5/10): columns=dims, x=method, hue=representation; shared y-axis, error bars (±sd for EF@1), numeric labels.
+    - UMAP EF@1% heatmaps in a single grid (rows=representation × cols=dimension) with a shared colorbar (global scale).
+    - Seed variability unified into a grid (rows=methods × cols=dims), violin plots with seaborn or boxplot fallback; shared y-axis.
+    - Distance diagnostics: dual-range histograms (0–1 and 0–5) with consistent bins and an aligned CDF with 50th/90th percentile markers.
+  - Consistent rcParams (fonts, grid, legend), stable palette mapping for representations.
+  - New CLI flags: `--metrics`, `--no-sharey`, `--distance_xranges`.
+  - Wrote `plots_manifest.json` capturing saved figure paths and parameters.
+
+- Experiments Run
+  - Local smoke test on a partial workspace (subset of runs) to verify figure generation and logging. Seaborn guards validated (fallback path exercised).
+
+- Observations and Results
+  - Shared axes remove misleading scale differences across dimensions; PCA bars now appear alongside UMAP consistently.
+  - Heatmaps are directly comparable due to one colorbar; missing hyperparameter cells are skipped but logged.
+  - Distance histograms show near-zero behavior clearly in [0,1] while preserving broader context in [0,5].
+
+- Next Steps
+  - Execute on HPC workspaces and select figures for manuscript drafts.
+  - Optionally facet EF bars by target/cutoff when Phase 2/3 data are integrated.
+
 ### October 26, 2025: PUBLICATION v4 updates — invariants and features list
 
 - Changes Made (Documentation)
