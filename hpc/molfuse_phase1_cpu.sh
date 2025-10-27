@@ -1,9 +1,9 @@
 #!/bin/bash
-##SBATCH --partition=hpc
+#SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
-#SBATCH --mem=170G
-#SBATCH --time=0-24:00:00
+#SBATCH --mem=180G
+#SBATCH --time=0-08:00:00
 
 # Usage:
 # sbatch hpc/molfuse_phase1_cpu.sh <CONFIG_JSON> <WORKSPACE_DIR> 
