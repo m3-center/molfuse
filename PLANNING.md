@@ -1,6 +1,6 @@
 # molfuse v4.0 Planning & Task Tracking (formerly UMMBAS)
 
-**Last Updated**: October 26, 2025  
+**Last Updated**: October 27, 2025  
 **Branch**: 4.0  
 **Status**: v4.0 refactor planning; Phase 1/2 pipelines to be re-implemented
 
@@ -119,7 +119,36 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 - Project held-out actives with the saved scaler+model.
 - Apply affinity cutoff to MF cloud for scoring only; actives never filtered.
 - Score by exact 1-NN to MF cloud; compute ROC-AUC, PR-AUC, EF@1/5/10, Spearman rho; save detailed distances.
+
+---
+
+## New Experiment: Mordred full feature evaluation (independent)
+
+Tracking checklist for the standalone comparison between the current 40-feature subset and full Mordred (2D vs 2D+3D):
+
+- [x] Add independent script under `tests/mordred_full_feature_eval/` with CLI and README
+- [x] Implement 3D generation (ETKDGv3 + MMFF/UFF), handle failures, enforce intersection with 2D
+- [x] Compute and clean feature matrices (numeric cast, median impute, zero-variance drop, StandardScaler)
+- [x] Build UMAP embeddings with (n_neighbors=1, min_dist=0.1) for visualization only
+- [x] Score via centroid-distance in feature space and compute EF@1%
+- [x] Run smoke test (n_target=100, n_mf=200, n_zinc=200) and record EF@1% deltas
+- [ ] Scale up sample size if 2D+3D shows promise; analyze descriptor groups contributing to gains
+- [ ] Document results in LAB_BOOK and update PUBLICATION with conclusions (if conclusive)
 - Artifacts: models/, simspaces/, results/ with consistent filenames; logs per run.
+
+Additional tasks (coverage-aware selection and diagnostics):
+- [x] Consolidate visualizations to `umap_all.png` and `dist_hist_all.png`
+- [x] Add CSVs for failure reasons and combined descriptor NaN counts
+- [x] Implement coverage-aware selection with set-prioritized thresholds (pf_target, pf_mf, pr_target_guard, pr_mf, pr_zinc)
+- [x] Emit coverage reports: `feature_coverage_2d.csv`, `feature_coverage_2d3d.csv`, `row_completeness.csv`; thresholds and kept counts in `summary.json`
+- [ ] Add threshold sweep producing `coverage_grid.csv` and `coverage_pareto.png`; consider EF@1% as a tie-breaker when selecting operating points
+ - [x] Add EF parity diagnostics: 3D-only kept counts, top-1% ranking overlap, Spearman correlation; persist kept-column manifests
+ - [x] Add ROC-AUC and PR-AUC to summary; implement Procrustes-aligned movement plots (current40→full2d, full2d→full2d3d)
+
+Notes:
+- Avoid old per-set PNGs; only combined `umap_all.png` and `dist_hist_all.png` are produced.
+- New diagnostics saved per run: `failure_reasons_2d.csv`, `failure_reasons_3d.csv`, `descriptor_nan_counts.csv`, plus JSONs with failure_reasons.
+ - New coverage artifacts (post-update): `feature_coverage_2d.csv`, `feature_coverage_2d3d.csv`, `row_completeness.csv`; optional `coverage_grid.csv` and `coverage_pareto.png` when `--enable_sweep` is enabled.
 
 ### Phase 2 (cutoff sweeps)
 - Reuse Phase 1 models and MF+ZINC simspaces.

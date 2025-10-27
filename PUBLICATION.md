@@ -50,3 +50,14 @@ Non-feature metadata columns (e.g., SMILES, accession, IDs) are excluded from mo
 - Full Phase 1 rerun on deduplicated MF cloud, with expanded UMAP nn grid (10, 20, 50, 100, 500).
 - Integrity assertion in analysis stage to ensure MF cloud row counts match deduplicated source.
 - Phase 2–4 sequencing preserved (cutoff → MF ablation → generalization), using clean Phase 1 outputs.
+
+### Descriptor-space evaluation (planned)
+
+We will run an independent test comparing the current 40-feature subset against the full Mordred feature sets:
+
+- Full 2D descriptors vs Full 2D+3D descriptors (3D via RDKit ETKDG + MMFF/UFF)
+- Scoring by centroid proximity to actives in feature space; EF@1% as primary metric
+
+Hypothesis: 2D+3D will improve EF@1% by capturing 3D shape/electronic effects. If confirmed, we will consider integrating a curated subset of high-signal 3D descriptors into the v4 features list to balance performance and compute cost.
+
+Methods addendum (independent evaluation): To ensure fair comparisons and maximize usable data, we apply coverage-aware selection before imputation/scaling: chemistry-aware pre-pruning of rare-element E-state families, per-feature prevalence thresholds prioritized for targets (pf_target) and MF cloud (pf_mf), and per-row completeness thresholds with set-specific guards (targets protected, MF moderate, ZINC harshest). We also provide a threshold sweep to visualize Pareto trade-offs between row and column retention.

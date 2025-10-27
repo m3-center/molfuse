@@ -16,6 +16,7 @@
 - **🗄️ Archive**: [`ARCHIVE.md`](ARCHIVE.md) - Deprecated features and scripts
  - **🔧 v4.0 Scaffold (molfuse)**: [`README_V4_MOLFUSE.md`](README_V4_MOLFUSE.md) - Invariants and new CLIs (Phase 1/2) under active development
  - **📰 Publication Synthesis**: [`PUBLICATION.md`](PUBLICATION.md) - High-level summary, hypotheses, and v4 invariants
+ - **🧪 Standalone test**: [`tests/mordred_full_feature_eval/`](tests/mordred_full_feature_eval/) — Compare current 40 features vs full Mordred 2D and 2D+3D with UMAP and EF@1%; now includes coverage-aware selection and optional threshold sweep.
 
 ## Abstract
 
