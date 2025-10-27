@@ -24,7 +24,7 @@
 #
 
 # Resolve repo root and move there so relative paths work (fallback if --chdir unsupported)
-WORKDIR=${WORKDIR:-"/home/ahagg2s/UMMBAS_screening_experiments"}
+WORKDIR="/home/ahagg2s/UMMBAS_screening_experiments"
 echo "[SLURM] WORKDIR=${WORKDIR}"
 cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 
