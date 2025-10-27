@@ -35,6 +35,7 @@ import argparse
 import json
 import logging
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -386,6 +387,29 @@ def extract_run_config(summary_json: dict, metrics_json: dict) -> dict:
 # PER-RUN ANALYSIS
 # ============================================================================
 
+def analyze_single_run_wrapper(run_dir: Path) -> Optional[dict]:
+    """
+    Wrapper for parallel execution - creates its own logger.
+    
+    Note: This function is designed for parallel execution and should not
+    use the main logger to avoid conflicts between processes.
+    """
+    # Create a minimal logger for this process (only errors to stderr)
+    logger = logging.getLogger(f"worker_{run_dir.name}")
+    logger.setLevel(logging.WARNING)  # Only warnings and errors
+    logger.handlers.clear()
+    sh = logging.StreamHandler()
+    fmt = logging.Formatter("%(levelname)s - %(message)s")
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    
+    try:
+        return analyze_single_run(run_dir, logger)
+    except Exception as e:
+        logger.error(f"Error processing {run_dir.name}: {e}")
+        return None
+
+
 def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     """
     Analyze a single Phase 1 run for stratified enrichment.
@@ -599,6 +623,7 @@ Example:
     parser.add_argument("--workspace_dir", type=str, required=True, help="Path to experiment workspace (e.g., experiment_workspace_v4)")
     parser.add_argument("--phase", type=str, default="phase1", help="Phase subdirectory (default: phase1)")
     parser.add_argument("--output_dir", type=str, default="reporting/phase1_stratified", help="Output directory")
+    parser.add_argument("--n_workers", type=int, default=None, help="Number of parallel workers (default: CPU count)")
     
     args = parser.parse_args()
     
@@ -624,16 +649,33 @@ Example:
     run_dirs = sorted([d for d in phase_dir.iterdir() if d.is_dir()])
     logger.info(f"Found {len(run_dirs)} run directories")
     
-    # Analyze each run
+    # Determine number of workers
+    n_workers = args.n_workers if args.n_workers else None  # None = use all CPUs
+    logger.info(f"Using {n_workers if n_workers else 'all available'} CPU cores for parallel processing")
+    
+    # Analyze each run in parallel
     results: List[dict] = []
-    for run_dir in run_dirs:
-        try:
-            result = analyze_single_run(run_dir, logger)
-            if result:
-                results.append(result)
-        except Exception as e:
-            logger.error(f"Error processing {run_dir.name}: {e}")
-            continue
+    total_runs = len(run_dirs)
+    completed = 0
+    
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        # Submit all jobs
+        future_to_run = {executor.submit(analyze_single_run_wrapper, run_dir): run_dir for run_dir in run_dirs}
+        
+        # Process results as they complete
+        for future in as_completed(future_to_run):
+            run_dir = future_to_run[future]
+            completed += 1
+            
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+                    logger.info(f"[{completed}/{total_runs}] ✓ {run_dir.name}")
+                else:
+                    logger.warning(f"[{completed}/{total_runs}] ✗ {run_dir.name} - No result")
+            except Exception as e:
+                logger.error(f"[{completed}/{total_runs}] ✗ {run_dir.name} - {e}")
     
     if not results:
         logger.warning("No results produced (all runs failed or incomplete)")
