@@ -75,15 +75,42 @@ def main() -> None:
     run_name = cfg.get("run_name", f"{cfg.get('target','target')}_{cfg.get('method','pca')}_{cfg.get('dim',2)}d")
     ws = make_run_dirs(Path(args.workspace), phase="phase1", run_name=run_name)
 
-    # Logger setup
+    # Logger setup with both file and console handlers
     log_path = ws["logs"] / "run.log"
     logger = logging.getLogger(f"molfuse.phase1.{run_name}")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
+    
+    # File handler for detailed log
     fh = logging.FileHandler(log_path, mode="w")
     fmt = logging.Formatter(fmt="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     fh.setFormatter(fmt)
     logger.addHandler(fh)
+    
+    # Console handler for SLURM stdout
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+    
+    # Check if run already completed
+    completion_marker = ws["logs"] / "phase1_summary.json"
+    if completion_marker.exists():
+        try:
+            with completion_marker.open("r") as f:
+                summary = json.load(f)
+            # Validate it's not corrupted
+            if "config" in summary and "metrics_path" in summary:
+                logger.info("="*80)
+                logger.info("RUN ALREADY COMPLETED - SKIPPING")
+                logger.info(f"Completion marker found: {completion_marker}")
+                logger.info(f"Metrics: {summary.get('metrics_path', 'N/A')}")
+                logger.info("="*80)
+                return
+            else:
+                logger.warning(f"Completion marker exists but appears corrupted, proceeding with run")
+        except Exception as e:
+            logger.warning(f"Could not read completion marker ({e}), proceeding with run")
+    
     logger.info("Phase 1 started")
     representation = cfg.get("representation", "features").lower()  # "features" | "fingerprints"
 
@@ -538,7 +565,10 @@ def main() -> None:
         "ranked_path": str(ws["artifacts"] / "ranked_scores.csv"),
     }
     (ws["logs"] / "phase1_summary.json").write_text(json.dumps(summary, indent=2))
-    logger.info("Phase 1 completed successfully")
+    logger.info("="*80)
+    logger.info("PHASE 1 COMPLETED SUCCESSFULLY")
+    logger.info(f"Completion marker saved: {ws['logs'] / 'phase1_summary.json'}")
+    logger.info("="*80)
 
 
 if __name__ == "__main__":

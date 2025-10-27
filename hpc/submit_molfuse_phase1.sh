@@ -16,7 +16,12 @@ mkdir -p slurm_logs || true
 COUNT=0
 for cfg in "$CONFIG_DIR"/*.json; do
   if [[ ! -f "$cfg" ]]; then continue; fi
-  sbatch hpc/molfuse_phase1_cpu.sh "$cfg" "$WORKSPACE_DIR"
+  
+  # Extract config basename for job name
+  CONFIG_BASENAME=$(basename "$cfg" .json)
+  
+  # Submit with unique job name
+  sbatch --job-name="phase1_${CONFIG_BASENAME}" hpc/molfuse_phase1_cpu.sh "$cfg" "$WORKSPACE_DIR"
   COUNT=$((COUNT+1))
   sleep 0.1
 done
