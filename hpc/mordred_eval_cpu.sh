@@ -71,9 +71,5 @@ if [ "${ENABLE_SWEEP}" = "1" ]; then
 fi
 
 echo "[SLURM] Running: ${CMD[*]}"
-# Use srun if available for better resource accounting
-if command -v srun >/dev/null 2>&1; then
-  srun "${CMD[@]}"
-else
-  "${CMD[@]}"
-fi
+
+"${CMD[@]}"
