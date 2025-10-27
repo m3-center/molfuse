@@ -199,8 +199,9 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1") -> pd.DataFrame:
 def group_and_best(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, dict]]:
     # Group by knobs that define a config; treat replicate as a replicate
     group_keys = ["representation", "method", "dim", "umap_n_neighbors", "umap_min_dist", "umap_metric"]
+    # Important: include rows with NaNs in UMAP-only keys (so PCA isn't dropped)
     g = (
-        df.groupby(group_keys)
+        df.groupby(group_keys, dropna=False)
         .agg(
             ef1_mean=("ef_1%", "mean"), ef1_std=("ef_1%", "std"),
             ef5_mean=("ef_5%", "mean"), ef10_mean=("ef_10%", "mean"),
@@ -403,6 +404,13 @@ def plot_umap_heatmaps(df_g: pd.DataFrame, out_dir: Path) -> None:
             except Exception:
                 ax.set_visible(False)
                 continue
+            # If only a single hyperparameter cell exists (1x1), it's not informative; skip that panel
+            try:
+                if hasattr(pivot, "shape") and tuple(pivot.shape) == (1, 1):
+                    ax.set_visible(False)
+                    continue
+            except Exception:
+                pass
             if _HAVE_SNS and sns is not None:
                 hm = sns.heatmap(pivot, annot=False, cmap="viridis", vmin=vmin, vmax=vmax, cbar=False, ax=ax)
                 mappable = hm.collections[0]
@@ -490,7 +498,7 @@ def _collect_distance_samples_by_label(
     df_runs: pd.DataFrame,
     df_grouped: pd.DataFrame,
     logger: logging.Logger,
-    source: str = "zinc",
+    sources: Optional[List[str]] = None,
     per_run_cap: int = 100000,
 ) -> pd.DataFrame:
     """Collect distance samples labelled by comparison group.
@@ -503,6 +511,9 @@ def _collect_distance_samples_by_label(
       - UMAP (avg) fingerprints [same dim as its best]
     """
     labels: List[Tuple[str, pd.DataFrame]] = []
+
+    if not sources:
+        sources = ["zinc"]
 
     def _is_close(a: Optional[float], b: Optional[float]) -> bool:
         if a is None or b is None or pd.isna(a) or pd.isna(b):
@@ -549,7 +560,7 @@ def _collect_distance_samples_by_label(
         runs_avg = df_runs[(df_runs["method"] == "umap") & (df_runs["representation"] == rep) & (df_runs["dim"] == dim_best)]
         labels.append((f"UMAP avg {rep}", runs_avg))
 
-    # Read distances and tag by label
+    # Read distances and tag by label (optionally for multiple sources)
     phase_dir = workspace_dir / phase
     out_rows: List[pd.DataFrame] = []
     for label, sel in labels:
@@ -563,19 +574,34 @@ def _collect_distance_samples_by_label(
                 continue
             try:
                 df = pd.read_csv(ranked_path, usecols=["source", "distance"])  # minimal columns
-                dd = df[df["source"] == source]["distance"].dropna()
-                if len(dd) > per_run_cap:
-                    dd = dd.sample(n=per_run_cap, random_state=42)
-                dists.append(dd)
+                # Concatenate requested sources for this run
+                dd_all: List[pd.Series] = []
+                for src in sources:
+                    dd_src = df[df["source"] == src]["distance"].dropna()
+                    if len(dd_src) > per_run_cap:
+                        dd_src = dd_src.sample(n=per_run_cap, random_state=42)
+                    # Tag source in index for later merge
+                    dd_src.index = pd.Index([src] * len(dd_src), name="source")
+                    dd_all.append(dd_src)
+                if dd_all:
+                    dists.append(pd.concat(dd_all))
             except Exception:
                 continue
         if not dists:
             logger.info(f"No distances read for label '{label}'")
             continue
-        ser = pd.concat(dists, ignore_index=True)
-        out_rows.append(pd.DataFrame({"label": label, "distance": ser}))
+        # Stack preserves the 'source' from index (if present)
+        ser = pd.concat(dists)
+        # If source index exists, move to column; otherwise mark as 'zinc' (legacy)
+        if ser.index.name == "source":
+            df_lab = ser.reset_index()
+            df_lab.columns = ["source", "distance"]
+        else:
+            df_lab = pd.DataFrame({"source": "zinc", "distance": ser.values})
+        df_lab.insert(0, "label", label)
+        out_rows.append(df_lab)
     if not out_rows:
-        return pd.DataFrame(columns=["label", "distance"])
+        return pd.DataFrame(columns=["label", "source", "distance"])
     return pd.concat(out_rows, ignore_index=True)
 
 
@@ -601,10 +627,10 @@ def _plot_distance_hist_cdf_by_label(
         "UMAP avg fingerprints": "#ffbb78",   # light orange
     }
 
-    # Histogram
+    # Histogram (method comparison, ZINC only)
     fig, ax = plt.subplots(figsize=(7.5, 4))
     for lab in labels:
-        dd = df_dist[df_dist["label"] == lab]["distance"].dropna().to_numpy(dtype=float)
+        dd = df_dist[(df_dist["label"] == lab) & (df_dist.get("source", "zinc") == "zinc")]["distance"].dropna().to_numpy(dtype=float)
         if dd.size == 0:
             continue
         mask = (dd >= xmin) & (dd <= xmax)
@@ -613,17 +639,17 @@ def _plot_distance_hist_cdf_by_label(
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel("min-distance to MF cloud")
     ax.set_ylabel("density")
-    ax.set_title(f"Histogram [{xmin:g},{xmax:g}]")
+    ax.set_title(f"Histogram (ZINC → MF) [{xmin:g},{xmax:g}]")
     ax.legend(loc="upper right")
     fig.tight_layout()
     fig.savefig(plots_dir / "distance_hist_compare_methods.png")
     fig.savefig(plots_dir / "distance_hist_compare_methods.pdf")
     plt.close(fig)
 
-    # CDF
+    # CDF (method comparison, ZINC only)
     fig, ax = plt.subplots(figsize=(7.5, 4))
     for lab in labels:
-        dd = df_dist[df_dist["label"] == lab]["distance"].dropna().to_numpy(dtype=float)
+        dd = df_dist[(df_dist["label"] == lab) & (df_dist.get("source", "zinc") == "zinc")]["distance"].dropna().to_numpy(dtype=float)
         if dd.size == 0:
             continue
         dd_sorted = np.sort(dd)
@@ -632,13 +658,63 @@ def _plot_distance_hist_cdf_by_label(
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel("min-distance to MF cloud")
     ax.set_ylabel("CDF")
-    ax.set_title("Distance CDF (method comparison)")
+    ax.set_title("Distance CDF (ZINC → MF; method comparison)")
     ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(plots_dir / "distance_cdf_compare_methods.png")
     fig.savefig(plots_dir / "distance_cdf_compare_methods.pdf")
     plt.close(fig)
     logger.info("Saved distance hist/CDF plots for PCA vs UMAP variants")
+
+
+def _plot_umap_histograms_split(
+    df_dist: pd.DataFrame,
+    out_dir: Path,
+    logger: logging.Logger,
+    x_range: Tuple[float, float] = (0.0, 0.5),
+) -> List[Path]:
+    """Create four separate histograms:
+    - UMAP best features
+    - UMAP avg features
+    - UMAP best fingerprints
+    - UMAP avg fingerprints
+    Each overlays ZINC vs ACTIVES min-distance distributions.
+    """
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    xmin, xmax = x_range
+    cfgs = [
+        ("UMAP best features", "distance_hist_umap_best_features"),
+        ("UMAP avg features", "distance_hist_umap_avg_features"),
+        ("UMAP best fingerprints", "distance_hist_umap_best_fingerprints"),
+        ("UMAP avg fingerprints", "distance_hist_umap_avg_fingerprints"),
+    ]
+    saved: List[Path] = []
+    for label, fname in cfgs:
+        sub = df_dist[df_dist["label"] == label]
+        if sub.empty:
+            logger.info(f"No distance samples for '{label}', skipping dedicated histogram")
+            continue
+        fig, ax = plt.subplots(figsize=(7.5, 4))
+        for src, color, alpha in [("zinc", "#4c72b0", 0.55), ("actives", "#dd8452", 0.55)]:
+            dd = sub[sub["source"] == src]["distance"].dropna().to_numpy(dtype=float)
+            if dd.size == 0:
+                continue
+            mask = (dd >= xmin) & (dd <= xmax)
+            ax.hist(dd[mask], bins=80, range=(xmin, xmax), density=True, alpha=alpha, label=src.upper(), color=color)
+        ax.set_xlim(xmin, xmax)
+        ax.set_xlabel("min-distance to MF cloud")
+        ax.set_ylabel("density")
+        ax.set_title(f"Histogram [{xmin:g},{xmax:g}] — {label}")
+        ax.legend(loc="upper right")
+        fig.tight_layout()
+        p_png = plots_dir / f"{fname}.png"
+        p_pdf = plots_dir / f"{fname}.pdf"
+        fig.savefig(p_png)
+        fig.savefig(p_pdf)
+        plt.close(fig)
+        saved.extend([p_png, p_pdf])
+    return saved
 
 
 def main():
@@ -708,13 +784,16 @@ def main():
         xmin, xmax = float(parts[0]), float(parts[1])
     except Exception:
         xmin, xmax = 0.0, 0.5
-    df_dist_labeled = _collect_distance_samples_by_label(workspace_dir, args.phase, df_runs, df_grouped, logger, source="zinc")
+    df_dist_labeled = _collect_distance_samples_by_label(workspace_dir, args.phase, df_runs, df_grouped, logger, sources=["zinc", "actives"]) 
     _plot_distance_hist_cdf_by_label(df_dist_labeled, out_dir, logger, x_range=(xmin, xmax))
+    # Four dedicated histograms requested (best/avg × features/fingerprints), overlaying ZINC vs ACTIVES
+    dedicated = _plot_umap_histograms_split(df_dist_labeled, out_dir, logger, x_range=(xmin, xmax))
     manifest.setdefault("distances", []).extend([
         str(out_dir/"plots"/"distance_hist_compare_methods.png"),
         str(out_dir/"plots"/"distance_hist_compare_methods.pdf"),
         str(out_dir/"plots"/"distance_cdf_compare_methods.png"),
         str(out_dir/"plots"/"distance_cdf_compare_methods.pdf"),
+    ] + [str(p) for p in dedicated])
     ])
 
     # Write manifest
