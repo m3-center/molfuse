@@ -531,11 +531,49 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
     - X-axis: [All, High, Medium, Weak]
     - Y-axis: EF@1% (mean)
     - Error bars: std
+    
+    All plots share the same y-axis range for comparability.
     """
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     
-    # For each unique config, create a plot
+    # First pass: determine global y-axis range across all plots
+    global_max = 0.0
+    for (rep, method, dim), group in df_grouped.groupby(["representation", "method", "dim"], dropna=False):
+        if pd.isna(rep) or pd.isna(method) or pd.isna(dim):
+            continue
+        
+        if method == "umap":
+            group = group.sort_values("EF1_all_mean", ascending=False).head(1)
+            if group.empty:
+                continue
+        
+        row = group.iloc[0]
+        means = [
+            row.get("EF1_all_mean", np.nan),
+            row.get("EF1_high_mean", np.nan),
+            row.get("EF1_medium_mean", np.nan),
+            row.get("EF1_weak_mean", np.nan),
+        ]
+        stds = [
+            row.get("EF1_all_std", 0),
+            row.get("EF1_high_std", 0),
+            row.get("EF1_medium_std", 0),
+            row.get("EF1_weak_std", 0),
+        ]
+        
+        # Find max value including error bars
+        for mean_val, std_val in zip(means, stds):
+            if np.isfinite(mean_val):
+                upper = mean_val + std_val
+                global_max = max(global_max, upper)
+    
+    # Add 10% padding to max
+    y_max = global_max * 1.1
+    
+    logger.info(f"Using shared y-axis range: [0, {y_max:.1f}]")
+    
+    # Second pass: create plots with shared y-axis
     for (rep, method, dim), group in df_grouped.groupby(["representation", "method", "dim"], dropna=False):
         if pd.isna(rep) or pd.isna(method) or pd.isna(dim):
             continue
@@ -590,8 +628,8 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
         ax.set_title(f"{rep.upper()} | {method.upper()} | dim={dim} {title_suffix}", fontsize=12, fontweight="bold")
         ax.grid(True, alpha=0.3, axis="y")
         
-        # Set y-axis to start at 0
-        ax.set_ylim(bottom=0)
+        # Set shared y-axis range
+        ax.set_ylim(bottom=0, top=y_max)
         
         fig.tight_layout()
         
@@ -624,6 +662,7 @@ Example:
     parser.add_argument("--phase", type=str, default="phase1", help="Phase subdirectory (default: phase1)")
     parser.add_argument("--output_dir", type=str, default="reporting/phase1_stratified", help="Output directory")
     parser.add_argument("--n_workers", type=int, default=None, help="Number of parallel workers (default: CPU count)")
+    parser.add_argument("--plot_only", action="store_true", help="Skip data collection and only regenerate plots from existing CSV files")
     
     args = parser.parse_args()
     
@@ -639,6 +678,43 @@ Example:
     logger.info(f"Workspace: {workspace_dir}")
     logger.info(f"Phase: {args.phase}")
     logger.info(f"Output: {output_dir}")
+    
+    # Check if we're in plot-only mode
+    if args.plot_only:
+        logger.info("="*80)
+        logger.info("PLOT-ONLY MODE: Skipping data collection")
+        logger.info("="*80)
+        
+        # Load existing data
+        summary_csv = output_dir / "stratified_summary.csv"
+        if not summary_csv.exists():
+            logger.error(f"Cannot find existing summary file: {summary_csv}")
+            logger.error("Run without --plot_only first to generate data")
+            return
+        
+        logger.info(f"Loading existing data from: {summary_csv}")
+        df_summary = pd.read_csv(summary_csv)
+        logger.info(f"Loaded {len(df_summary)} runs")
+        
+        # Aggregate by config
+        df_grouped = aggregate_by_config(df_summary)
+        grouped_csv = output_dir / "stratified_grouped.csv"
+        df_grouped.to_csv(grouped_csv, index=False)
+        logger.info(f"Re-saved grouped data: {grouped_csv} (rows={len(df_grouped)})")
+        
+        # Create plots
+        logger.info("Regenerating plots with shared y-axis...")
+        plot_tier_comparison(df_grouped, output_dir, logger)
+        
+        logger.info("="*80)
+        logger.info("PLOT REGENERATION COMPLETE")
+        logger.info("="*80)
+        return
+    
+    # Normal mode: collect data
+    logger.info("="*80)
+    logger.info("DATA COLLECTION MODE")
+    logger.info("="*80)
     
     # Find all runs
     phase_dir = workspace_dir / args.phase
