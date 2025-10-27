@@ -144,6 +144,7 @@ Additional tasks (coverage-aware selection and diagnostics):
 - [ ] Add threshold sweep producing `coverage_grid.csv` and `coverage_pareto.png`; consider EF@1% as a tie-breaker when selecting operating points
  - [x] Add EF parity diagnostics: 3D-only kept counts, top-1% ranking overlap, Spearman correlation; persist kept-column manifests
  - [x] Add ROC-AUC and PR-AUC to summary; implement Procrustes-aligned movement plots (current40→full2d, full2d→full2d3d)
+ - [x] Provide SLURM helper to run the standalone evaluator on HPC (`hpc/mordred_eval_cpu.sh`)
 
 Notes:
 - Avoid old per-set PNGs; only combined `umap_all.png` and `dist_hist_all.png` are produced.

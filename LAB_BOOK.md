@@ -129,6 +129,18 @@
   - Full 2D slightly improves global ranking quality (ROC/PR) over current 40; 2D+3D is close to 2D.
   - Movement plots show modest, label-dependent shifts after alignment; no drastic reorganizations on this sample.
 
+#### Addendum (late Oct 27): HPC submission helper for Mordred evaluator
+
+- Changes Made
+  - Added `hpc/mordred_eval_cpu.sh` to submit the standalone evaluator on HPC via SLURM.
+  - Script accepts overrides via `--export=ALL,VAR=VALUE` (e.g., `N_TARGET`, `N_MF`, `N_ZINC`, `OUTPUT_DIR`, `ENABLE_SWEEP`).
+  - Activates `ummbas_screening` conda/mamba environment and runs the evaluator with sane defaults; logs to `slurm_logs/`.
+
+- Usage
+  - `sbatch hpc/mordred_eval_cpu.sh`  (defaults)
+  - `sbatch --export=ALL,N_TARGET=300,N_MF=600,N_ZINC=600,OUTPUT_DIR=tests/mordred_full_feature_eval/output_hpc hpc/mordred_eval_cpu.sh`
+
+
 ### October 26, 2025: PUBLICATION v4 updates — invariants and features list
 
 - Changes Made (Documentation)
