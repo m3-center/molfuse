@@ -82,9 +82,12 @@ def _read_actives_df(summary_cfg: dict, target: str, logger: logging.Logger) -> 
         p = Path(actives_path)
         if p.exists():
             try:
-                df = pd.read_csv(p, usecols=[
-                    "Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"
-                ], low_memory=False)
+                desired = {"Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"}
+                df = pd.read_csv(
+                    p,
+                    usecols=lambda c: c in desired,
+                    low_memory=False,
+                )
                 logger.info(f"Loaded actives CSV: {p} (rows={len(df)})")
                 return df
             except Exception as e:
@@ -98,8 +101,12 @@ def _read_actives_df(summary_cfg: dict, target: str, logger: logging.Logger) -> 
         p = Path(mf_path)
         if p.exists():
             try:
-                usecols = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
-                df_all = pd.read_csv(p, usecols=usecols, low_memory=False)
+                desired = {"Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"}
+                df_all = pd.read_csv(
+                    p,
+                    usecols=lambda c: c in desired,
+                    low_memory=False,
+                )
                 if "accession" in df_all.columns:
                     df = df_all[df_all["accession"] == acc].copy()
                     logger.info(f"Derived actives from MF by accession={acc}: rows={len(df)}")
@@ -126,17 +133,32 @@ def _assign_potency_tier(nm: float) -> Optional[str]:
 def _join_affinity_to_actives(ranked: pd.DataFrame, actives_df: pd.DataFrame) -> pd.DataFrame:
     # Filter actives rows from ranked and pick an identifier to join
     ra = ranked[ranked["source"] == "actives"].copy()
-    key = None
-    for k in ["Compound ChEMBL ID", "canonical_smiles", "SMILES"]:
-        if k in ra.columns and k in actives_df.columns:
-            key = k
-            break
-    if key is None:
-        return ra.assign(potency_tier=pd.Series(dtype=object))
-    # Build minimal actives map
-    aff = actives_df[[k for k in [key, "Standard Value (nM)"] if k in actives_df.columns]].copy()
-    aff = aff.dropna(subset=[key]).drop_duplicates(subset=[key])
-    merged = ra.merge(aff, on=key, how="left")
+    # Prefer Compound ID if present in both
+    if ("Compound ChEMBL ID" in ra.columns) and ("Compound ChEMBL ID" in actives_df.columns):
+        key = "Compound ChEMBL ID"
+        aff = actives_df[[k for k in [key, "Standard Value (nM)"] if k in actives_df.columns]].copy()
+        aff = aff.dropna(subset=[key]).drop_duplicates(subset=[key])
+        merged = ra.merge(aff, on=key, how="left")
+    else:
+        # Build a common smiles join key across frames
+        def build_join_smiles(df: pd.DataFrame) -> pd.Series:
+            if "canonical_smiles" in df.columns and df["canonical_smiles"].notna().any():
+                return df["canonical_smiles"].astype(str)
+            if "SMILES" in df.columns and df["SMILES"].notna().any():
+                return df["SMILES"].astype(str)
+            return pd.Series([None] * len(df))
+
+        ra = ra.copy()
+        act = actives_df.copy()
+        ra["__join_smiles__"] = build_join_smiles(ra)
+        act["__join_smiles__"] = build_join_smiles(act)
+        if ra["__join_smiles__"].isna().all() or act["__join_smiles__"].isna().all():
+            # Cannot join, return with empty potency_tier
+            return ra.assign(potency_tier=pd.Series(dtype=object))
+        aff = act[[c for c in ["__join_smiles__", "Standard Value (nM)"] if c in act.columns]].copy()
+        aff = aff.dropna(subset=["__join_smiles__"]).drop_duplicates(subset=["__join_smiles__"]).copy()
+        merged = ra.merge(aff, left_on="__join_smiles__", right_on="__join_smiles__", how="left")
+        merged.drop(columns=["__join_smiles__"], inplace=True, errors="ignore")
     # Assign tiers
     merged["potency_tier"] = merged["Standard Value (nM)"].apply(_assign_potency_tier)
     return merged
