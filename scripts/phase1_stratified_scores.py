@@ -568,8 +568,8 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
                 upper = mean_val + std_val
                 global_max = max(global_max, upper)
     
-    # Add 10% padding to max
-    y_max = global_max * 1.1
+    # Add 20% padding to max to ensure all bars fit comfortably
+    y_max = global_max * 1.2
     
     logger.info(f"Using shared y-axis range: [0, {y_max:.1f}]")
     
