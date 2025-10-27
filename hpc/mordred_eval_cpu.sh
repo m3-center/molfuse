@@ -1,12 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #SBATCH --partition=any
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
-#SBATCH --mem=32G
-#SBATCH --time=0-08:00:00
+#SBATCH --ntasks-per-node=8
+#SBATCH --mem=16G
+#SBATCH --time=0-04:00:00
 #SBATCH --job-name=mordred_eval
-#SBATCH --output=slurm_logs/%x_%j.out
-#SBATCH --error=slurm_logs/%x_%j.err
+#SBATCH --chdir=/home/%u/UMMBAS_screening_experiments
+#SBATCH --output=%x_%j.out
+#SBATCH --error=%x_%j.err
 
 #
 # SLURM submission script for the standalone Mordred full-feature evaluator
@@ -22,12 +23,10 @@
 # Common overrides: OUTPUT_DIR, N_TARGET, N_MF, N_ZINC, ENABLE_SWEEP (0/1)
 #
 
-# Resolve repo root and move there so relative paths work
-SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_ROOT}"
-
-mkdir -p slurm_logs
+# Resolve repo root and move there so relative paths work (fallback if --chdir unsupported)
+WORKDIR=${WORKDIR:-"${HOME}/UMMBAS_screening_experiments"}
+echo "[SLURM] WORKDIR=${WORKDIR}"
+cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 
 # Defaults (override via SBATCH --export=ALL,VAR=value)
 N_TARGET=${N_TARGET:-200}
@@ -46,7 +45,8 @@ PR_TARGET_GUARD=${PR_TARGET_GUARD:-0.2}
 PR_MF=${PR_MF:-0.6}
 PR_ZINC=${PR_ZINC:-0.8}
 
-mamba activate ummbas-screening-mordredcommunity
+# --- Environment Setup ---
+source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
 
 mkdir -p "${OUTPUT_DIR}"
 
@@ -70,6 +70,6 @@ if [ "${ENABLE_SWEEP}" = "1" ]; then
   CMD+=( --enable_sweep )
 fi
 
-echo "[SLURM] Running: ${CMD[*]}"
+echo "[SLURM] Running in $(pwd): ${CMD[*]}"
 
 "${CMD[@]}"
