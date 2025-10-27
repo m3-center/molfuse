@@ -164,6 +164,7 @@ Fallback feature detection mirrors the independent test (accept_ratio configurab
 - [ ] Port cutoff sensitivity analysis (Phase 2) to molfuse/analysis/phase2_cutoffs.py
 - [ ] Port status checker to molfuse/analysis/status_check.py
  - [x] Phase 1 post-analysis plotting overhaul in `scripts/phase1_post_analysis.py` (combined bars, shared-scale heatmaps, seed-variability grid, fixed-range distance plots; CLI flags + plots manifest)
+ - [x] Post-analysis refinements: EF@1% only (remove EF@5/EF@10 from default outputs); bars now include PCA and a distinct "UMAP (best)" category; distance plots compare PCA vs UMAP best/avg per representation over [0, 0.5]
 
 ### 🔧 Quality gates
 - [ ] Add end-to-end dry-run on small ZINC sample (local)

@@ -2,10 +2,10 @@
 
 - Changes Made (Code)
   - `scripts/phase1_post_analysis.py` revamped to produce consolidated, comparable figures:
-    - Combined EF bar plots per metric (EF@1/5/10): columns=dims, x=method, hue=representation; shared y-axis, error bars (±sd for EF@1), numeric labels.
+  - Combined EF bar plots per metric (EF@1 only): columns=dims, x=method, hue=representation; added explicit PCA bars and a new "UMAP (best)" category (hatch) beside "UMAP (avg)"; shared y-axis, error bars (±sd for EF@1), numeric labels.
     - UMAP EF@1% heatmaps in a single grid (rows=representation × cols=dimension) with a shared colorbar (global scale).
     - Seed variability unified into a grid (rows=methods × cols=dims), violin plots with seaborn or boxplot fallback; shared y-axis.
-    - Distance diagnostics: dual-range histograms (0–1 and 0–5) with consistent bins and an aligned CDF with 50th/90th percentile markers.
+  - Distance diagnostics: method-comparison histograms in [0, 0.5] only and CDFs comparing: PCA, UMAP best (features), UMAP best (fingerprints), UMAP avg (features), UMAP avg (fingerprints). Best picks determined by EF@1% in grouped summary, avg computed on the same dimension as the best.
   - Consistent rcParams (fonts, grid, legend), stable palette mapping for representations.
   - New CLI flags: `--metrics`, `--no-sharey`, `--distance_xranges`.
   - Wrote `plots_manifest.json` capturing saved figure paths and parameters.
@@ -16,7 +16,8 @@
 - Observations and Results
   - Shared axes remove misleading scale differences across dimensions; PCA bars now appear alongside UMAP consistently.
   - Heatmaps are directly comparable due to one colorbar; missing hyperparameter cells are skipped but logged.
-  - Distance histograms show near-zero behavior clearly in [0,1] while preserving broader context in [0,5].
+  - EF@5 and EF@10 figures removed to focus analyses on EF@1%.
+  - Distance plots now contrast PCA vs UMAP variants directly; near-zero regime emphasized with [0, 0.5] range.
 
 - Next Steps
   - Execute on HPC workspaces and select figures for manuscript drafts.
