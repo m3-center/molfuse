@@ -30,6 +30,105 @@
 - New outputs: Four separate histograms requested — `distance_hist_umap_best_features.*`, `distance_hist_umap_avg_features.*`, `distance_hist_umap_best_fingerprints.*`, `distance_hist_umap_avg_fingerprints.*` — each overlays ZINC vs ACTIVES min-distance distributions in [0, 0.5].
 - Heatmap polish: Panels with only a single hyperparameter cell (1×1 pivot) are hidden to avoid confusing, non-informative tiles (removes the odd “fourth” heatmap).
 
+### October 27, 2025: Standalone Mordred full-feature evaluation script (independent test)
+
+- Research Questions and Hypotheses
+  - RQ: Does using the full Mordred 2D or full 2D+3D descriptor sets improve EF@1% compared to the current 40-feature subset?
+  - H1: Full 2D+3D will yield higher EF@1% than the current 40-feature subset by capturing 3D shape/electronic effects not present in 2D.
+  - H0: The curated 40-feature subset is sufficient; additional descriptors add noise and do not improve EF@1%.
+
+- Changes Made (Code or configuration)
+  - Added independent script: `tests/mordred_full_feature_eval/mordred_full_feature_compare.py` with a small `requirements_mordred_test.txt` and local README.
+  - Script computes three representations on sampled SMILES: (a) current 40-feature subset (from Mordred 2D), (b) full Mordred 2D, (c) full Mordred 2D+3D with RDKit 3D embeddings (ETKDGv3 + MMFF/UFF).
+  - Cleaning pipeline: numeric coercion, median imputation, zero-variance removal, StandardScaler.
+  - Embedding: UMAP with n_neighbors=1, min_dist=0.1, 2D for visualization.
+  - Scoring: centroid-distance in feature space (not UMAP) to compute EF@1%.
+  - Caching and dedup: SMILES-keyed CSV caches for 2D and 3D; cross-source SMILES dedup (priority Target > MF cloud > ZINC).
+  - Diagnostics: track per-SMILES failures with reasons (rdkit_parse, embed_3d, mordred_calc_error) and per-feature NaN counts for 2D and 3D.
+  - Visualization consolidation: removed per-set PNGs; now only combined figures with shared axes are saved: `umap_all.png` and `dist_hist_all.png`.
+  - New CSV outputs: `failure_reasons_2d.csv`, `failure_reasons_3d.csv`, and `descriptor_nan_counts.csv` (union of descriptors with NaN counts for 2D and 3D), plus JSONs include failure_reasons.
+
+- Experiments Run (paths / SHAs)
+  - Smoke test run completed (n_target=100, n_mf=200, n_zinc=200) → `tests/mordred_full_feature_eval/output_small/`.
+  - Default data sources: `datasets/molecular_function_affinity_data/*.csv` (target/MF cloud) and `datasets/zinc_data.csv` (decoys). Subset sizes parameterized.
+
+- Observations and Results
+  - EF@1% (smoke test, N=497 usable): current_40 ≈ 2.982, full_2d ≈ 1.988, full_2d+3d ≈ 0.994. This sample does not support H1; additional analysis needed to identify signal-bearing descriptor families.
+  - Failure reasons: majority of failures due to rdkit_parse and 3D embedding; `descriptor_nan_counts.csv` shows rare-element descriptor families (e.g., Li/Be/Sn/Pb) entirely missing and pruned by cleaning.
+
+- Next Steps
+  - Run small smoke test (e.g., n_target=100, n_mf=200, n_zinc=200) and record EF@1% for all three sets in `tests/mordred_full_feature_eval/output_small/summary.json`. (DONE)
+  - If EF@1% improves with 2D+3D, run a larger sample and assess robustness; otherwise, analyze which descriptor blocks drive differences.
+  - Use `descriptor_nan_counts.csv` to drop structurally irrelevant/all-missing families; rerun comparison to test impact.
+
+#### Addendum (later on Oct 27): Coverage-aware selection and Pareto sweep
+
+- Changes Made (Code)
+  - Implemented coverage-aware selection in `tests/mordred_full_feature_eval/mordred_full_feature_compare.py`:
+    - Chemistry-aware pre-pruning: drop rare-element E-state families (MAX/MIN for Li/Be/Si/Ge/As/Se/Sn/Pb) to reduce all-missing columns.
+    - Feature prevalence thresholds: retain a descriptor if prevalence ≥ pf_target in targets OR ≥ pf_mf in MF cloud. Defaults: pf_target=0.95, pf_mf=0.7.
+    - Row completeness thresholds: drop rows by set with guards (targets protected with pr_target_guard=0.2; MF moderate pr_mf=0.6; ZINC harsh pr_zinc=0.8). A unified keep mask (2D ∩ 2D+3D) is applied across all three representations to ensure fair comparison.
+    - Train-agnostic scaling preserved; selection occurs pre-imputation to reflect true coverage.
+  - New artifacts per run:
+    - feature_coverage_2d.csv, feature_coverage_2d3d.csv (per-descriptor prevalence by set + selection flag)
+    - row_completeness.csv (per-SMILES completeness in 2D/2D+3D and keep flags)
+    - Optional sweep: coverage_grid.csv and coverage_pareto.png (cols_frac vs target rows_frac, color=MF frac, size=coverage score)
+  - Summary now records thresholds and kept rows/columns.
+
+- Experiments Run
+  - Local sanity run on small sample with defaults (pf_target=0.95, pf_mf=0.7, pr_target_guard=0.2, pr_mf=0.6, pr_zinc=0.8) completed; artifacts verified. Full EF re-evaluation pending a longer run.
+
+- Observations and Rationale
+  - Pre-pruning and prevalence thresholds remove large families of always-missing descriptors, reducing imputer warnings and dimensionality without sacrificing informative columns.
+  - Set-specific row thresholds align with priorities: retain as many targets as possible; MF moderately filtered; ZINC harshly filtered.
+
+- Next Steps
+  - Execute threshold sweep (`--enable_sweep`) to visualize Pareto trade-offs and select operating points; optionally break ties by EF@1%.
+  - Re-run EF comparison on filtered sets; document impact on EF and embedding geometry.
+
+#### Addendum (late Oct 27): EF parity diagnostics (2D vs 2D+3D)
+
+- Changes Made (Code)
+  - Instrumented `tests/mordred_full_feature_eval/mordred_full_feature_compare.py` to emit diagnostics explaining EF@1% parity:
+    - Count of 3D-only descriptors selected and kept after cleaning (`cols_selected_3d_only`, `cols_kept_3d_only`).
+    - Spearman rank correlation between full-2D and full-2D+3D centroid scores (`spearman_r_scores`).
+    - Top-1% overlap fraction between the two rankings (`top1_overlap_frac`).
+    - Persist kept column name lists: `kept_columns_2d.txt`, `kept_columns_2d3d.txt`, and `kept_columns_2d3d_3donly.txt`.
+
+- Experiments Run
+  - `python tests/mordred_full_feature_eval/mordred_full_feature_compare.py --output_dir tests/mordred_full_feature_eval/output_diag_small --n_target 200 --n_mf 500 --n_zinc 2000 --enable_sweep`
+  - Summary (N=2,688 usable rows):
+    - EF@1%: current_40 = 4.50; full_2d = 3.50; full_2d+3d = 3.50
+    - Dims: full2d_dim = 1,326; full2d3d_dim = 1,539; 3D-only kept = 213 (selected = 213)
+    - Diagnostics: top1_overlap_frac = 0.815; spearman_r_scores = 0.9973
+
+- Observations and Results
+  - Despite adding 213 3D-only descriptors, EF@1% for full 2D and full 2D+3D matched. Diagnostics show the rankings are extremely similar (Spearman ≈ 0.997), with ~81.5% overlap in the top-1% sets. The differing ~18.5% of molecules swapped did not change the count of actives in the top 1%, hence identical EF.
+  - Conclusion: EF@1% parity does not imply 3D features were unused; they changed the ordering marginally but did not alter the active count threshold. EF@1% is a coarse, integer-sensitive metric at small Nx. Further tie-breakers (EF@2/5%, ROC-AUC/PR-AUC, Mahalanobis or k-NN scoring) could reveal incremental differences.
+
+- Next Steps
+  - Optionally compute EF@2% and EF@5% and ROC/PR-AUC within this harness to probe sensitivity beyond the 1% cutoff.
+  - Inspect `scored_molecules.csv` and the kept-columns manifests to analyze which molecules flip in/out of the top-1% when 3D is included.
+
+#### Addendum (late Oct 27): ROC/PR-AUC and movement plots
+
+- Changes Made (Code)
+  - Added ROC-AUC and PR-AUC (Average Precision) to `summary.json` for all three representations, computed from centroid-distance scores.
+  - Implemented Procrustes-aligned movement plots to visualize how molecule positions shift between UMAP spaces:
+    - `move_curr_to_full2d.png` (Current 40 → Full 2D)
+    - `move_full2d_to_full2d3d.png` (Full 2D → Full 2D+3D)
+    Alignment ensures spaces are comparable for visualization (orthogonal + scaling).
+
+- Experiments Run
+  - Same run as above produced ROC/PR metrics:
+    - ROC-AUC: current_40 = 0.637; full_2d = 0.658; full_2d+3d = 0.653
+    - PR-AUC: current_40 = 0.152; full_2d = 0.168; full_2d+3d = 0.160
+  - Movement plots saved under `tests/mordred_full_feature_eval/output_diag_small/`.
+
+- Observations
+  - Full 2D slightly improves global ranking quality (ROC/PR) over current 40; 2D+3D is close to 2D.
+  - Movement plots show modest, label-dependent shifts after alignment; no drastic reorganizations on this sample.
+
 ### October 26, 2025: PUBLICATION v4 updates — invariants and features list
 
 - Changes Made (Documentation)

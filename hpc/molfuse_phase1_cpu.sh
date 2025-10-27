@@ -8,14 +8,12 @@
 #SBATCH --error=slurm_logs/%x_%j.err
 
 # Usage:
-# sbatch hpc/molfuse_phase1_cpu.sh <CONFIG_JSON> <WORKSPACE_DIR> [--dry-run]
+# sbatch hpc/molfuse_phase1_cpu.sh <CONFIG_JSON> <WORKSPACE_DIR> 
 # Example:
 # sbatch hpc/molfuse_phase1_cpu.sh configs/molfuse_phase1_grid/ABL1_PCA_features_10d.json experiment_workspace_v4
-# sbatch hpc/molfuse_phase1_cpu.sh configs/molfuse_phase1_grid/ABL1_PCA_features_10d.json experiment_workspace_v4 --dry-run
 
 CONFIG_PATH="${1:-}"
 WORKSPACE_DIR="${2:-experiment_workspace_v4}"
-DRY_RUN_FLAG="${3:-}"
 
 if [[ -z "$CONFIG_PATH" ]]; then
   echo "CONFIG_JSON path is required as first argument" >&2
@@ -37,20 +35,11 @@ echo "Node: $(hostname)"
 echo "Start Time: $(date)"
 echo "Config: ${CONFIG_PATH}"
 echo "Workspace: ${WORKSPACE_DIR}"
-if [[ "$DRY_RUN_FLAG" == "--dry-run" ]]; then
-  echo "Mode: DRY-RUN"
-fi
 echo "=========================================="
 echo ""
 
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
-
-# Build command with optional dry-run flag
-if [[ "$DRY_RUN_FLAG" == "--dry-run" ]]; then
-  python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR" --dry-run
-else
-  python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
-fi
+python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 
 EXIT_CODE=$?
 echo ""
