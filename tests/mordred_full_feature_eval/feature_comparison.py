@@ -238,6 +238,111 @@ def _process_smiles_batch_2d(smiles_batch: List[str]) -> List[Tuple[str, Optiona
     return results
 
 
+def _process_smiles_chunk(smiles_list: List[str], use_3d: bool, seed: int, n_jobs: int) -> Tuple[List[Optional[Chem.Mol]], List[bool], Dict[str, List[str]]]:
+    """Process a chunk of SMILES into RDKit mols. Returns (mols, success_flags, failure_stats)."""
+    stats_ext: Dict[str, List[str]] = {"rdkit_parse": [], "embed_3d": [], "mordred_calc_error": []}
+    
+    # Parallel processing of SMILES → RDKit mols
+    # Use parallel if n_jobs > 1 AND we have enough molecules to benefit (>= 20)
+    if n_jobs > 1 and len(smiles_list) >= 20:
+        # Split into batches for parallel processing
+        # Use smaller batch size for better load balancing
+        batch_size = max(5, len(smiles_list) // (n_jobs * 8))
+        batches = [smiles_list[i:i+batch_size] for i in range(0, len(smiles_list), batch_size)]
+        
+        print(f"  [Parallel] Processing {len(smiles_list)} SMILES in {len(batches)} batches using {n_jobs} workers...")
+        
+        if use_3d:
+            # For 3D: each worker gets 1 thread for RDKit embedding
+            process_func = partial(_process_smiles_batch_3d, seed=seed, num_threads=1)
+        else:
+            process_func = _process_smiles_batch_2d
+        
+        with Pool(processes=n_jobs) as pool:
+            batch_results = list(tqdm(
+                pool.imap(process_func, batches),
+                total=len(batches),
+                desc=f"  RDKit parse + {'3D' if use_3d else '2D'} prep (parallel)",
+                leave=False
+            ))
+        
+        # Flatten results
+        all_results = []
+        for batch_res in batch_results:
+            all_results.extend(batch_res)
+        
+        # Extract mols and track failures
+        mols: List[Optional[Chem.Mol]] = []
+        success_flags: List[bool] = []
+        for smiles, mol, success, error_type in all_results:
+            mols.append(mol)
+            success_flags.append(success)
+            if not success and error_type:
+                stats_ext[error_type].append(smiles)
+    else:
+        # Sequential fallback for small datasets or n_jobs=1
+        if n_jobs == 1:
+            print(f"  [Sequential] Processing {len(smiles_list)} SMILES with n_jobs=1 (serial mode)")
+        else:
+            print(f"  [Sequential] Processing {len(smiles_list)} SMILES (too few for parallel overhead, need >= 20)")
+        mols: List[Optional[Chem.Mol]] = []
+        success_flags: List[bool] = []
+        
+        for s in tqdm(smiles_list, desc=f"  RDKit parse + {'3D' if use_3d else '2D'} prep (sequential)", leave=False):
+            m = smiles_to_rdkit_mol(s)
+            if m is None:
+                mols.append(None)
+                success_flags.append(False)
+                stats_ext["rdkit_parse"].append(s)
+                continue
+            if use_3d:
+                m3d = embed_3d(m, seed=seed, num_threads=1)
+                if m3d is None:
+                    mols.append(None)
+                    success_flags.append(False)
+                    stats_ext["embed_3d"].append(s)
+                    continue
+                mols.append(m3d)
+                success_flags.append(True)
+            else:
+                mols.append(m)
+                success_flags.append(True)
+    
+    return mols, success_flags, stats_ext
+
+
+def _compute_descriptors_for_mols(mols: List[Optional[Chem.Mol]], success_flags: List[bool], smiles_list: List[str], calc: Calculator, stats_ext: Dict[str, List[str]]) -> pd.DataFrame:
+    """Compute Mordred descriptors for a list of mols. Returns DataFrame with 'smiles' column."""
+    valid_idx = [i for i, ok in enumerate(success_flags) if ok]
+    valid_mols = [mols[i] for i in valid_idx]
+    valid_smiles = [smiles_list[i] for i in valid_idx]
+    
+    if not valid_mols:
+        return pd.DataFrame()
+    
+    try:
+        mordred_df = calc.pandas(valid_mols)
+    except Exception:
+        rows = []
+        for m, smi in tqdm(list(zip(valid_mols, valid_smiles)), desc="  Mordred per-mol (fallback)", leave=False):
+            try:
+                rows.append(calc(m))
+            except Exception:
+                rows.append({})
+                stats_ext["mordred_calc_error"].append(smi)
+        mordred_df = pd.DataFrame(rows)
+    
+    # numeric-only
+    for c in mordred_df.columns:
+        mordred_df[c] = pd.to_numeric(mordred_df[c], errors="coerce")
+    mordred_df = mordred_df.select_dtypes(include=[np.number])
+    mordred_df.insert(0, "smiles", valid_smiles)
+    # de-duplicate by smiles to avoid one-to-many merge later
+    desc_df = mordred_df.drop_duplicates(subset=["smiles"], keep="last")
+    
+    return desc_df
+
+
 def _load_cache_subset(cache_path: Path, needed_smiles: set) -> pd.DataFrame:
     """Load only the needed SMILES from cache using chunked reading to minimize memory."""
     if not cache_path.exists():
@@ -271,8 +376,14 @@ def _load_cache_subset(cache_path: Path, needed_smiles: set) -> pd.DataFrame:
         return pd.DataFrame(columns=["smiles"]).astype({"smiles": str})
 
 
-def _save_cache(cache_path: Path, df: pd.DataFrame) -> None:
-    """Append new descriptors to cache without loading entire file into memory."""
+def _save_cache(cache_path: Path, df: pd.DataFrame, mode: str = 'deduplicate') -> None:
+    """Append new descriptors to cache without loading entire file into memory.
+    
+    Args:
+        cache_path: Path to cache file
+        df: DataFrame to save
+        mode: 'deduplicate' (default, check for existing SMILES) or 'append' (fast append without checking)
+    """
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Ensure smiles column is first for readability
@@ -281,18 +392,18 @@ def _save_cache(cache_path: Path, df: pd.DataFrame) -> None:
     
     if not cache_path.exists():
         # First write - create new file
-        new_data.to_csv(cache_path, index=False)
+        new_data.to_csv(cache_path, index=False, compression='gzip')
+    elif mode == 'append':
+        # Fast append mode (for streaming writes during computation)
+        new_data.to_csv(cache_path, mode='a', header=False, index=False, compression='gzip')
     else:
-        # Append mode: load existing, merge, deduplicate, and rewrite
-        # Use chunked processing to minimize memory
+        # Deduplication mode (slower, checks for existing SMILES)
         existing_smiles = set()
-        existing_chunks = []
         
         # Read existing cache in chunks to track SMILES we already have
         for chunk in pd.read_csv(cache_path, chunksize=100_000):
             if "smiles" in chunk.columns:
                 existing_smiles.update(chunk["smiles"].tolist())
-                existing_chunks.append(chunk)
         
         # Only append truly new SMILES (not in cache)
         new_smiles_mask = ~new_data["smiles"].isin(existing_smiles)
@@ -300,7 +411,7 @@ def _save_cache(cache_path: Path, df: pd.DataFrame) -> None:
         
         if not truly_new.empty:
             # Append new rows to cache file
-            truly_new.to_csv(cache_path, mode='a', header=False, index=False)
+            truly_new.to_csv(cache_path, mode='a', header=False, index=False, compression='gzip')
 
 
 def compute_mordred(
@@ -333,109 +444,77 @@ def compute_mordred(
     # Report cache status
     print(f"[Cache] {'3D' if use_3d else '2D'} descriptors: {len(cached_smiles)} cached, {len(missing_smiles)} to compute ({len(needed_smiles)} total)")
 
+    # Memory management: stream computation in chunks if we have many molecules
+    CHUNK_SIZE = 10000  # Process and write to cache in chunks of 10k molecules
+    use_chunked_mode = len(missing_smiles) > CHUNK_SIZE
+    
+    if use_chunked_mode:
+        print(f"[Memory] Using chunked processing mode: {len(missing_smiles)} molecules in chunks of {CHUNK_SIZE}")
+
     new_desc_df = pd.DataFrame()
     stats_ext: Dict[str, List[str]] = {"rdkit_parse": [], "embed_3d": [], "mordred_calc_error": []}
     
     if missing_smiles:
         calc = Calculator(descriptors, ignore_3D=not use_3d)
         
-        # Parallel processing of SMILES → RDKit mols
-        # Use parallel if n_jobs > 1 AND we have enough molecules to benefit (>= 20)
-        if n_jobs > 1 and len(missing_smiles) >= 20:
-            # Split into batches for parallel processing
-            # Use smaller batch size for better load balancing
-            batch_size = max(5, len(missing_smiles) // (n_jobs * 8))
-            batches = [missing_smiles[i:i+batch_size] for i in range(0, len(missing_smiles), batch_size)]
+        # Chunked processing for memory efficiency
+        if use_chunked_mode:
+            n_chunks = (len(missing_smiles) + CHUNK_SIZE - 1) // CHUNK_SIZE
+            for chunk_idx in range(n_chunks):
+                start_idx = chunk_idx * CHUNK_SIZE
+                end_idx = min(start_idx + CHUNK_SIZE, len(missing_smiles))
+                chunk_smiles = missing_smiles[start_idx:end_idx]
+                
+                print(f"[Chunk {chunk_idx+1}/{n_chunks}] Processing {len(chunk_smiles)} molecules (indices {start_idx}-{end_idx})...")
+                
+                # Process this chunk (parallel or sequential)
+                chunk_mols, chunk_success, chunk_stats = _process_smiles_chunk(
+                    chunk_smiles, use_3d, seed, n_jobs
+                )
+                
+                # Accumulate failure stats
+                for key in chunk_stats:
+                    stats_ext[key].extend(chunk_stats[key])
+                
+                # Compute Mordred descriptors for this chunk
+                chunk_desc_df = _compute_descriptors_for_mols(
+                    chunk_mols, chunk_success, chunk_smiles, calc, stats_ext
+                )
+                
+                # Stream write to cache immediately (don't accumulate)
+                if not chunk_desc_df.empty:
+                    _save_cache(cache_path, chunk_desc_df, mode='append')
+                    print(f"  → Wrote {len(chunk_desc_df)} descriptors to cache")
+                
+                # Free memory aggressively
+                del chunk_mols, chunk_desc_df
+                gc.collect()
             
-            print(f"[Parallel] Processing {len(missing_smiles)} SMILES in {len(batches)} batches using {n_jobs} workers...")
-            
-            if use_3d:
-                # For 3D: each worker gets 1 thread for RDKit embedding
-                process_func = partial(_process_smiles_batch_3d, seed=seed, num_threads=1)
-            else:
-                process_func = _process_smiles_batch_2d
-            
-            with Pool(processes=n_jobs) as pool:
-                batch_results = list(tqdm(
-                    pool.imap(process_func, batches),
-                    total=len(batches),
-                    desc=f"RDKit parse + {'3D' if use_3d else '2D'} prep (parallel)",
-                    leave=False
-                ))
-            
-            # Flatten results
-            all_results = []
-            for batch_res in batch_results:
-                all_results.extend(batch_res)
-            
-            # Extract mols and track failures
-            mols: List[Optional[Chem.Mol]] = []
-            success_flags: List[bool] = []
-            for smiles, mol, success, error_type in all_results:
-                mols.append(mol)
-                success_flags.append(success)
-                if not success and error_type:
-                    stats_ext[error_type].append(smiles)
+            # Reload the needed subset from cache after all chunks processed
+            print(f"[Cache] Reloading computed descriptors from cache...")
+            cached_subset = _load_cache_subset(cache_path, needed_smiles)
         else:
-            # Sequential fallback for small datasets or n_jobs=1
-            if n_jobs == 1:
-                print(f"[Sequential] Processing {len(missing_smiles)} SMILES with n_jobs=1 (serial mode)")
-            else:
-                print(f"[Sequential] Processing {len(missing_smiles)} SMILES (too few for parallel overhead, need >= 20)")
-            mols: List[Optional[Chem.Mol]] = []
-            success_flags: List[bool] = []
+            # Single-pass processing for smaller datasets
+            # Parallel processing of SMILES → RDKit mols
+            chunk_mols, chunk_success, chunk_stats = _process_smiles_chunk(
+                missing_smiles, use_3d, seed, n_jobs
+            )
             
-            for s in tqdm(missing_smiles, desc=f"RDKit parse + {'3D' if use_3d else '2D'} prep (sequential)", leave=False):
-                m = smiles_to_rdkit_mol(s)
-                if m is None:
-                    mols.append(None)
-                    success_flags.append(False)
-                    stats_ext["rdkit_parse"].append(s)
-                    continue
-                if use_3d:
-                    m3d = embed_3d(m, seed=seed, num_threads=1)
-                    if m3d is None:
-                        mols.append(None)
-                        success_flags.append(False)
-                        stats_ext["embed_3d"].append(s)
-                        continue
-                    mols.append(m3d)
-                    success_flags.append(True)
-                else:
-                    mols.append(m)
-                    success_flags.append(True)
+            # Accumulate failure stats
+            for key in chunk_stats:
+                stats_ext[key].extend(chunk_stats[key])
+            
+            # Compute Mordred descriptors
+            new_desc_df = _compute_descriptors_for_mols(
+                chunk_mols, chunk_success, missing_smiles, calc, stats_ext
+            )
 
-        valid_idx = [i for i, ok in enumerate(success_flags) if ok]
-        valid_mols = [mols[i] for i in valid_idx]
-        valid_smiles = [missing_smiles[i] for i in valid_idx]
-
-        if valid_mols:
-            try:
-                mordred_df = calc.pandas(valid_mols)
-            except Exception:
-                rows = []
-                for m, smi in tqdm(list(zip(valid_mols, valid_smiles)), desc="Mordred per-mol (fallback)", leave=False):
-                    try:
-                        rows.append(calc(m))
-                    except Exception:
-                        rows.append({})
-                        stats_ext["mordred_calc_error"].append(smi)
-                mordred_df = pd.DataFrame(rows)
-
-            # numeric-only
-            for c in mordred_df.columns:
-                mordred_df[c] = pd.to_numeric(mordred_df[c], errors="coerce")
-            mordred_df = mordred_df.select_dtypes(include=[np.number])
-            mordred_df.insert(0, "smiles", valid_smiles)
-            # de-duplicate by smiles to avoid one-to-many merge later
-            new_desc_df = mordred_df.drop_duplicates(subset=["smiles"], keep="last")
-
-        # Append to cache (memory-efficient: no concat with entire cache)
-        if not new_desc_df.empty:
-            _save_cache(cache_path, new_desc_df)
-            # Combine new with cached subset for alignment (small memory footprint)
-            cached_subset = pd.concat([cached_subset, new_desc_df], axis=0, ignore_index=True)
-            cached_subset = cached_subset.drop_duplicates(subset=["smiles"], keep="last")
+            # Append to cache (memory-efficient: no concat with entire cache)
+            if not new_desc_df.empty:
+                _save_cache(cache_path, new_desc_df, mode='deduplicate')
+                # Combine new with cached subset for alignment (small memory footprint)
+                cached_subset = pd.concat([cached_subset, new_desc_df], axis=0, ignore_index=True)
+                cached_subset = cached_subset.drop_duplicates(subset=["smiles"], keep="last")
 
     # Build aligned matrix for input SMILES
     if cached_subset.empty:
