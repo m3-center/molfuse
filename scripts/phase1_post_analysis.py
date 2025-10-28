@@ -849,6 +849,220 @@ def _plot_umap_histograms_split(
     return [p_png_grid, p_pdf_grid, p_png_kde, p_pdf_kde]
 
 
+def _plot_2d_scatter_embeddings(
+    workspace_dir: Path,
+    phase: str,
+    df_runs: pd.DataFrame,
+    df_grouped: pd.DataFrame,
+    out_dir: Path,
+    logger: logging.Logger,
+    max_points_per_group: Optional[int] = 5000,
+) -> List[Path]:
+    """Create 2D scatter plots for selected method/representation combinations.
+    
+    Plots four panels:
+    1. PCA features (2D)
+    2. PCA fingerprints (2D)
+    3. UMAP best features (2D)
+    4. UMAP best fingerprints (2D)
+    
+    Each panel shows three groups: MF cloud, ZINC, ACTIVES
+    """
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Define the four configurations to plot
+    configs_to_plot = []
+    
+    # 1. PCA features (best)
+    pca_feat = df_grouped[(df_grouped["method"] == "pca") & 
+                          (df_grouped["representation"] == "features") & 
+                          (df_grouped["dim"] == 2)].copy()
+    if not pca_feat.empty:
+        best_pca_feat = pca_feat.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "PCA features",
+            "method": "pca",
+            "representation": "features",
+            "dim": 2,
+            "umap_params": None
+        })
+    
+    # 2. PCA fingerprints (best)
+    pca_fing = df_grouped[(df_grouped["method"] == "pca") & 
+                          (df_grouped["representation"] == "fingerprints") & 
+                          (df_grouped["dim"] == 2)].copy()
+    if not pca_fing.empty:
+        best_pca_fing = pca_fing.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "PCA fingerprints",
+            "method": "pca",
+            "representation": "fingerprints",
+            "dim": 2,
+            "umap_params": None
+        })
+    
+    # 3. UMAP best features
+    umap_feat = df_grouped[(df_grouped["method"] == "umap") & 
+                           (df_grouped["representation"] == "features") & 
+                           (df_grouped["dim"] == 2)].copy()
+    if not umap_feat.empty:
+        best_umap_feat = umap_feat.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "UMAP best features",
+            "method": "umap",
+            "representation": "features",
+            "dim": 2,
+            "umap_params": {
+                "n_neighbors": best_umap_feat.get("umap_n_neighbors"),
+                "min_dist": best_umap_feat.get("umap_min_dist"),
+                "metric": best_umap_feat.get("umap_metric")
+            }
+        })
+    
+    # 4. UMAP best fingerprints
+    umap_fing = df_grouped[(df_grouped["method"] == "umap") & 
+                           (df_grouped["representation"] == "fingerprints") & 
+                           (df_grouped["dim"] == 2)].copy()
+    if not umap_fing.empty:
+        best_umap_fing = umap_fing.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "UMAP best fingerprints",
+            "method": "umap",
+            "representation": "fingerprints",
+            "dim": 2,
+            "umap_params": {
+                "n_neighbors": best_umap_fing.get("umap_n_neighbors"),
+                "min_dist": best_umap_fing.get("umap_min_dist"),
+                "metric": best_umap_fing.get("umap_metric")
+            }
+        })
+    
+    if not configs_to_plot:
+        logger.warning("No 2D configurations found for scatter plotting")
+        return []
+    
+    # Create figure with 2x2 or 1x4 layout depending on what's available
+    n_configs = len(configs_to_plot)
+    if n_configs == 4:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        axes = axes.flatten()
+    elif n_configs == 3:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    elif n_configs == 2:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    else:
+        fig, axes = plt.subplots(1, 1, figsize=(8, 7))
+        axes = [axes]
+    
+    phase_dir = workspace_dir / phase
+    
+    for idx, config in enumerate(configs_to_plot):
+        ax = axes[idx]
+        
+        # Find matching run directory
+        matching_runs = df_runs[
+            (df_runs["method"] == config["method"]) &
+            (df_runs["representation"] == config["representation"]) &
+            (df_runs["dim"] == config["dim"])
+        ]
+        
+        if config["umap_params"]:
+            # Filter by UMAP hyperparameters
+            nn_target = config["umap_params"]["n_neighbors"]
+            md_target = config["umap_params"]["min_dist"]
+            metric_target = config["umap_params"]["metric"]
+            matching_runs = matching_runs[
+                (matching_runs["umap_n_neighbors"] == nn_target) &
+                (np.isclose(matching_runs["umap_min_dist"].fillna(-1), 
+                           float(md_target) if not pd.isna(md_target) else -1, atol=1e-6)) &
+                (matching_runs["umap_metric"] == metric_target)
+            ]
+        
+        if matching_runs.empty:
+            logger.warning(f"No matching run found for {config['label']}")
+            ax.set_visible(False)
+            continue
+        
+        # Take first matching run
+        run_row = matching_runs.iloc[0]
+        run_dir = phase_dir / run_row["run_name"]
+        artifacts_dir = run_dir / "artifacts"
+        
+        # Load embeddings
+        emb_mf_path = artifacts_dir / "embedding_mf.csv"
+        emb_zinc_path = artifacts_dir / "embedding_zinc.csv"
+        emb_actives_path = artifacts_dir / "embedding_actives.csv"
+        
+        if not all([p.exists() for p in [emb_mf_path, emb_zinc_path, emb_actives_path]]):
+            logger.warning(f"Missing embedding files for {config['label']} in {run_dir.name}")
+            ax.set_visible(False)
+            continue
+        
+        # Load data
+        try:
+            df_mf = pd.read_csv(emb_mf_path)
+            df_zinc = pd.read_csv(emb_zinc_path)
+            df_actives = pd.read_csv(emb_actives_path)
+        except Exception as e:
+            logger.warning(f"Failed to load embeddings for {config['label']}: {e}")
+            ax.set_visible(False)
+            continue
+        
+        # Subsample if necessary
+        if max_points_per_group:
+            if len(df_mf) > max_points_per_group:
+                df_mf = df_mf.sample(n=max_points_per_group, random_state=42)
+            if len(df_zinc) > max_points_per_group:
+                df_zinc = df_zinc.sample(n=max_points_per_group, random_state=42)
+            if len(df_actives) > max_points_per_group:
+                df_actives = df_actives.sample(n=max_points_per_group, random_state=42)
+        
+        # Extract 2D coordinates (z0, z1)
+        mf_x, mf_y = np.asarray(df_mf["z0"]), np.asarray(df_mf["z1"])
+        zinc_x, zinc_y = np.asarray(df_zinc["z0"]), np.asarray(df_zinc["z1"])
+        actives_x, actives_y = np.asarray(df_actives["z0"]), np.asarray(df_actives["z1"])
+        
+        # Plot with distinct styling for each group
+        # MF cloud: small gray points (background)
+        ax.scatter(mf_x, mf_y, c="#BBBBBB", s=1, alpha=0.3, label=f"MF cloud (n={len(df_mf):,})", 
+                  rasterized=True, edgecolors='none')
+        
+        # ZINC: medium blue points
+        ax.scatter(zinc_x, zinc_y, c="#5A7FC0", s=8, alpha=0.5, label=f"ZINC (n={len(df_zinc):,})", 
+                  rasterized=True, edgecolors='none')
+        
+        # ACTIVES: larger red points (most prominent)
+        ax.scatter(actives_x, actives_y, c="#E85D2D", s=25, alpha=0.8, label=f"ACTIVES (n={len(df_actives):,})", 
+                  edgecolors='white', linewidths=0.3, zorder=3)
+        
+        # Formatting
+        ax.set_xlabel("Dimension 1 (z0)", fontsize=10)
+        ax.set_ylabel("Dimension 2 (z1)", fontsize=10)
+        ax.set_title(config["label"], fontsize=11, fontweight='bold')
+        ax.grid(True, alpha=0.2)
+        ax.legend(loc="best", fontsize=8, framealpha=0.9, markerscale=1.5)
+        
+        # Add EF@1% as text annotation
+        ef1_val = run_row.get("ef_1%", np.nan)
+        if not pd.isna(ef1_val):
+            ax.text(0.02, 0.98, f"EF@1% = {ef1_val:.1f}", 
+                   transform=ax.transAxes, fontsize=9, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    fig.suptitle("2D Embeddings: Molecular Group Separation", fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    
+    p_png = plots_dir / "scatter_2d_embeddings.png"
+    p_pdf = plots_dir / "scatter_2d_embeddings.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches='tight')
+    fig.savefig(p_pdf, bbox_inches='tight')
+    plt.close(fig)
+    logger.info(f"Saved 2D scatter plots: {p_png}")
+    
+    return [p_png, p_pdf]
+
+
 def main():
     ap = argparse.ArgumentParser(description="Phase 1 Post Analysis (v4 molfuse)")
     ap.add_argument("--workspace_dir", type=str, required=True, help="Path to experiment_workspace_v4")
@@ -924,6 +1138,13 @@ def main():
         str(out_dir/"plots"/"distance_cdf_compare_methods.png"),
         str(out_dir/"plots"/"distance_cdf_compare_methods.pdf"),
     ] + [str(p) for p in dedicated])
+
+    # 4c) 2D scatter plots for molecular group visualization
+    logger.info("START: 2D scatter embeddings")
+    scatter_files = _plot_2d_scatter_embeddings(workspace_dir, args.phase, df_runs, df_grouped, out_dir, logger)
+    if scatter_files:
+        manifest.setdefault("scatter_2d", []).extend([str(p) for p in scatter_files])
+    logger.info("Finished 2D scatter plots")
 
     # Write manifest
     (out_dir/"plots_manifest.json").write_text(json.dumps(manifest, indent=2))
