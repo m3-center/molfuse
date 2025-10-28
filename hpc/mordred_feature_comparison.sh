@@ -2,8 +2,8 @@
 #SBATCH --partition=any
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=128G
 #SBATCH --time=0-08:00:00
 #SBATCH --job-name=mordred_feature_comp
 #SBATCH --output=%x_%j.out
@@ -40,7 +40,7 @@ OUTPUT_DIR=${OUTPUT_DIR:-tests/mordred_full_feature_eval/output_comparison}
 CACHE_DIR=${CACHE_DIR:-tests/mordred_full_feature_eval/cache}
 UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS:-10}
 UMAP_MIN_DIST=${UMAP_MIN_DIST:-0.1}
-ENABLE_SWEEP=${ENABLE_SWEEP:-1}
+ENABLE_SWEEP=${ENABLE_SWEEP:-0}
 
 # Coverage-aware selection thresholds
 PF_TARGET=${PF_TARGET:-0.95}

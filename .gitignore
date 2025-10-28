@@ -11,6 +11,7 @@ TeX/*
 configs/*
 reporting/*
 tests/mordred_full_feature_eval/output*
+output*
 
 # v3.0 Generated configs (regenerate locally via generate_phase*_configs.py)
 hyperparam_configs_v3*/
