@@ -1024,17 +1024,19 @@ def _plot_2d_scatter_embeddings(
         actives_x, actives_y = np.asarray(df_actives["z0"]), np.asarray(df_actives["z1"])
         
         # Plot with distinct styling for each group
-        # MF cloud: small gray points (background)
-        ax.scatter(mf_x, mf_y, c="#BBBBBB", s=1, alpha=0.3, label=f"MF cloud (n={len(df_mf):,})", 
-                  rasterized=True, edgecolors='none')
+        # Priority: ACTIVES > MF cloud > ZINC (zorder controls layering)
         
-        # ZINC: medium blue points
-        ax.scatter(zinc_x, zinc_y, c="#5A7FC0", s=8, alpha=0.5, label=f"ZINC (n={len(df_zinc):,})", 
-                  rasterized=True, edgecolors='none')
+        # ZINC: bottom layer, small blue points
+        ax.scatter(zinc_x, zinc_y, c="#5A7FC0", s=6, alpha=0.4, label=f"ZINC (n={len(df_zinc):,})", 
+                  rasterized=True, edgecolors='none', zorder=1)
         
-        # ACTIVES: larger red points (most prominent)
-        ax.scatter(actives_x, actives_y, c="#E85D2D", s=25, alpha=0.8, label=f"ACTIVES (n={len(df_actives):,})", 
-                  edgecolors='white', linewidths=0.3, zorder=3)
+        # MF cloud: middle layer, medium gray points
+        ax.scatter(mf_x, mf_y, c="#888888", s=10, alpha=0.5, label=f"MF cloud (n={len(df_mf):,})", 
+                  rasterized=True, edgecolors='none', zorder=2)
+        
+        # ACTIVES: top layer, larger red points (most prominent)
+        ax.scatter(actives_x, actives_y, c="#E85D2D", s=40, alpha=0.9, label=f"ACTIVES (n={len(df_actives):,})", 
+                  edgecolors='white', linewidths=0.5, zorder=3)
         
         # Formatting
         ax.set_xlabel("Dimension 1 (z0)", fontsize=10)
@@ -1043,12 +1045,25 @@ def _plot_2d_scatter_embeddings(
         ax.grid(True, alpha=0.2)
         ax.legend(loc="best", fontsize=8, framealpha=0.9, markerscale=1.5)
         
-        # Add EF@1% as text annotation
+        # Add EF@1% and hyperparameters as text annotation
         ef1_val = run_row.get("ef_1%", np.nan)
+        annotation_text = []
         if not pd.isna(ef1_val):
-            ax.text(0.02, 0.98, f"EF@1% = {ef1_val:.1f}", 
-                   transform=ax.transAxes, fontsize=9, verticalalignment='top',
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            annotation_text.append(f"EF@1% = {ef1_val:.1f}")
+        
+        # Add hyperparameters for UMAP
+        if config["umap_params"]:
+            nn = config["umap_params"]["n_neighbors"]
+            md = config["umap_params"]["min_dist"]
+            metric = config["umap_params"]["metric"]
+            if nn is not None and md is not None and metric is not None:
+                annotation_text.append(f"n_neighbors={nn}, min_dist={md:.3f}")
+                annotation_text.append(f"metric={metric}")
+        
+        if annotation_text:
+            ax.text(0.02, 0.98, "\n".join(annotation_text), 
+                   transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
     
     fig.suptitle("2D Embeddings: Molecular Group Separation", fontsize=14, fontweight='bold')
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -1061,6 +1076,316 @@ def _plot_2d_scatter_embeddings(
     logger.info(f"Saved 2D scatter plots: {p_png}")
     
     return [p_png, p_pdf]
+
+
+def _plot_2d_density_embeddings(
+    workspace_dir: Path,
+    phase: str,
+    df_runs: pd.DataFrame,
+    df_grouped: pd.DataFrame,
+    out_dir: Path,
+    logger: logging.Logger,
+) -> List[Path]:
+    """Create density-based visualizations for full point clouds.
+    
+    Three visualization strategies per config:
+    1. Hexbin density plots (efficient for large datasets)
+    2. Contour density overlays
+    3. Small multiples showing each group separately
+    """
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Define the four configurations to plot (same as scatter)
+    configs_to_plot = []
+    
+    # 1. PCA features
+    pca_feat = df_grouped[(df_grouped["method"] == "pca") & 
+                          (df_grouped["representation"] == "features") & 
+                          (df_grouped["dim"] == 2)].copy()
+    if not pca_feat.empty:
+        configs_to_plot.append({
+            "label": "PCA features",
+            "method": "pca",
+            "representation": "features",
+            "dim": 2,
+            "umap_params": None
+        })
+    
+    # 2. PCA fingerprints
+    pca_fing = df_grouped[(df_grouped["method"] == "pca") & 
+                          (df_grouped["representation"] == "fingerprints") & 
+                          (df_grouped["dim"] == 2)].copy()
+    if not pca_fing.empty:
+        configs_to_plot.append({
+            "label": "PCA fingerprints",
+            "method": "pca",
+            "representation": "fingerprints",
+            "dim": 2,
+            "umap_params": None
+        })
+    
+    # 3. UMAP best features
+    umap_feat = df_grouped[(df_grouped["method"] == "umap") & 
+                           (df_grouped["representation"] == "features") & 
+                           (df_grouped["dim"] == 2)].copy()
+    if not umap_feat.empty:
+        best_umap_feat = umap_feat.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "UMAP best features",
+            "method": "umap",
+            "representation": "features",
+            "dim": 2,
+            "umap_params": {
+                "n_neighbors": best_umap_feat.get("umap_n_neighbors"),
+                "min_dist": best_umap_feat.get("umap_min_dist"),
+                "metric": best_umap_feat.get("umap_metric")
+            }
+        })
+    
+    # 4. UMAP best fingerprints
+    umap_fing = df_grouped[(df_grouped["method"] == "umap") & 
+                           (df_grouped["representation"] == "fingerprints") & 
+                           (df_grouped["dim"] == 2)].copy()
+    if not umap_fing.empty:
+        best_umap_fing = umap_fing.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "UMAP best fingerprints",
+            "method": "umap",
+            "representation": "fingerprints",
+            "dim": 2,
+            "umap_params": {
+                "n_neighbors": best_umap_fing.get("umap_n_neighbors"),
+                "min_dist": best_umap_fing.get("umap_min_dist"),
+                "metric": best_umap_fing.get("umap_metric")
+            }
+        })
+    
+    if not configs_to_plot:
+        logger.warning("No 2D configurations found for density plotting")
+        return []
+    
+    saved_files = []
+    phase_dir = workspace_dir / phase
+    
+    # ===== VISUALIZATION 1: Hexbin Density (efficient, full data) =====
+    n_configs = len(configs_to_plot)
+    if n_configs == 4:
+        fig_hex, axes_hex = plt.subplots(2, 2, figsize=(16, 14))
+        axes_hex = axes_hex.flatten()
+    else:
+        fig_hex, axes_hex = plt.subplots(1, n_configs, figsize=(6*n_configs, 6))
+        if n_configs == 1:
+            axes_hex = [axes_hex]
+    
+    for idx, config in enumerate(configs_to_plot):
+        ax = axes_hex[idx]
+        
+        # Find matching run
+        matching_runs = df_runs[
+            (df_runs["method"] == config["method"]) &
+            (df_runs["representation"] == config["representation"]) &
+            (df_runs["dim"] == config["dim"])
+        ]
+        
+        if config["umap_params"]:
+            nn_target = config["umap_params"]["n_neighbors"]
+            md_target = config["umap_params"]["min_dist"]
+            metric_target = config["umap_params"]["metric"]
+            matching_runs = matching_runs[
+                (matching_runs["umap_n_neighbors"] == nn_target) &
+                (np.isclose(matching_runs["umap_min_dist"].fillna(-1), 
+                           float(md_target) if not pd.isna(md_target) else -1, atol=1e-6)) &
+                (matching_runs["umap_metric"] == metric_target)
+            ]
+        
+        if matching_runs.empty:
+            ax.set_visible(False)
+            continue
+        
+        run_row = matching_runs.iloc[0]
+        run_dir = phase_dir / run_row["run_name"]
+        artifacts_dir = run_dir / "artifacts"
+        
+        # Load ALL data (no subsampling)
+        try:
+            df_mf = pd.read_csv(artifacts_dir / "embedding_mf.csv")
+            df_zinc = pd.read_csv(artifacts_dir / "embedding_zinc.csv")
+            df_actives = pd.read_csv(artifacts_dir / "embedding_actives.csv")
+        except Exception as e:
+            logger.warning(f"Failed to load embeddings for {config['label']}: {e}")
+            ax.set_visible(False)
+            continue
+        
+        # Combine all for hexbin (to get shared extent)
+        all_x = np.concatenate([df_mf["z0"], df_zinc["z0"], df_actives["z0"]])
+        all_y = np.concatenate([df_mf["z1"], df_zinc["z1"], df_actives["z1"]])
+        
+        # Create hexbin for ALL molecules (background density)
+        hb = ax.hexbin(all_x, all_y, gridsize=50, cmap='Greys', alpha=0.6, 
+                      mincnt=1, edgecolors='none', linewidths=0.2)
+        
+        # Overlay ACTIVES as scatter (highest priority)
+        ax.scatter(df_actives["z0"], df_actives["z1"], c='#E85D2D', s=30, alpha=0.9,
+                  edgecolors='white', linewidths=0.5, label=f'ACTIVES (n={len(df_actives):,})', zorder=3)
+        
+        ax.set_xlabel("Dimension 1 (z0)", fontsize=10)
+        ax.set_ylabel("Dimension 2 (z1)", fontsize=10)
+        ax.set_title(config["label"], fontsize=11, fontweight='bold')
+        ax.legend(loc='best', fontsize=8)
+        
+        # Add EF and hyperparams
+        ef1_val = run_row.get("ef_1%", np.nan)
+        annotation_text = []
+        if not pd.isna(ef1_val):
+            annotation_text.append(f"EF@1% = {ef1_val:.1f}")
+        if config["umap_params"]:
+            nn = config["umap_params"]["n_neighbors"]
+            md = config["umap_params"]["min_dist"]
+            metric = config["umap_params"]["metric"]
+            if nn is not None and md is not None:
+                annotation_text.append(f"n={nn}, d={md:.3f}, {metric}")
+        if annotation_text:
+            ax.text(0.02, 0.98, "\n".join(annotation_text), 
+                   transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+    
+    fig_hex.suptitle("2D Embeddings: Hexbin Density (Full Data)", fontsize=14, fontweight='bold')
+    fig_hex.tight_layout(rect=(0, 0, 1, 0.96))
+    
+    p_hex_png = plots_dir / "scatter_2d_hexbin_density.png"
+    p_hex_pdf = plots_dir / "scatter_2d_hexbin_density.pdf"
+    fig_hex.savefig(p_hex_png, dpi=300, bbox_inches='tight')
+    fig_hex.savefig(p_hex_pdf, bbox_inches='tight')
+    plt.close(fig_hex)
+    logger.info(f"Saved hexbin density plot: {p_hex_png}")
+    saved_files.extend([p_hex_png, p_hex_pdf])
+    
+    # ===== VISUALIZATION 2: Contour Overlays (separate groups) =====
+    for config in configs_to_plot:
+        # Find matching run
+        matching_runs = df_runs[
+            (df_runs["method"] == config["method"]) &
+            (df_runs["representation"] == config["representation"]) &
+            (df_runs["dim"] == config["dim"])
+        ]
+        
+        if config["umap_params"]:
+            nn_target = config["umap_params"]["n_neighbors"]
+            md_target = config["umap_params"]["min_dist"]
+            metric_target = config["umap_params"]["metric"]
+            matching_runs = matching_runs[
+                (matching_runs["umap_n_neighbors"] == nn_target) &
+                (np.isclose(matching_runs["umap_min_dist"].fillna(-1), 
+                           float(md_target) if not pd.isna(md_target) else -1, atol=1e-6)) &
+                (matching_runs["umap_metric"] == metric_target)
+            ]
+        
+        if matching_runs.empty:
+            continue
+        
+        run_row = matching_runs.iloc[0]
+        run_dir = phase_dir / run_row["run_name"]
+        artifacts_dir = run_dir / "artifacts"
+        
+        try:
+            df_mf = pd.read_csv(artifacts_dir / "embedding_mf.csv")
+            df_zinc = pd.read_csv(artifacts_dir / "embedding_zinc.csv")
+            df_actives = pd.read_csv(artifacts_dir / "embedding_actives.csv")
+        except Exception:
+            continue
+        
+        # Create 1x3 figure showing each group separately + combined
+        fig_cont, axes_cont = plt.subplots(1, 4, figsize=(20, 5))
+        
+        groups = [
+            ("MF cloud", df_mf, "#888888", 0),
+            ("ZINC", df_zinc, "#5A7FC0", 1),
+            ("ACTIVES", df_actives, "#E85D2D", 2),
+        ]
+        
+        # Individual group plots
+        for ax_idx, (group_name, df_group, color, _) in enumerate(groups):
+            ax = axes_cont[ax_idx]
+            if len(df_group) < 100:  # Too few points for KDE
+                ax.scatter(df_group["z0"], df_group["z1"], c=color, s=5, alpha=0.6)
+            else:
+                # KDE contour
+                x = np.asarray(df_group["z0"])
+                y = np.asarray(df_group["z1"])
+                # Subsample for KDE if too large
+                if len(x) > 10000:
+                    indices = np.random.choice(len(x), 10000, replace=False)
+                    x, y = x[indices], y[indices]
+                
+                try:
+                    from scipy.stats import gaussian_kde
+                    xy = np.vstack([x, y])
+                    kde = gaussian_kde(xy, bw_method='scott')
+                    
+                    # Create grid
+                    x_min, x_max = x.min(), x.max()
+                    y_min, y_max = y.min(), y.max()
+                    xx, yy = np.mgrid[x_min:x_max:100j, y_min:y_max:100j]
+                    positions = np.vstack([xx.ravel(), yy.ravel()])
+                    density = kde(positions).reshape(xx.shape)
+                    
+                    ax.contourf(xx, yy, density, levels=10, cmap='Greys', alpha=0.6)
+                    ax.contour(xx, yy, density, levels=5, colors=color, linewidths=1.5, alpha=0.8)
+                except Exception:
+                    # Fallback to scatter
+                    ax.scatter(x, y, c=color, s=5, alpha=0.6)
+            
+            ax.set_title(f"{group_name} (n={len(df_group):,})", fontsize=10)
+            ax.set_xlabel("z0", fontsize=9)
+            ax.set_ylabel("z1", fontsize=9)
+            ax.grid(True, alpha=0.2)
+        
+        # Combined overlay plot
+        ax_combined = axes_cont[3]
+        # Layer order: ZINC -> MF -> ACTIVES
+        ax_combined.scatter(df_zinc["z0"], df_zinc["z1"], c="#5A7FC0", s=3, alpha=0.3, 
+                           label=f"ZINC", rasterized=True, zorder=1)
+        ax_combined.scatter(df_mf["z0"], df_mf["z1"], c="#888888", s=5, alpha=0.4, 
+                           label=f"MF cloud", rasterized=True, zorder=2)
+        ax_combined.scatter(df_actives["z0"], df_actives["z1"], c="#E85D2D", s=25, alpha=0.9,
+                           edgecolors='white', linewidths=0.5, label=f"ACTIVES", zorder=3)
+        ax_combined.set_title("Combined", fontsize=10, fontweight='bold')
+        ax_combined.set_xlabel("z0", fontsize=9)
+        ax_combined.set_ylabel("z1", fontsize=9)
+        ax_combined.legend(loc='best', fontsize=8)
+        ax_combined.grid(True, alpha=0.2)
+        
+        # Add EF and params to combined plot
+        ef1_val = run_row.get("ef_1%", np.nan)
+        annotation_text = []
+        if not pd.isna(ef1_val):
+            annotation_text.append(f"EF@1% = {ef1_val:.1f}")
+        if config["umap_params"]:
+            nn = config["umap_params"]["n_neighbors"]
+            md = config["umap_params"]["min_dist"]
+            metric = config["umap_params"]["metric"]
+            if nn is not None and md is not None:
+                annotation_text.append(f"n={nn}, d={md:.3f}, {metric}")
+        if annotation_text:
+            ax_combined.text(0.02, 0.98, "\n".join(annotation_text), 
+                           transform=ax_combined.transAxes, fontsize=8, verticalalignment='top',
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+        
+        fig_cont.suptitle(f"{config['label']} - Group Separation", fontsize=13, fontweight='bold')
+        fig_cont.tight_layout(rect=(0, 0, 1, 0.94))
+        
+        # Save with config-specific name
+        safe_label = config['label'].replace(' ', '_').lower()
+        p_cont_png = plots_dir / f"scatter_2d_groups_{safe_label}.png"
+        p_cont_pdf = plots_dir / f"scatter_2d_groups_{safe_label}.pdf"
+        fig_cont.savefig(p_cont_png, dpi=300, bbox_inches='tight')
+        fig_cont.savefig(p_cont_pdf, bbox_inches='tight')
+        plt.close(fig_cont)
+        logger.info(f"Saved group separation plot: {p_cont_png}")
+        saved_files.extend([p_cont_png, p_cont_pdf])
+    
+    return saved_files
 
 
 def main():
@@ -1145,6 +1470,13 @@ def main():
     if scatter_files:
         manifest.setdefault("scatter_2d", []).extend([str(p) for p in scatter_files])
     logger.info("Finished 2D scatter plots")
+    
+    # 4d) 2D density-based visualizations (full data, alternative views)
+    logger.info("START: 2D density embeddings (full data)")
+    density_files = _plot_2d_density_embeddings(workspace_dir, args.phase, df_runs, df_grouped, out_dir, logger)
+    if density_files:
+        manifest.setdefault("density_2d", []).extend([str(p) for p in density_files])
+    logger.info("Finished 2D density plots")
 
     # Write manifest
     (out_dir/"plots_manifest.json").write_text(json.dumps(manifest, indent=2))
