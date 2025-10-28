@@ -680,7 +680,8 @@ def run_eval(args: argparse.Namespace) -> None:
     # Determine number of parallel jobs
     n_jobs = args.n_jobs
     if n_jobs == -1:
-        n_jobs = cpu_count()
+        # Respect SLURM allocation if available, otherwise use system CPU count
+        n_jobs = int(os.environ.get('SLURM_CPUS_PER_TASK', cpu_count()))
     print(f"[Parallel] Using {n_jobs} CPU cores for parallel processing")
 
     # 1) Load inputs (three sources)
