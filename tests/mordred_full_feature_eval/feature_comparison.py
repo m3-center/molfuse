@@ -330,6 +330,9 @@ def compute_mordred(
     cached_smiles = set(cached_subset["smiles"].tolist()) if not cached_subset.empty else set()
     missing_smiles = [s for s in smiles_list if s not in cached_smiles]
 
+    # Report cache status
+    print(f"[Cache] {'3D' if use_3d else '2D'} descriptors: {len(cached_smiles)} cached, {len(missing_smiles)} to compute ({len(needed_smiles)} total)")
+
     new_desc_df = pd.DataFrame()
     stats_ext: Dict[str, List[str]] = {"rdkit_parse": [], "embed_3d": [], "mordred_calc_error": []}
     
@@ -337,9 +340,11 @@ def compute_mordred(
         calc = Calculator(descriptors, ignore_3D=not use_3d)
         
         # Parallel processing of SMILES → RDKit mols
-        if n_jobs > 1 and len(missing_smiles) > 100:
+        # Use parallel if n_jobs > 1 AND we have enough molecules to benefit (>= 20)
+        if n_jobs > 1 and len(missing_smiles) >= 20:
             # Split into batches for parallel processing
-            batch_size = max(10, len(missing_smiles) // (n_jobs * 4))
+            # Use smaller batch size for better load balancing
+            batch_size = max(5, len(missing_smiles) // (n_jobs * 8))
             batches = [missing_smiles[i:i+batch_size] for i in range(0, len(missing_smiles), batch_size)]
             
             print(f"[Parallel] Processing {len(missing_smiles)} SMILES in {len(batches)} batches using {n_jobs} workers...")
@@ -372,7 +377,11 @@ def compute_mordred(
                 if not success and error_type:
                     stats_ext[error_type].append(smiles)
         else:
-            # Sequential fallback for small datasets
+            # Sequential fallback for small datasets or n_jobs=1
+            if n_jobs == 1:
+                print(f"[Sequential] Processing {len(missing_smiles)} SMILES with n_jobs=1 (serial mode)")
+            else:
+                print(f"[Sequential] Processing {len(missing_smiles)} SMILES (too few for parallel overhead, need >= 20)")
             mols: List[Optional[Chem.Mol]] = []
             success_flags: List[bool] = []
             
