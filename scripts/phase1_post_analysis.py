@@ -1009,6 +1009,48 @@ def _plot_2d_scatter_embeddings(
             ax.set_visible(False)
             continue
         
+        # Store in config for later use in axis range computation
+        config["_data"] = (df_mf, df_zinc, df_actives)
+    
+    # Compute global axis ranges across all loaded configurations
+    all_x_vals, all_y_vals = [], []
+    for config in configs_to_plot:
+        if "_data" in config:
+            df_mf, df_zinc, df_actives = config["_data"]
+            all_x_vals.extend([df_mf["z0"].min(), df_mf["z0"].max(), 
+                              df_zinc["z0"].min(), df_zinc["z0"].max(),
+                              df_actives["z0"].min(), df_actives["z0"].max()])
+            all_y_vals.extend([df_mf["z1"].min(), df_mf["z1"].max(),
+                              df_zinc["z1"].min(), df_zinc["z1"].max(),
+                              df_actives["z1"].min(), df_actives["z1"].max()])
+    
+    if all_x_vals and all_y_vals:
+        x_min, x_max = min(all_x_vals), max(all_x_vals)
+        y_min, y_max = min(all_y_vals), max(all_y_vals)
+        # Add 5% padding
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        x_min -= 0.05 * x_range
+        x_max += 0.05 * x_range
+        y_min -= 0.05 * y_range
+        y_max += 0.05 * y_range
+    else:
+        x_min, x_max, y_min, y_max = None, None, None, None
+    
+    # Now plot with shared axis ranges
+    for idx, config in enumerate(configs_to_plot):
+        ax = axes[idx]
+        
+        if "_data" not in config:
+            continue
+        
+        df_mf, df_zinc, df_actives = config["_data"]
+        run_row = df_runs[
+            (df_runs["method"] == config["method"]) &
+            (df_runs["representation"] == config["representation"]) &
+            (df_runs["dim"] == config["dim"])
+        ].iloc[0]
+        
         # Subsample if necessary
         if max_points_per_group:
             if len(df_mf) > max_points_per_group:
@@ -1037,6 +1079,11 @@ def _plot_2d_scatter_embeddings(
         # ACTIVES: top layer, larger red points (most prominent)
         ax.scatter(actives_x, actives_y, c="#E85D2D", s=40, alpha=0.9, label=f"ACTIVES (n={len(df_actives):,})", 
                   edgecolors='white', linewidths=0.5, zorder=3)
+        
+        # Set shared axis ranges
+        if x_min is not None:
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
         
         # Formatting
         ax.set_xlabel("Dimension 1 (z0)", fontsize=10)
@@ -1178,9 +1225,11 @@ def _plot_2d_density_embeddings(
         if n_configs == 1:
             axes_hex = [axes_hex]
     
+    # First pass: load all data and compute global axis ranges
+    loaded_data = []
+    all_x_vals, all_y_vals = [], []
+    
     for idx, config in enumerate(configs_to_plot):
-        ax = axes_hex[idx]
-        
         # Find matching run
         matching_runs = df_runs[
             (df_runs["method"] == config["method"]) &
@@ -1200,7 +1249,7 @@ def _plot_2d_density_embeddings(
             ]
         
         if matching_runs.empty:
-            ax.set_visible(False)
+            loaded_data.append(None)
             continue
         
         run_row = matching_runs.iloc[0]
@@ -1212,10 +1261,43 @@ def _plot_2d_density_embeddings(
             df_mf = pd.read_csv(artifacts_dir / "embedding_mf.csv")
             df_zinc = pd.read_csv(artifacts_dir / "embedding_zinc.csv")
             df_actives = pd.read_csv(artifacts_dir / "embedding_actives.csv")
+            
+            loaded_data.append((df_mf, df_zinc, df_actives, run_row))
+            
+            # Collect min/max for axis ranges
+            all_x_vals.extend([df_mf["z0"].min(), df_mf["z0"].max(), 
+                              df_zinc["z0"].min(), df_zinc["z0"].max(),
+                              df_actives["z0"].min(), df_actives["z0"].max()])
+            all_y_vals.extend([df_mf["z1"].min(), df_mf["z1"].max(),
+                              df_zinc["z1"].min(), df_zinc["z1"].max(),
+                              df_actives["z1"].min(), df_actives["z1"].max()])
         except Exception as e:
             logger.warning(f"Failed to load embeddings for {config['label']}: {e}")
+            loaded_data.append(None)
+    
+    # Compute global axis ranges
+    if all_x_vals and all_y_vals:
+        x_min, x_max = min(all_x_vals), max(all_x_vals)
+        y_min, y_max = min(all_y_vals), max(all_y_vals)
+        # Add 5% padding
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        x_min -= 0.05 * x_range
+        x_max += 0.05 * x_range
+        y_min -= 0.05 * y_range
+        y_max += 0.05 * y_range
+    else:
+        x_min, x_max, y_min, y_max = None, None, None, None
+    
+    # Second pass: plot with shared axis ranges
+    for idx, config in enumerate(configs_to_plot):
+        ax = axes_hex[idx]
+        
+        if loaded_data[idx] is None:
             ax.set_visible(False)
             continue
+        
+        df_mf, df_zinc, df_actives, run_row = loaded_data[idx]
         
         # Combine all for hexbin (to get shared extent)
         all_x = np.concatenate([df_mf["z0"], df_zinc["z0"], df_actives["z0"]])
@@ -1228,6 +1310,11 @@ def _plot_2d_density_embeddings(
         # Overlay ACTIVES as scatter (highest priority)
         ax.scatter(df_actives["z0"], df_actives["z1"], c='#E85D2D', s=30, alpha=0.9,
                   edgecolors='white', linewidths=0.5, label=f'ACTIVES (n={len(df_actives):,})', zorder=3)
+        
+        # Set shared axis ranges
+        if x_min is not None:
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
         
         ax.set_xlabel("Dimension 1 (z0)", fontsize=10)
         ax.set_ylabel("Dimension 2 (z1)", fontsize=10)
@@ -1295,8 +1382,22 @@ def _plot_2d_density_embeddings(
         except Exception:
             continue
         
-        # Create 1x3 figure showing each group separately + combined
+        # Create 1x4 figure showing each group separately + combined
         fig_cont, axes_cont = plt.subplots(1, 4, figsize=(20, 5))
+        
+        # Compute global axis ranges for this configuration
+        x_min = min(df_mf["z0"].min(), df_zinc["z0"].min(), df_actives["z0"].min())
+        x_max = max(df_mf["z0"].max(), df_zinc["z0"].max(), df_actives["z0"].max())
+        y_min = min(df_mf["z1"].min(), df_zinc["z1"].min(), df_actives["z1"].min())
+        y_max = max(df_mf["z1"].max(), df_zinc["z1"].max(), df_actives["z1"].max())
+        
+        # Add 5% padding
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        x_min -= 0.05 * x_range
+        x_max += 0.05 * x_range
+        y_min -= 0.05 * y_range
+        y_max += 0.05 * y_range
         
         groups = [
             ("MF cloud", df_mf, "#888888", 0),
@@ -1323,9 +1424,7 @@ def _plot_2d_density_embeddings(
                     xy = np.vstack([x, y])
                     kde = gaussian_kde(xy, bw_method='scott')
                     
-                    # Create grid
-                    x_min, x_max = x.min(), x.max()
-                    y_min, y_max = y.min(), y.max()
+                    # Create grid using global ranges
                     xx, yy = np.mgrid[x_min:x_max:100j, y_min:y_max:100j]
                     positions = np.vstack([xx.ravel(), yy.ravel()])
                     density = kde(positions).reshape(xx.shape)
@@ -1335,6 +1434,10 @@ def _plot_2d_density_embeddings(
                 except Exception:
                     # Fallback to scatter
                     ax.scatter(x, y, c=color, s=5, alpha=0.6)
+            
+            # Set shared axis ranges
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
             
             ax.set_title(f"{group_name} (n={len(df_group):,})", fontsize=10)
             ax.set_xlabel("z0", fontsize=9)
@@ -1350,6 +1453,11 @@ def _plot_2d_density_embeddings(
                            label=f"MF cloud", rasterized=True, zorder=2)
         ax_combined.scatter(df_actives["z0"], df_actives["z1"], c="#E85D2D", s=25, alpha=0.9,
                            edgecolors='white', linewidths=0.5, label=f"ACTIVES", zorder=3)
+        
+        # Set shared axis ranges
+        ax_combined.set_xlim(x_min, x_max)
+        ax_combined.set_ylim(y_min, y_max)
+        
         ax_combined.set_title("Combined", fontsize=10, fontweight='bold')
         ax_combined.set_xlabel("z0", fontsize=9)
         ax_combined.set_ylabel("z1", fontsize=9)
