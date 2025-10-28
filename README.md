@@ -388,3 +388,33 @@ Notes
 - Exact NN only: `NearestNeighbors` with `algorithm=kd_tree`/`ball_tree` is exact for Euclidean distance. Results should match `cdist` within a small tolerance (defaults to 1e-6).
 - High dimensions: In very high-D (>~50), tree-based speedups may diminish; `cdist` can then be competitive.
 - Memory: The NN approach avoids allocating large N×M distance matrices.
+
+---
+
+## Alternative parallel dataset recreation (Mordred)
+
+An HPC-optimized, parallel script is available to recreate the full Mordred descriptor datasets with significantly higher throughput:
+
+- Baseline script: `tests/mordred_full_feature_eval/recreate_datasets.py` (single-process, chunked)
+- Parallel alternative: `tests/mordred_full_feature_eval/recreate_datasets_parallel.py` (multiprocessing)
+
+Quick usage (local/HPC):
+
+```bash
+python tests/mordred_full_feature_eval/recreate_datasets_parallel.py \
+  --base_dir . \
+  --output_dir tests/mordred_full_feature_eval/output_full_datasets \
+  --workers 64 \
+  --chunk-size 50000 \
+  --batch-2d 1000 \
+  --batch-3d 250
+```
+
+Outputs:
+- `datasets_2d_all/` and `datasets_2d3d_all/` under `--output_dir`
+- Metadata columns preserved; feature columns replaced by full Mordred sets
+- Fingerprint CSVs filtered to match the recreated feature CSVs
+
+Performance tips:
+- The script parallelizes across processes; each 3D embed uses 1 internal thread to avoid oversubscription.
+- Adjust `--batch-3d` if 3D embedding becomes the bottleneck or memory is tight; 200–400 is a good range on 64 cores.

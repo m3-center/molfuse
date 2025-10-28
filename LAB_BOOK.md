@@ -1793,6 +1793,32 @@ CRITICAL: Phase 1 validation confirms 58.3% performance drop with deduplicated d
 
 **End of Lab Book**
 
+### October 28, 2025: Alternative parallel dataset recreation (Mordred)
+
+- Research Questions and Hypotheses
+  - RQ: Can we materially reduce wall-clock time to recreate full Mordred descriptor datasets (2D and 2D+3D) at scale without increasing memory footprint?
+  - H1: Process-level parallelism for Mordred calculation and ETKDG embedding (1 thread per process) will improve throughput linearly with CPU cores while keeping memory bounded via chunked IO and batch sizing.
+
+- Changes Made (Code)
+  - Added `tests/mordred_full_feature_eval/recreate_datasets_parallel.py`: multiprocessing alternative to the baseline script.
+    - Chunked CSV reading (ZINC) with per-chunk descriptor computation and immediate append-to-CSV writes.
+    - Per-process Mordred calculators; 3D embedding with ETKDGv3 using 1 internal thread to avoid oversubscription.
+    - Stable descriptor schema via early header discovery on a small sample; consistent column order across chunks.
+    - Streaming fingerprint filtering to match recreated feature files.
+  - No changes to the baseline script; both can be used side-by-side.
+
+- Experiments Run
+  - Not yet executed. To be run on HPC node: 64 cores, 300 GB RAM. Planned parameters: `--workers 64 --chunk-size 50000 --batch-2d 1000 --batch-3d 250`.
+
+- Observations and Expected Results
+  - Expect 2D path to scale well with core count; 3D path bottlenecked by conformer generation but parallelized across processes.
+  - Memory is bounded by chunk and batch sizes; descriptor frames are concatenated per chunk only, then flushed to disk.
+
+- Next Steps
+  - Execute on HPC and record total wall time and delivered molecule counts for ZINC and all KW files; compare to baseline.
+  - Validate metadata column preservation and fingerprint filtering integrity.
+  - If stable, update HPC submission helper to point to the parallel script.
+
 ## References
 
 ### Internal Documentation

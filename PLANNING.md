@@ -214,6 +214,13 @@ Notes:
  - [x] README.md: Document post-analysis usage and new flags
 - [ ] ARCHIVE.md: Initialize and document deprecated items (cdist brute-force path; ID-based dedup)
 
+### 🗂️ Dataset recreation (full Mordred) — parallel pipeline
+- [x] Baseline: `tests/mordred_full_feature_eval/recreate_datasets.py` (single-process, chunked IO)
+- [x] Alternative: `tests/mordred_full_feature_eval/recreate_datasets_parallel.py` (multiprocessing)
+- [ ] HPC execution: run parallel script on 64-core/300GB node (`--workers 64 --chunk-size 50000 --batch-2d 1000 --batch-3d 250`)
+- [ ] Verify outputs: metadata columns preserved; counts align with expectations; fingerprint CSVs filtered correctly
+- [ ] Compare throughput vs baseline; document results in LAB_BOOK.md; wire into HPC helper script if adopted
+
 ---
 
 ## Task Checklist (legacy v3.0 — archived)

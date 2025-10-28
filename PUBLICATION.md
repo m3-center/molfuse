@@ -61,3 +61,12 @@ We will run an independent test comparing the current 40-feature subset against 
 Hypothesis: 2D+3D will improve EF@1% by capturing 3D shape/electronic effects. If confirmed, we will consider integrating a curated subset of high-signal 3D descriptors into the v4 features list to balance performance and compute cost.
 
 Methods addendum (independent evaluation): To ensure fair comparisons and maximize usable data, we apply coverage-aware selection before imputation/scaling: chemistry-aware pre-pruning of rare-element E-state families, per-feature prevalence thresholds prioritized for targets (pf_target) and MF cloud (pf_mf), and per-row completeness thresholds with set-specific guards (targets protected, MF moderate, ZINC harshest). We also provide a threshold sweep to visualize Pareto trade-offs between row and column retention.
+
+## Data generation note (Mordred features)
+
+For reproducible feature generation at scale, we provide two dataset recreation paths that rebuild full Mordred 2D and 2D+3D descriptor CSVs (preserving metadata columns) and filter matching ECFP4 fingerprint CSVs:
+
+- Baseline: single-process, chunked computation
+- Alternative (HPC): multiprocessing with chunked IO, per-process 3D embedding (ETKDG), and stable schema across chunks
+
+Both produce parallel directory trees: `datasets_2d_all/` and `datasets_2d3d_all/`. The HPC path is recommended for large end-to-end regenerations (>10^6 molecules) and was designed to keep memory bounded via chunk and batch sizing while exploiting process-level parallelism.
