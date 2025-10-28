@@ -30,12 +30,12 @@ echo "[SLURM] WORKDIR=${WORKDIR}"
 cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 
 # Defaults (override via SBATCH --export=ALL,VAR=value)
-N_TARGET=${N_TARGET:-200}
-N_MF=${N_MF:-500}
-N_ZINC=${N_ZINC:-2000}
+N_TARGET=${N_TARGET:-500}
+N_MF=${N_MF:-2000}
+N_ZINC=${N_ZINC:-50000}
 OUTPUT_DIR=${OUTPUT_DIR:-tests/mordred_full_feature_eval/output_hpc}
 CACHE_DIR=${CACHE_DIR:-tests/mordred_full_feature_eval/cache}
-UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS:-1}
+UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS:-10}
 UMAP_MIN_DIST=${UMAP_MIN_DIST:-0.1}
 ENABLE_SWEEP=${ENABLE_SWEEP:-1}
 
