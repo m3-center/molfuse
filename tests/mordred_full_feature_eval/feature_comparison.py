@@ -29,6 +29,8 @@ import gc
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 import re
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -186,12 +188,12 @@ def smiles_to_rdkit_mol(s: str) -> Optional[Chem.Mol]:
         return None
 
 
-def embed_3d(mol: Chem.Mol, seed: int = 42, max_attempts: int = 3) -> Optional[Chem.Mol]:
+def embed_3d(mol: Chem.Mol, seed: int = 42, max_attempts: int = 3, num_threads: int = 1) -> Optional[Chem.Mol]:
     try:
         m = Chem.AddHs(mol)
         params = AllChem.ETKDGv3()
         params.randomSeed = seed
-        params.numThreads = 0
+        params.numThreads = num_threads
         for _ in range(max_attempts):
             if AllChem.EmbedMolecule(m, params) == 0:
                 try:
@@ -206,6 +208,34 @@ def embed_3d(mol: Chem.Mol, seed: int = 42, max_attempts: int = 3) -> Optional[C
         return None
     except Exception:
         return None
+
+
+def _process_smiles_batch_3d(smiles_batch: List[str], seed: int, num_threads: int = 1) -> List[Tuple[str, Optional[Chem.Mol], bool, str]]:
+    """Process a batch of SMILES for 3D embedding. Returns (smiles, mol, success, error_type)."""
+    results = []
+    for s in smiles_batch:
+        m = smiles_to_rdkit_mol(s)
+        if m is None:
+            results.append((s, None, False, "rdkit_parse"))
+            continue
+        m3d = embed_3d(m, seed=seed, num_threads=num_threads)
+        if m3d is None:
+            results.append((s, None, False, "embed_3d"))
+            continue
+        results.append((s, m3d, True, ""))
+    return results
+
+
+def _process_smiles_batch_2d(smiles_batch: List[str]) -> List[Tuple[str, Optional[Chem.Mol], bool, str]]:
+    """Process a batch of SMILES for 2D (no embedding). Returns (smiles, mol, success, error_type)."""
+    results = []
+    for s in smiles_batch:
+        m = smiles_to_rdkit_mol(s)
+        if m is None:
+            results.append((s, None, False, "rdkit_parse"))
+            continue
+        results.append((s, m, True, ""))
+    return results
 
 
 def _load_cache_subset(cache_path: Path, needed_smiles: set) -> pd.DataFrame:
@@ -278,12 +308,14 @@ def compute_mordred(
     use_3d: bool,
     seed: int = 42,
     cache_dir: Optional[Path] = None,
+    n_jobs: int = 1,
 ) -> Tuple[pd.DataFrame, List[bool], Dict[str, object]]:
     """Compute Mordred descriptors. Returns (descriptor_df, success_mask) aligned with input df rows.
     use_3d=False: 2D descriptors only (ignore_3D=True)
     use_3d=True:  2D+3D descriptors (ignore_3D=False) and requires successful 3D embedding
     
     Memory-efficient implementation: only loads needed SMILES from cache.
+    Parallelized: uses n_jobs processes for SMILES parsing and 3D embedding.
     """
     # Setup cache
     cache_dir = cache_dir or (Path(__file__).resolve().parent / "cache")
@@ -303,28 +335,66 @@ def compute_mordred(
     
     if missing_smiles:
         calc = Calculator(descriptors, ignore_3D=not use_3d)
-        mols: List[Optional[Chem.Mol]] = []
-        success_flags: List[bool] = []
         
-        for s in tqdm(missing_smiles, desc=f"RDKit parse + {'3D' if use_3d else '2D'} prep (uncached)", leave=False):
-            m = smiles_to_rdkit_mol(s)
-            if m is None:
-                mols.append(None)
-                success_flags.append(False)
-                stats_ext["rdkit_parse"].append(s)
-                continue
+        # Parallel processing of SMILES → RDKit mols
+        if n_jobs > 1 and len(missing_smiles) > 100:
+            # Split into batches for parallel processing
+            batch_size = max(10, len(missing_smiles) // (n_jobs * 4))
+            batches = [missing_smiles[i:i+batch_size] for i in range(0, len(missing_smiles), batch_size)]
+            
+            print(f"[Parallel] Processing {len(missing_smiles)} SMILES in {len(batches)} batches using {n_jobs} workers...")
+            
             if use_3d:
-                m3d = embed_3d(m, seed=seed)
-                if m3d is None:
+                # For 3D: each worker gets 1 thread for RDKit embedding
+                process_func = partial(_process_smiles_batch_3d, seed=seed, num_threads=1)
+            else:
+                process_func = _process_smiles_batch_2d
+            
+            with Pool(processes=n_jobs) as pool:
+                batch_results = list(tqdm(
+                    pool.imap(process_func, batches),
+                    total=len(batches),
+                    desc=f"RDKit parse + {'3D' if use_3d else '2D'} prep (parallel)",
+                    leave=False
+                ))
+            
+            # Flatten results
+            all_results = []
+            for batch_res in batch_results:
+                all_results.extend(batch_res)
+            
+            # Extract mols and track failures
+            mols: List[Optional[Chem.Mol]] = []
+            success_flags: List[bool] = []
+            for smiles, mol, success, error_type in all_results:
+                mols.append(mol)
+                success_flags.append(success)
+                if not success and error_type:
+                    stats_ext[error_type].append(smiles)
+        else:
+            # Sequential fallback for small datasets
+            mols: List[Optional[Chem.Mol]] = []
+            success_flags: List[bool] = []
+            
+            for s in tqdm(missing_smiles, desc=f"RDKit parse + {'3D' if use_3d else '2D'} prep (sequential)", leave=False):
+                m = smiles_to_rdkit_mol(s)
+                if m is None:
                     mols.append(None)
                     success_flags.append(False)
-                    stats_ext["embed_3d"].append(s)
+                    stats_ext["rdkit_parse"].append(s)
                     continue
-                mols.append(m3d)
-                success_flags.append(True)
-            else:
-                mols.append(m)
-                success_flags.append(True)
+                if use_3d:
+                    m3d = embed_3d(m, seed=seed, num_threads=1)
+                    if m3d is None:
+                        mols.append(None)
+                        success_flags.append(False)
+                        stats_ext["embed_3d"].append(s)
+                        continue
+                    mols.append(m3d)
+                    success_flags.append(True)
+                else:
+                    mols.append(m)
+                    success_flags.append(True)
 
         valid_idx = [i for i, ok in enumerate(success_flags) if ok]
         valid_mols = [mols[i] for i in valid_idx]
@@ -512,10 +582,11 @@ def sweep_coverage_thresholds(X: pd.DataFrame, sources: np.ndarray, pf_T_grid: L
     return pd.DataFrame(rows)
 
 
-def compute_umap_2d(X: np.ndarray, seed: int = 42, n_neighbors: int = 2, min_dist: float = 0.1) -> np.ndarray:
+def compute_umap_2d(X: np.ndarray, seed: int = 42, n_neighbors: int = 2, min_dist: float = 0.1, n_jobs: int = 1) -> np.ndarray:
     """UMAP requires n_neighbors > 1; if 1 is requested, bump to 2.
     
     Memory-efficient: uses low_memory=True and float32 output.
+    Parallelized: uses n_jobs for neighbor search and optimization.
     """
     eff_nn = max(2, int(n_neighbors))
     if eff_nn != n_neighbors:
@@ -525,7 +596,7 @@ def compute_umap_2d(X: np.ndarray, seed: int = 42, n_neighbors: int = 2, min_dis
     if X.dtype != np.float32:
         X = X.astype(np.float32, copy=False)
     
-    # No seed for UMAP as per request (random_state=None), but use low_memory mode
+    # No seed for UMAP as per request (random_state=None), but use low_memory mode and parallelization
     reducer = umap.UMAP(
         n_neighbors=eff_nn, 
         min_dist=min_dist, 
@@ -533,6 +604,7 @@ def compute_umap_2d(X: np.ndarray, seed: int = 42, n_neighbors: int = 2, min_dis
         metric="euclidean", 
         random_state=None,
         low_memory=True,  # Enable low memory mode
+        n_jobs=n_jobs,  # Parallel processing
         verbose=False
     )
     embedding = reducer.fit_transform(X)
@@ -595,6 +667,12 @@ def centroid_similarity_scores(X: np.ndarray, labels_active: np.ndarray) -> np.n
 def run_eval(args: argparse.Namespace) -> None:
     base_dir = Path(args.base_dir).resolve()
     datasets_dir = base_dir / "datasets"
+    
+    # Determine number of parallel jobs
+    n_jobs = args.n_jobs
+    if n_jobs == -1:
+        n_jobs = cpu_count()
+    print(f"[Parallel] Using {n_jobs} CPU cores for parallel processing")
 
     # 1) Load inputs (three sources)
     # Target ligands
@@ -638,12 +716,12 @@ def run_eval(args: argparse.Namespace) -> None:
 
     print("[Memory] Computing 2D descriptors...")
     # 2D only
-    mordred2d_df, mask2d, stats2d = compute_mordred(data_df, use_3d=False, seed=args.seed, cache_dir=Path(args.cache_dir) if args.cache_dir else None)
+    mordred2d_df, mask2d, stats2d = compute_mordred(data_df, use_3d=False, seed=args.seed, cache_dir=Path(args.cache_dir) if args.cache_dir else None, n_jobs=n_jobs)
     gc.collect()  # Force garbage collection after first descriptor computation
     
     print("[Memory] Computing 2D+3D descriptors...")
     # 2D + 3D
-    mordred3d_df, mask3d, stats3d = compute_mordred(data_df, use_3d=True, seed=args.seed, cache_dir=Path(args.cache_dir) if args.cache_dir else None)
+    mordred3d_df, mask3d, stats3d = compute_mordred(data_df, use_3d=True, seed=args.seed, cache_dir=Path(args.cache_dir) if args.cache_dir else None, n_jobs=n_jobs)
     gc.collect()  # Force garbage collection after second descriptor computation
 
     # Define valid intersection for fair comparison (must have both 2D and 3D descriptors)
@@ -741,9 +819,9 @@ def run_eval(args: argparse.Namespace) -> None:
 
     # 3) UMAP embeddings
     print("[Memory] Computing UMAP embeddings...")
-    emb_curr = compute_umap_2d(X_curr_sc, seed=args.seed, n_neighbors=args.umap_n_neighbors, min_dist=args.umap_min_dist)
-    emb_2d = compute_umap_2d(X_2d_sc, seed=args.seed, n_neighbors=args.umap_n_neighbors, min_dist=args.umap_min_dist)
-    emb_2d3d = compute_umap_2d(X_2d3d_sc, seed=args.seed, n_neighbors=args.umap_n_neighbors, min_dist=args.umap_min_dist)
+    emb_curr = compute_umap_2d(X_curr_sc, seed=args.seed, n_neighbors=args.umap_n_neighbors, min_dist=args.umap_min_dist, n_jobs=n_jobs)
+    emb_2d = compute_umap_2d(X_2d_sc, seed=args.seed, n_neighbors=args.umap_n_neighbors, min_dist=args.umap_min_dist, n_jobs=n_jobs)
+    emb_2d3d = compute_umap_2d(X_2d3d_sc, seed=args.seed, n_neighbors=args.umap_n_neighbors, min_dist=args.umap_min_dist, n_jobs=n_jobs)
     gc.collect()  # Clean up after UMAP
 
     # 4) Scoring and EF@1% (use feature-space centroid similarity, not UMAP)
@@ -1114,6 +1192,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--umap_min_dist", type=float, default=0.1, help="UMAP min_dist")
     p.add_argument("--cache_dir", default="tests/mordred_full_feature_eval/cache", help="Directory to cache Mordred descriptors by SMILES")
     p.add_argument("--output_dir", default="tests/mordred_full_feature_eval/output", help="Output directory for results")
+    p.add_argument("--n_jobs", type=int, default=-1, help="Number of parallel jobs (-1 = all CPUs)")
     # Coverage-aware selection parameters
     p.add_argument("--pf_target", type=float, default=0.95, help="Per-feature prevalence threshold in target set (retain if >=)")
     p.add_argument("--pf_mf", type=float, default=0.7, help="Per-feature prevalence threshold in MF set (retain if >=)")
