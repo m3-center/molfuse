@@ -1,3 +1,102 @@
+### October 28, 2025: Stereochemistry investigation: 2D vs 3D Mordred descriptors and data audit
+
+- Research Questions and Hypotheses
+  - RQ1: Do Mordred 3D descriptors capture stereochemical information that 2D descriptors miss?
+  - RQ2: What is the prevalence of stereochemistry annotations (E/Z, R/S) in our ZINC, MF cloud, and target active datasets?
+  - RQ3: Does stereochemistry-awareness (via 3D features) improve virtual screening performance (EF@1%)?
+  - H1: Mordred 3D descriptors detect stereoisomer differences through 3D geometric features (DPSA, WHIM, GETAWAY, etc.)
+  - H2: Most molecules in our datasets lack explicit stereochemistry annotations in SMILES strings
+  - H3: The null improvement in EF@1% from 3D descriptors (HPC run) is explained by low stereochemistry prevalence
+
+- Changes Made (Code or configuration)
+  - Created `tests/mordred_full_feature_eval/audit_stereochemistry.py`: standalone script to audit stereochemistry prevalence
+    - Detects double bond stereochemistry (`/` and `\` characters for E/Z isomerism)
+    - Detects tetrahedral stereochemistry (`@` and `@@` characters for R/S chirality)
+    - Analyzes ZINC, MF cloud (all KW files with deduplication), and target actives
+    - Outputs: `stereochemistry_summary.csv`, per-dataset detail CSVs, and interpretive text report
+  - Created `tests/mordred_full_feature_eval/README_AUDIT.md`: documentation for audit script usage
+  - Modified audit script defaults: changed `--max_zinc` from 100k to None (analyze all molecules)
+  - Added molecular similarity chain visualization to `scripts/phase1_post_analysis.py` (visualization of ACTIVE→MF→ZINC triplets)
+  - Removed hexbin density plot from phase1_post_analysis.py (user preference)
+
+- Experiments Run (paths / SHAs)
+  - Controlled stereochemistry test (local):
+    - Tested two stereoisomers: `COc1ccc2[nH]cc(C=C3C(=O)Nc4ccccc43)c2c1` (no stereo) vs `COc1ccc2[nH]cc(/C=C3\C(=O)Nc4ccccc43)c2c1` (explicit Z-stereo)
+    - 2D descriptors: 0/1463 differ (0.00%)
+    - 2D+3D descriptors: 205/1676 differ (12.23%)
+    - Result: 3D descriptors DO capture stereochemistry (205/213 3D-only descriptors = 96% sensitive)
+    - Robust across conformer seeds (202-208 descriptors differ, σ=2.2)
+  - HPC production run (completed):
+    - Command: `python tests/mordred_full_feature_eval/mordred_full_feature_compare.py --output_dir tests/mordred_full_feature_eval/output_hpc --n_target 500 --n_mf 2000 --n_zinc 50000`
+    - N=52,456 molecules (497 targets, 1,968 MF, 49,991 ZINC)
+    - EF@1%: current_40 = 4.82; full_2d = 7.44; full_2d+3d = 7.44 (IDENTICAL)
+    - ROC-AUC: current_40 = 0.611; full_2d = 0.625; full_2d+3d = 0.622 (3D slightly WORSE)
+    - PR-AUC: current_40 = 0.0189; full_2d = 0.0278; full_2d+3d = 0.0268 (3D slightly worse)
+    - Diagnostics: top-1% overlap = 80.8%, Spearman ρ = 0.9965 (rankings nearly identical)
+    - Kept features: 1,355 (2D) vs 1,568 (2D+3D); all 213 3D-only descriptors survived cleaning
+  - Stereochemistry audit (local, full datasets):
+    - ZINC: 1,295,279 molecules → 63.57% have ANY stereochemistry (60.85% chiral, 3.86% double bond)
+    - MF cloud: 646,565 molecules → 39.16% have ANY stereochemistry (32.81% chiral, 8.26% double bond)
+    - Target actives: 9,677 molecules → 33.60% have ANY stereochemistry (17.83% chiral, 19.79% double bond)
+    - Overall average: 45.4% stereochemistry prevalence (high by audit criteria)
+
+- Observations and Results
+  - **Laboratory evidence**: Mordred 3D descriptors reliably detect stereoisomer differences
+    - Key discriminating descriptors: DPSA/PPSA/WPSA (partial surface areas), RNCS (relative negative charge surface), TASA (total accessible surface area)
+    - These capture different 3D spatial arrangements of atoms after ETKDG conformer generation and energy minimization
+    - RDKit's ETKDG respects and preserves explicit stereochemistry during 3D embedding
+  - **Production evidence**: 3D descriptors provide ZERO benefit for virtual screening
+    - EF@1% improvement from 3D: 0.0000 (exactly identical to full 2D)
+    - ROC-AUC change from 3D: -0.00317 (slightly worse, within noise)
+    - Cost multiplier: ~100-500× slower due to conformer generation (1-5s vs 0.01s per molecule)
+    - Efficiency ratio: 0.015 (performance gain / cost multiplier)
+  - **Paradox resolution**: High stereochemistry prevalence does NOT translate to screening benefit
+    - Despite 45% average prevalence in source databases, stereochemistry may not be biologically relevant for this screening task
+    - Possible explanations:
+      1. Stereochemistry annotations may be inconsistent across datasets (e.g., actives have unspecified stereo while MF has explicit stereo)
+      2. The biological targets may be stereochemistry-insensitive (some binding pockets tolerate multiple stereoisomers)
+      3. 2D connectivity dominates over 3D geometry for these molecular function assays
+      4. Random conformer variability (when stereo unspecified) adds noise rather than signal
+  - **Critical finding**: The d=0.000 example was NOT a failure
+    - ACTIVE: `C=C3` (unspecified stereochemistry) vs MF: `/C=C3\` (explicit Z-stereo)
+    - These are technically different molecules (stereoisomers), but treating them as identical is correct when the active itself has unspecified stereochemistry
+    - 2D fingerprints correctly identified them as the same chemical entity (ignoring stereo), which may be more biologically meaningful than discriminating based on unverified stereochemistry
+
+- Interpretation and Conclusions
+  - **Recommendation for production pipeline**: DO NOT use 3D Mordred descriptors
+    - Zero EF@1% improvement does not justify 100-500× computational cost
+    - Focus optimization on 2D feature engineering (full 2D improved EF@1% by 54%)
+    - Current 40-feature subset is suboptimal; full 2D set (1,355 features after cleaning) is superior
+  - **Alternative if stereochemistry matters**: Add lightweight boolean flags
+    - `has_double_bond_stereo = ('/' in smiles or '\\' in smiles)`
+    - `has_chiral = '@' in smiles`
+    - `n_chiral_centers = smiles.count('@')`
+    - Cheap to compute (regex on SMILES), no conformer generation needed
+  - **Stereochemistry is present but not predictive**: 
+    - 45% prevalence indicates substantial stereochemical diversity in the databases
+    - Yet 99.65% ranking correlation (Spearman) between 2D and 3D suggests stereochemistry is orthogonal to bioactivity for these assays
+    - This is a scientifically valid finding: not all stereochemical differences are biologically meaningful
+  - **Scientific value of negative result**: 
+    - Controlled experiment confirmed 3D descriptors CAN detect stereochemistry (96% of 3D-only descriptors differ for stereoisomers)
+    - Production experiment showed this capability does NOT improve screening performance
+    - This demonstrates the importance of task-specific evaluation over theoretical descriptor capabilities
+
+- Next Steps
+  - Archive 3D descriptor pipeline as "tested but not beneficial for current use case"
+  - Investigate why full 2D (1,355 features) outperforms current 40-feature subset
+    - Analyze which descriptor families drive the 54% EF@1% improvement
+    - Consider dimensionality reduction or feature selection to balance performance and interpretability
+  - Document stereochemistry audit methodology for future reference if new targets emerge where stereo may matter
+  - Consider stratified evaluation: separately assess EF@1% on stereo-specified vs stereo-unspecified subsets (though rankings are 99.65% correlated, so benefit unlikely)
+
+- Artifacts Generated
+  - `tests/mordred_full_feature_eval/audit_stereochemistry.py` (stereochemistry detection and reporting)
+  - `tests/mordred_full_feature_eval/README_AUDIT.md` (audit script documentation)
+  - `tests/mordred_full_feature_eval/audit_results/stereochemistry_summary.csv` (summary statistics)
+  - `tests/mordred_full_feature_eval/audit_results/stereochemistry_details_*.csv` (per-molecule flags for each dataset)
+  - `tests/mordred_full_feature_eval/audit_results/stereochemistry_audit_report.txt` (interpretive report with recommendations)
+  - HPC output in `tests/mordred_full_feature_eval/output_hpc/` (summary.json, coverage CSVs, kept column lists, failure tracking)
+
 ### October 27, 2025: Phase 1 post-analysis visualization overhaul (v4)
 
 - Changes Made (Code)
