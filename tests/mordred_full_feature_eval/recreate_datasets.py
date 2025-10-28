@@ -139,7 +139,81 @@ def compute_mordred_for_smiles(
     return mordred_df, failed_smiles
 
 
-    return mordred_df, failed_smiles
+def filter_fingerprints_by_features(
+    fp_path: Path,
+    feature_path: Path,
+    output_path: Path,
+    smiles_col: str = "SMILES"
+) -> int:
+    """Filter fingerprint file to only include molecules present in the feature file.
+    
+    Uses chunked processing for memory efficiency with large files.
+    
+    Args:
+        fp_path: Path to original fingerprint file
+        feature_path: Path to the created feature file (defines which molecules to keep)
+        output_path: Path to save filtered fingerprint file
+        smiles_col: Name of SMILES column (default: "SMILES")
+    
+    Returns:
+        Number of molecules in filtered fingerprint file
+    """
+    if not fp_path.exists():
+        print(f"      ⚠ Fingerprint file not found: {fp_path.name}")
+        return 0
+    
+    if not feature_path.exists():
+        print(f"      ⚠ Feature file not found: {feature_path.name}")
+        return 0
+    
+    try:
+        # Load SMILES from feature file (only SMILES column for memory efficiency)
+        features_smiles = set(pd.read_csv(feature_path, usecols=[smiles_col], low_memory=False)[smiles_col].dropna().astype(str))
+        
+        # Process fingerprint file in chunks to avoid memory overflow
+        chunk_size = 50_000
+        total_kept = 0
+        first_chunk = True
+        
+        for chunk in pd.read_csv(fp_path, chunksize=chunk_size, low_memory=False):
+            if smiles_col not in chunk.columns:
+                print(f"      ⚠ SMILES column '{smiles_col}' not found in {fp_path.name}")
+                return 0
+            
+            # Filter chunk to only molecules present in feature file
+            fp_filtered_chunk = chunk[chunk[smiles_col].isin(features_smiles)].copy()
+            
+            if not fp_filtered_chunk.empty:
+                # Create output directory if needed
+                if first_chunk:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Append to output file (write header only on first chunk)
+                fp_filtered_chunk.to_csv(
+                    output_path, 
+                    mode='w' if first_chunk else 'a',
+                    header=first_chunk,
+                    index=False
+                )
+                total_kept += len(fp_filtered_chunk)
+                first_chunk = False
+            
+            # Free memory
+            del chunk, fp_filtered_chunk
+            gc.collect()
+        
+        # If no molecules were kept, create empty file with header
+        if total_kept == 0 and first_chunk:
+            # Read just the header to create empty file
+            header_df = pd.read_csv(fp_path, nrows=0)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            header_df.to_csv(output_path, index=False)
+        
+        return total_kept
+    
+    except Exception as e:
+        print(f"      ✗ Error filtering fingerprints from {fp_path.name}: {e}")
+        return 0
 
 
 def verify_recreated_datasets(
@@ -210,12 +284,13 @@ def verify_recreated_datasets(
     log_print(f"{'='*80}")
     
     # Initial counts (what was requested for computation)
-    log_print(f"\n[INITIAL MOLECULE SELECTION]")
-    log_print(f"  ZINC molecules requested:  {initial_zinc_count:>8,}")
-    log_print(f"  KW molecules requested:    {initial_kw_count:>8,}")
+    log_print(f"\n[MOLECULES REQUESTED FOR COMPUTATION]")
+    log_print(f"  ZINC molecules:  {initial_zinc_count:>10,}")
+    log_print(f"  KW molecules:    {initial_kw_count:>10,}")
+    log_print(f"  TOTAL requested: {initial_zinc_count + initial_kw_count:>10,}")
     
     # ZINC analysis
-    log_print(f"\n[ZINC FILE - ACTUAL RESULTS]")
+    log_print(f"\n[ZINC FILE - DETAILED ANALYSIS]")
     if zinc_orig.exists():
         df_orig = pd.read_csv(zinc_orig, usecols=['SMILES'], low_memory=False)
         smiles_orig = set(df_orig['SMILES'].dropna().astype(str).tolist())
@@ -298,7 +373,7 @@ def verify_recreated_datasets(
     
     # Summary statistics
     log_print(f"\n{'='*80}")
-    log_print("SUMMARY STATISTICS")
+    log_print("SUMMARY STATISTICS: KW FILES")
     log_print(f"{'='*80}")
     
     if total_orig > 0:
@@ -320,6 +395,55 @@ def verify_recreated_datasets(
         
         if only_2d3d > 0:
             log_print(f"\n  ⚠ WARNING: {only_2d3d} molecules present in 2D+3D but NOT in 2D")
+    
+    # OVERALL SUCCESS RATES (requested vs delivered)
+    log_print(f"\n{'='*80}")
+    log_print("OVERALL SUCCESS RATES: REQUESTED vs DELIVERED")
+    log_print(f"{'='*80}")
+    
+    # Get ZINC counts from recreated files
+    zinc_2d_count = 0
+    zinc_2d3d_count = 0
+    if zinc_2d.exists():
+        zinc_2d_count = sum(1 for _ in open(zinc_2d)) - 1
+    if zinc_2d3d.exists():
+        zinc_2d3d_count = sum(1 for _ in open(zinc_2d3d)) - 1
+    
+    # Calculate total delivered
+    total_requested = initial_zinc_count + initial_kw_count
+    total_delivered_2d = zinc_2d_count + total_2d
+    total_delivered_2d3d = zinc_2d3d_count + total_2d3d
+    
+    log_print(f"\n2D DESCRIPTORS:")
+    log_print(f"  Molecules requested:  {total_requested:>10,}")
+    log_print(f"  Molecules delivered:  {total_delivered_2d:>10,}")
+    log_print(f"  Success rate:         {total_delivered_2d/total_requested*100 if total_requested > 0 else 0:>10.2f}%")
+    log_print(f"  Molecules lost:       {total_requested - total_delivered_2d:>10,} ({(total_requested - total_delivered_2d)/total_requested*100 if total_requested > 0 else 0:.2f}%)")
+    
+    log_print(f"\n  Breakdown by source:")
+    log_print(f"    ZINC requested:     {initial_zinc_count:>10,}")
+    log_print(f"    ZINC delivered:     {zinc_2d_count:>10,} ({zinc_2d_count/initial_zinc_count*100 if initial_zinc_count > 0 else 0:.2f}%)")
+    log_print(f"    KW requested:       {initial_kw_count:>10,}")
+    log_print(f"    KW delivered:       {total_2d:>10,} ({total_2d/initial_kw_count*100 if initial_kw_count > 0 else 0:.2f}%)")
+    
+    log_print(f"\n2D+3D DESCRIPTORS:")
+    log_print(f"  Molecules requested:  {total_requested:>10,}")
+    log_print(f"  Molecules delivered:  {total_delivered_2d3d:>10,}")
+    log_print(f"  Success rate:         {total_delivered_2d3d/total_requested*100 if total_requested > 0 else 0:>10.2f}%")
+    log_print(f"  Molecules lost:       {total_requested - total_delivered_2d3d:>10,} ({(total_requested - total_delivered_2d3d)/total_requested*100 if total_requested > 0 else 0:.2f}%)")
+    
+    log_print(f"\n  Breakdown by source:")
+    log_print(f"    ZINC requested:     {initial_zinc_count:>10,}")
+    log_print(f"    ZINC delivered:     {zinc_2d3d_count:>10,} ({zinc_2d3d_count/initial_zinc_count*100 if initial_zinc_count > 0 else 0:.2f}%)")
+    log_print(f"    KW requested:       {initial_kw_count:>10,}")
+    log_print(f"    KW delivered:       {total_2d3d:>10,} ({total_2d3d/initial_kw_count*100 if initial_kw_count > 0 else 0:.2f}%)")
+    
+    log_print(f"\n3D EMBEDDING FAILURE RATE:")
+    if total_delivered_2d > 0:
+        failures_3d = total_delivered_2d - total_delivered_2d3d
+        log_print(f"  2D molecules:         {total_delivered_2d:>10,}")
+        log_print(f"  2D+3D molecules:      {total_delivered_2d3d:>10,}")
+        log_print(f"  3D failures:          {failures_3d:>10,} ({failures_3d/total_delivered_2d*100:.2f}% of 2D)")
     
     log_print(f"\n{'='*80}")
     if all_passed:
@@ -487,6 +611,21 @@ def recreate_datasets_structure(
             gc.collect()
         
         print(f"  ✓ ZINC complete: 2D={total_2d:,}, 2D+3D={total_2d3d:,}")
+        
+        # Now filter and recreate ZINC fingerprint files
+        print(f"\n  Processing ZINC fingerprints...")
+        zinc_fp_orig = datasets_dir / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
+        
+        # Filter fingerprints for 2D
+        out_fp_2d = out_2d / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
+        n_fp_2d = filter_fingerprints_by_features(zinc_fp_orig, out_path_2d, out_fp_2d, smiles_col="SMILES")
+        print(f"    ✓ 2D fingerprints: {n_fp_2d:,} molecules")
+        
+        # Filter fingerprints for 2D+3D
+        out_fp_2d3d = out_2d3d / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
+        n_fp_2d3d = filter_fingerprints_by_features(zinc_fp_orig, out_path_2d3d, out_fp_2d3d, smiles_col="SMILES")
+        print(f"    ✓ 2D+3D fingerprints: {n_fp_2d3d:,} molecules")
+        
     else:
         print(f"  ⚠ ZINC file not found: {zinc_orig_path}")
     
@@ -570,6 +709,24 @@ def recreate_datasets_structure(
             del kw_2d3d, desc_2d3d
             gc.collect()
             
+            # Process fingerprint file for this KW
+            # Derive fingerprint filename from feature filename
+            fp_name = kw_name.replace("_extracted_features.csv", "_extracted_fingerprints_ECFP4.csv")
+            kw_fp_orig = datasets_dir / fp_name
+            
+            if kw_fp_orig.exists():
+                # Filter fingerprints for 2D
+                out_fp_2d = out_2d / fp_name
+                n_fp_2d = filter_fingerprints_by_features(kw_fp_orig, out_path_2d, out_fp_2d, smiles_col=smiles_col)
+                
+                # Filter fingerprints for 2D+3D
+                out_fp_2d3d = out_2d3d / fp_name
+                n_fp_2d3d = filter_fingerprints_by_features(kw_fp_orig, out_path_2d3d, out_fp_2d3d, smiles_col=smiles_col)
+                
+                print(f"    ✓ Fingerprints: 2D={n_fp_2d:,}, 2D+3D={n_fp_2d3d:,}")
+            else:
+                print(f"    ⚠ Fingerprint file not found: {fp_name}")
+            
             # Clean up all variables for this file
             del kw_meta, smiles_list
             gc.collect()
@@ -591,6 +748,7 @@ def recreate_datasets_structure(
     print(f"  • Metadata columns preserved from original datasets/")
     print(f"  • Row order preserved (same order as original for molecules with computed descriptors)")
     print(f"  • Feature columns replaced with full Mordred descriptor sets")
+    print(f"  • Fingerprint files filtered to match feature files (ECFP4, no recalculation)")
     print(f"  • Only molecules with successfully computed descriptors are included")
     print(f"\nUsage: Update phase1.py configs to point to these directories")
     print(f"  Example (2D):")
