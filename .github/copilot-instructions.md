@@ -1,3 +1,51 @@
+# Copilot Instructions: UMMBAS/molfuse codebase guide
+
+Purpose: make AI agents productive fast on this repo. Focus on how things actually work here (not generic tips).
+
+## Big picture
+- MolFuSE is an MF-guided virtual screening pipeline. v3 (stable) lives in archived_scripts and is deprecated; v4 refactor lives in `molfuse/` with CLIs for Phase 1/2 and HPC support.
+- Core flow (Phase 1): load MF cloud + ZINC (+ actives), enforce target exclusion and zero-overlap, scale features (or parse fingerprints), fit DR (PCA/UMAP) on MF+ZINC only, project actives, score by exact 1-NN to MF, compute EF/ROC/PR and Spearman on actives.
+
+## Architecture (where to look)
+- `molfuse/cli/phase1.py` (entrypoint) and `molfuse/cli/phase2.py` (scaffold). Always use `molfuse.io.paths.make_run_dirs` to create work dirs.
+- DR: `molfuse/dr/pca.py`, `molfuse/dr/umap_.py` (fit and transform), Data prep: `molfuse/data/prep.py` (scaler, feature selection).
+- Scoring/metrics: `molfuse/scoring/nn.py` (exact 1-NN), `molfuse/metrics/metrics.py` (EF@k%, ROC/PR, Spearman).
+- Configs: `configs/` (example + grids); generator: `scripts/generate_molfuse_phase1_configs_v4.py`.
+- HPC: `hpc/molfuse_phase1_cpu.sh` (per-run), `hpc/submit_molfuse_phase1.sh` (batch + idempotent skip via `phase1_summary.json`).
+- v3 docs/workflows: `README.md`, `README_V3_PIPELINE.md`; v4 invariants: `README_V4_MOLFUSE.md`.
+
+## Project conventions (treat these as invariants)
+- No leakage: StandardScaler fits on MF+ZINC only; actives are transformed with that scaler.
+- Randomness: UMAP uses `random_state=None` by default for parallelism; do not override unless explicitly requested.
+- Overlap/duplicates: remove actives from MF and ZINC by SMILES; enforce zero MF–ZINC overlap; deduplicate rows strictly by SMILES (`canonical_smiles` preferred, fallback `SMILES`).
+- Representations: `representation: "features"|"fingerprints"`; features use Euclidean for UMAP, fingerprints use Jaccard for UMAP; PCA baseline supported for both.
+- Scoring: score = -min_distance to MF in embedded space via exact 1-NN (`molfuse.scoring.nn`).
+- Affinity cutoff: default 100_000 nM; apply to MF for scoring only; on empty post-cutoff MF, behavior controlled by `on_empty_cutoff: "error"|"fallback"`.
+- Columns: activity column is `Standard Value (nM)`; convert to pActivity with `9 - log10(nM)` when needed.
+- Workspaces: per-run folders under `<workspace>/phase1/<run_name>/` with `logs/run.log`, `logs/phase1_summary.json`, `metrics/metrics.json`, `artifacts/{embedding_*.csv, ranked_scores.csv, *_model.joblib, scaler.joblib}`.
+
+## Critical workflows (minimal examples)
+- Local Phase 1 run (v4): `python -m molfuse.cli.phase1 --config configs/molfuse_phase1_example.json --workspace ./experiment_workspace_v4`
+- Generate v4 grid: `python scripts/generate_molfuse_phase1_configs_v4.py` → `configs/molfuse_phase1_grid/` (includes `run_name` and `replicate`).
+- HPC submit (idempotent): `bash hpc/submit_molfuse_phase1.sh [--dry-run] configs/molfuse_phase1_grid experiment_workspace_v4` (skips runs with valid `phase1_summary.json`).
+- v3 pipeline reference (deprecated): see `README_V3_PIPELINE.md`; use orchestrators and status checkers there when working on legacy scripts.
+
+## Patterns to follow when extending
+- Always create run dirs via `make_run_dirs` and write logs/metrics/artifacts in the same layout; callers and HPC scripts rely on these paths.
+- Use `molfuse.data.prep.select_feature_columns` to pick numeric feature columns; coerce to numeric and drop NaNs exactly as in `phase1.py` to avoid drift.
+- Prefer exact 1-NN backend over batched `cdist` (see `analysis_scripts/benchmark_cdist_vs_kdtree.py`).
+- Fingerprint parsing: accept messy strings; sanitize to 0/1 comma lists and enforce consistent length (see `parse_fp_series` in `phase1.py`).
+- Keep `run_name` stable and informative; HPC batching and completion checks depend on it.
+- Do not expose a CLI flag to switch the exact 1-NN algorithm (KDTree/BallTree) for Euclidean features; keep backend selection internal.
+
+## Integration/cross-component assumptions
+- Phase 2 (v4) will reuse Phase 1 simspaces/models and only re-score with different cutoffs; do not change artifact formats or names.
+- Tests and ad hoc analyses live under `tests/` and `reporting/`; Mordred dataset recreation scripts expect specific column names and file patterns.
+
+## Documentation discipline (kept concise)
+- When you change behavior, update top-level docs: `LAB_BOOK.md`, `PLANNING.md`, `README.md`, `ARCHIVE.md`, `PUBLICATION.md` (summary-level changes only, link to runs/SHAs).
+
+References: `README.md`, `README_V4_MOLFUSE.md`, `molfuse/cli/phase1.py`, `hpc/submit_molfuse_phase1.sh`, `scripts/generate_molfuse_phase1_configs_v4.py`.
 # **GitHub Copilot Persona: The Scientific Research Assistant**
 
 ## **1\. Core Philosophy: Inquiry Over Answers**
