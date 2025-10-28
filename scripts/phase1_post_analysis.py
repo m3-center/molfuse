@@ -33,6 +33,7 @@ import logging
 
 import numpy as np
 import pandas as pd
+from scipy.stats import gaussian_kde
 
 # Matplotlib is standard; seaborn is optional (fallback to plain matplotlib if missing)
 import matplotlib
@@ -673,33 +674,46 @@ def _plot_distance_hist_cdf_by_label(
         "UMAP avg fingerprints": "#ffbb78",   # light orange
     }
     
-    # Method comparison CDF - now with subplots for ZINC vs ACTIVES
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    # IMPROVED CDF: Overlaid ZINC and ACTIVES with distinct line styles
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
     
-    for idx, source in enumerate(["zinc", "actives"]):
-        ax = axes[idx]
-        for lab in labels:
+    for lab in labels:
+        color = color_map.get(lab, None)
+        for source, ls, alpha, lw in [("zinc", "--", 0.7, 1.8), ("actives", "-", 1.0, 2.5)]:
             dd = df_dist[(df_dist["label"] == lab) & (df_dist["source"] == source)]["distance"].dropna().to_numpy(dtype=float)
             if dd.size == 0:
                 continue
             dd_sorted = np.sort(dd)
             y = np.linspace(0, 1, len(dd_sorted), endpoint=True)
-            ax.plot(dd_sorted, y, label=lab, color=color_map.get(lab, None), linewidth=2)
-        
-        ax.set_xlim(xmin, xmax)
-        ax.set_xlabel("min-distance to MF cloud", fontsize=11)
-        ax.set_ylabel("CDF", fontsize=11)
-        ax.set_title(f"{source.upper()} → MF", fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        if idx == 1:  # legend on right panel
-            ax.legend(loc="lower right", fontsize=9, frameon=True)
+            # Construct label with method and source
+            plot_label = f"{lab} ({source.upper()})" if source == "actives" else None
+            ax.plot(dd_sorted, y, label=plot_label, color=color, linestyle=ls, 
+                   linewidth=lw, alpha=alpha)
     
-    fig.suptitle("Distance CDF: Method Comparison", fontsize=14, fontweight='bold')
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    ax.set_xlim(xmin, xmax)
+    ax.set_xlabel("min-distance to MF cloud", fontsize=12)
+    ax.set_ylabel("Cumulative Distribution Function", fontsize=12)
+    ax.set_title("Distance CDF: Method Comparison (Solid=ACTIVES, Dashed=ZINC)", 
+                fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    # Create custom legend with both method colors and line styles
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color=color_map.get(lab), linewidth=2.5, linestyle='-', label=lab)
+        for lab in labels if lab in color_map
+    ]
+    legend_elements.extend([
+        Line2D([0], [0], color='black', linewidth=2, linestyle='-', label='ACTIVES'),
+        Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='ZINC'),
+    ])
+    ax.legend(handles=legend_elements, loc="lower right", fontsize=9, frameon=True, ncol=1)
+    
+    fig.tight_layout()
     fig.savefig(plots_dir / "distance_cdf_compare_methods.png", dpi=300, bbox_inches='tight')
     fig.savefig(plots_dir / "distance_cdf_compare_methods.pdf", bbox_inches='tight')
     plt.close(fig)
-    logger.info("Saved improved distance CDF plot with ZINC vs ACTIVES comparison")
+    logger.info("Saved improved CDF plot with overlaid ZINC/ACTIVES comparison")
 
 
 def _plot_umap_histograms_split(
@@ -708,9 +722,11 @@ def _plot_umap_histograms_split(
     logger: logging.Logger,
     x_range: Tuple[float, float] = (0.0, 0.5),
 ) -> List[Path]:
-    """Create a grid of histograms showing ZINC vs ACTIVES for each method.
-    Layout: 5 methods in columns (PCA, UMAP best features, UMAP avg features, 
-    UMAP best fingerprints, UMAP avg fingerprints)
+    """Create improved histograms with log-scale y-axis for better visibility.
+    
+    Two visualizations:
+    1. Grid layout (5 methods) with log-scale y-axis
+    2. Stacked layout per method with linear and log scales side-by-side
     """
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -724,48 +740,113 @@ def _plot_umap_histograms_split(
         "UMAP avg fingerprints",
     ]
     
-    # Create 1x5 subplot grid
-    fig, axes = plt.subplots(1, 5, figsize=(18, 4), sharey=True)
+    # ===== VISUALIZATION 1: Grid with Log Scale =====
+    fig, axes = plt.subplots(2, 5, figsize=(20, 7), sharex=True)
     
     for idx, label in enumerate(method_labels):
-        ax = axes[idx]
+        ax_lin = axes[0, idx]  # Linear scale (top row)
+        ax_log = axes[1, idx]  # Log scale (bottom row)
         sub = df_dist[df_dist["label"] == label]
         
         if sub.empty:
             logger.info(f"No distance samples for '{label}', skipping")
-            ax.set_visible(False)
+            ax_lin.set_visible(False)
+            ax_log.set_visible(False)
             continue
         
-        # Plot ZINC and ACTIVES overlaid
-        for src, color, alpha, zorder in [("zinc", "#5A7FC0", 0.6, 1), ("actives", "#E85D2D", 0.7, 2)]:
+        # Plot ZINC and ACTIVES on both linear and log scales
+        for src, color, alpha in [("zinc", "#5A7FC0", 0.7), ("actives", "#E85D2D", 0.8)]:
             dd = sub[sub["source"] == src]["distance"].dropna().to_numpy(dtype=float)
             if dd.size == 0:
                 continue
             mask = (dd >= xmin) & (dd <= xmax)
-            ax.hist(dd[mask], bins=60, range=(xmin, xmax), density=True, 
-                   alpha=alpha, label=src.upper(), color=color, zorder=zorder, edgecolor='white', linewidth=0.3)
+            dd_filtered = dd[mask]
+            
+            # Linear scale
+            ax_lin.hist(dd_filtered, bins=50, range=(xmin, xmax), density=True, 
+                       alpha=alpha, label=src.upper(), color=color, edgecolor='white', linewidth=0.3)
+            
+            # Log scale
+            ax_log.hist(dd_filtered, bins=50, range=(xmin, xmax), density=True, 
+                       alpha=alpha, label=src.upper(), color=color, edgecolor='white', linewidth=0.3)
+        
+        # Configure linear axis (top)
+        ax_lin.set_xlim(xmin, xmax)
+        ax_lin.set_title(label, fontsize=10, fontweight='bold')
+        ax_lin.grid(True, alpha=0.25, axis='y')
+        if idx == 0:
+            ax_lin.set_ylabel("Density (linear)", fontsize=10)
+        if idx == 4:
+            ax_lin.legend(loc="upper right", fontsize=8, frameon=True)
+        
+        # Configure log axis (bottom)
+        ax_log.set_xlim(xmin, xmax)
+        ax_log.set_yscale('log')
+        ax_log.set_xlabel("min-distance to MF", fontsize=9)
+        ax_log.grid(True, alpha=0.25, which='both')
+        if idx == 0:
+            ax_log.set_ylabel("Density (log scale)", fontsize=10)
+    
+    fig.suptitle(f"Distance Distributions: Linear vs Log Scale [{xmin:g}, {xmax:g}]", 
+                fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    
+    p_png_grid = plots_dir / "distance_hist_grid_log_scale.png"
+    p_pdf_grid = plots_dir / "distance_hist_grid_log_scale.pdf"
+    fig.savefig(p_png_grid, dpi=300, bbox_inches='tight')
+    fig.savefig(p_pdf_grid, bbox_inches='tight')
+    plt.close(fig)
+    logger.info(f"Saved log-scale histogram grid: {p_png_grid}")
+    
+    # ===== VISUALIZATION 2: KDE (Kernel Density) overlay for smoother comparison =====
+    fig2, axes2 = plt.subplots(1, 5, figsize=(20, 4), sharey=False)
+    
+    for idx, label in enumerate(method_labels):
+        ax = axes2[idx]
+        sub = df_dist[df_dist["label"] == label]
+        
+        if sub.empty:
+            ax.set_visible(False)
+            continue
+        
+        # Use KDE for smoother visualization
+        for src, color, ls, lw in [("zinc", "#5A7FC0", "--", 2), ("actives", "#E85D2D", "-", 2.5)]:
+            dd = sub[sub["source"] == src]["distance"].dropna().to_numpy(dtype=float)
+            if dd.size < 10:  # Need sufficient samples for KDE
+                continue
+            mask = (dd >= xmin) & (dd <= xmax)
+            dd_filtered = dd[mask]
+            
+            if len(dd_filtered) > 10:
+                # Use scipy's KDE for better control
+                kde = gaussian_kde(dd_filtered, bw_method='scott')
+                x_eval = np.linspace(xmin, xmax, 300)
+                density = kde(x_eval)
+                ax.plot(x_eval, density, label=src.upper(), color=color, 
+                       linestyle=ls, linewidth=lw, alpha=0.9)
         
         ax.set_xlim(xmin, xmax)
-        ax.set_xlabel("min-distance to MF", fontsize=10)
+        ax.set_xlabel("min-distance to MF", fontsize=9)
         ax.set_title(label, fontsize=10, fontweight='bold')
         ax.grid(True, alpha=0.25, axis='y')
         
-        if idx == 4:  # legend on last panel
+        if idx == 0:
+            ax.set_ylabel("Density (KDE)", fontsize=10)
+        if idx == 4:
             ax.legend(loc="upper right", fontsize=9, frameon=True)
     
-    axes[0].set_ylabel("Density", fontsize=11)
-    fig.suptitle(f"Distance Distributions: ZINC vs ACTIVES [{xmin:g}, {xmax:g}]", 
-                fontsize=13, fontweight='bold')
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig2.suptitle(f"Distance Distributions: Kernel Density Estimates [{xmin:g}, {xmax:g}]", 
+                 fontsize=14, fontweight='bold')
+    fig2.tight_layout(rect=(0, 0, 1, 0.94))
     
-    p_png = plots_dir / "distance_hist_grid_all_methods.png"
-    p_pdf = plots_dir / "distance_hist_grid_all_methods.pdf"
-    fig.savefig(p_png, dpi=300, bbox_inches='tight')
-    fig.savefig(p_pdf, bbox_inches='tight')
-    plt.close(fig)
-    logger.info(f"Saved distance histogram grid: {p_png}")
+    p_png_kde = plots_dir / "distance_hist_grid_kde.png"
+    p_pdf_kde = plots_dir / "distance_hist_grid_kde.pdf"
+    fig2.savefig(p_png_kde, dpi=300, bbox_inches='tight')
+    fig2.savefig(p_pdf_kde, bbox_inches='tight')
+    plt.close(fig2)
+    logger.info(f"Saved KDE histogram: {p_png_kde}")
     
-    return [p_png, p_pdf]
+    return [p_png_grid, p_pdf_grid, p_png_kde, p_pdf_kde]
 
 
 def main():
