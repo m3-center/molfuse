@@ -34,6 +34,7 @@ import logging
 import numpy as np
 import pandas as pd
 from scipy.stats import gaussian_kde
+from scipy.spatial.distance import cdist
 
 # Matplotlib is standard; seaborn is optional (fallback to plain matplotlib if missing)
 import matplotlib
@@ -1496,6 +1497,243 @@ def _plot_2d_density_embeddings(
     return saved_files
 
 
+def _plot_molecular_similarity_chains(
+    workspace_dir: Path,
+    phase: str,
+    df_runs: pd.DataFrame,
+    df_grouped: pd.DataFrame,
+    out_dir: Path,
+    logger: logging.Logger,
+) -> List[Path]:
+    """Visualize molecular similarity chains for closest/furthest ACTIVES.
+    
+    For each similarity space method:
+    1. Find 3 closest and 3 furthest ACTIVES to MF cloud
+    2. For each ACTIVE, find nearest MF molecule
+    3. For that MF molecule, find nearest ZINC molecule
+    4. Visualize the triplets (ACTIVE -> MF -> ZINC) as 2D molecular structures
+    """
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import Draw
+    except ImportError:
+        logger.error("RDKit not available - skipping molecular structure visualization")
+        return []
+    
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Define the four configurations to analyze
+    configs_to_plot = []
+    
+    # 1. PCA features
+    pca_feat = df_grouped[(df_grouped["method"] == "pca") & 
+                          (df_grouped["representation"] == "features") & 
+                          (df_grouped["dim"] == 2)].copy()
+    if not pca_feat.empty:
+        configs_to_plot.append({
+            "label": "PCA features",
+            "method": "pca",
+            "representation": "features",
+            "dim": 2,
+            "umap_params": None
+        })
+    
+    # 2. PCA fingerprints
+    pca_fing = df_grouped[(df_grouped["method"] == "pca") & 
+                          (df_grouped["representation"] == "fingerprints") & 
+                          (df_grouped["dim"] == 2)].copy()
+    if not pca_fing.empty:
+        configs_to_plot.append({
+            "label": "PCA fingerprints",
+            "method": "pca",
+            "representation": "fingerprints",
+            "dim": 2,
+            "umap_params": None
+        })
+    
+    # 3. UMAP best features
+    umap_feat = df_grouped[(df_grouped["method"] == "umap") & 
+                           (df_grouped["representation"] == "features") & 
+                           (df_grouped["dim"] == 2)].copy()
+    if not umap_feat.empty:
+        best_umap_feat = umap_feat.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "UMAP best features",
+            "method": "umap",
+            "representation": "features",
+            "dim": 2,
+            "umap_params": {
+                "n_neighbors": best_umap_feat.get("umap_n_neighbors"),
+                "min_dist": best_umap_feat.get("umap_min_dist"),
+                "metric": best_umap_feat.get("umap_metric")
+            }
+        })
+    
+    # 4. UMAP best fingerprints
+    umap_fing = df_grouped[(df_grouped["method"] == "umap") & 
+                           (df_grouped["representation"] == "fingerprints") & 
+                           (df_grouped["dim"] == 2)].copy()
+    if not umap_fing.empty:
+        best_umap_fing = umap_fing.sort_values("ef1_mean", ascending=False).iloc[0]
+        configs_to_plot.append({
+            "label": "UMAP best fingerprints",
+            "method": "umap",
+            "representation": "fingerprints",
+            "dim": 2,
+            "umap_params": {
+                "n_neighbors": best_umap_fing.get("umap_n_neighbors"),
+                "min_dist": best_umap_fing.get("umap_min_dist"),
+                "metric": best_umap_fing.get("umap_metric")
+            }
+        })
+    
+    if not configs_to_plot:
+        logger.warning("No 2D configurations found for molecular chain visualization")
+        return []
+    
+    saved_files = []
+    phase_dir = workspace_dir / phase
+    
+    for config in configs_to_plot:
+        # Find matching run
+        matching_runs = df_runs[
+            (df_runs["method"] == config["method"]) &
+            (df_runs["representation"] == config["representation"]) &
+            (df_runs["dim"] == config["dim"])
+        ]
+        
+        if config["umap_params"]:
+            nn_target = config["umap_params"]["n_neighbors"]
+            md_target = config["umap_params"]["min_dist"]
+            metric_target = config["umap_params"]["metric"]
+            matching_runs = matching_runs[
+                (matching_runs["umap_n_neighbors"] == nn_target) &
+                (np.isclose(matching_runs["umap_min_dist"].fillna(-1), 
+                           float(md_target) if not pd.isna(md_target) else -1, atol=1e-6)) &
+                (matching_runs["umap_metric"] == metric_target)
+            ]
+        
+        if matching_runs.empty:
+            logger.warning(f"No matching run for {config['label']}")
+            continue
+        
+        run_row = matching_runs.iloc[0]
+        run_dir = phase_dir / run_row["run_name"]
+        artifacts_dir = run_dir / "artifacts"
+        
+        # Load embeddings with SMILES
+        try:
+            df_mf = pd.read_csv(artifacts_dir / "embedding_mf.csv")
+            df_zinc = pd.read_csv(artifacts_dir / "embedding_zinc.csv")
+            df_actives = pd.read_csv(artifacts_dir / "embedding_actives.csv")
+        except Exception as e:
+            logger.warning(f"Failed to load embeddings for {config['label']}: {e}")
+            continue
+        
+        # Verify SMILES column exists
+        if "SMILES" not in df_actives.columns:
+            logger.warning(f"No SMILES column in ACTIVES data for {config['label']}")
+            continue
+        
+        # Compute distances from each ACTIVE to MF cloud
+        actives_coords = df_actives[["z0", "z1"]].values
+        mf_coords = df_mf[["z0", "z1"]].values
+        
+        # For each ACTIVE, find min distance to any MF molecule
+        distances_to_mf = cdist(actives_coords, mf_coords, metric='euclidean')
+        min_distances = distances_to_mf.min(axis=1)
+        
+        # Find 3 closest and 3 furthest ACTIVES
+        closest_indices = np.argsort(min_distances)[:3]
+        furthest_indices = np.argsort(min_distances)[-3:]
+        
+        selected_indices = list(closest_indices) + list(furthest_indices)
+        
+        # For each selected ACTIVE, find the chain: ACTIVE -> nearest MF -> nearest ZINC
+        triplets = []
+        for idx in selected_indices:
+            active_smiles = df_actives.iloc[idx]["SMILES"]
+            active_coord = actives_coords[idx]
+            active_dist = min_distances[idx]
+            
+            # Find nearest MF
+            nearest_mf_idx = distances_to_mf[idx].argmin()
+            mf_smiles = df_mf.iloc[nearest_mf_idx]["SMILES"]
+            mf_coord = mf_coords[nearest_mf_idx]
+            
+            # Find nearest ZINC to that MF
+            zinc_coords = df_zinc[["z0", "z1"]].values
+            distances_mf_to_zinc = cdist([mf_coord], zinc_coords, metric='euclidean')[0]
+            nearest_zinc_idx = distances_mf_to_zinc.argmin()
+            zinc_smiles = df_zinc.iloc[nearest_zinc_idx]["SMILES"]
+            
+            triplets.append({
+                "active_smiles": active_smiles,
+                "mf_smiles": mf_smiles,
+                "zinc_smiles": zinc_smiles,
+                "distance_to_mf": active_dist,
+                "is_close": idx in closest_indices
+            })
+        
+        # Create figure: 6 rows x 3 columns (ACTIVE, MF, ZINC)
+        fig = plt.figure(figsize=(15, 24))
+        gs = fig.add_gridspec(6, 3, hspace=0.4, wspace=0.3)
+        
+        for row_idx, triplet in enumerate(triplets):
+            # Determine if this is a "close" or "far" case
+            case_type = "CLOSE" if triplet["is_close"] else "FAR"
+            dist_val = triplet["distance_to_mf"]
+            
+            # Draw ACTIVE
+            ax_active = fig.add_subplot(gs[row_idx, 0])
+            mol_active = Chem.MolFromSmiles(triplet["active_smiles"])
+            if mol_active:
+                img_active = Draw.MolToImage(mol_active, size=(400, 400))
+                ax_active.imshow(img_active)
+            ax_active.axis('off')
+            smiles_short = triplet["active_smiles"][:50] + "..." if len(triplet["active_smiles"]) > 50 else triplet["active_smiles"]
+            ax_active.set_title(f"ACTIVE ({case_type})\nd={dist_val:.3f}\n{smiles_short}", 
+                               fontsize=8, fontweight='bold')
+            
+            # Draw MF
+            ax_mf = fig.add_subplot(gs[row_idx, 1])
+            mol_mf = Chem.MolFromSmiles(triplet["mf_smiles"])
+            if mol_mf:
+                img_mf = Draw.MolToImage(mol_mf, size=(400, 400))
+                ax_mf.imshow(img_mf)
+            ax_mf.axis('off')
+            smiles_short = triplet["mf_smiles"][:50] + "..." if len(triplet["mf_smiles"]) > 50 else triplet["mf_smiles"]
+            ax_mf.set_title(f"MF (nearest)\n{smiles_short}", fontsize=8)
+            
+            # Draw ZINC
+            ax_zinc = fig.add_subplot(gs[row_idx, 2])
+            mol_zinc = Chem.MolFromSmiles(triplet["zinc_smiles"])
+            if mol_zinc:
+                img_zinc = Draw.MolToImage(mol_zinc, size=(400, 400))
+                ax_zinc.imshow(img_zinc)
+            ax_zinc.axis('off')
+            smiles_short = triplet["zinc_smiles"][:50] + "..." if len(triplet["zinc_smiles"]) > 50 else triplet["zinc_smiles"]
+            ax_zinc.set_title(f"ZINC (nearest to MF)\n{smiles_short}", fontsize=8)
+        
+        # Add overall title
+        fig.suptitle(f"{config['label']} - Molecular Similarity Chains\nTop 3 rows: Closest ACTIVES | Bottom 3 rows: Furthest ACTIVES", 
+                    fontsize=14, fontweight='bold')
+        
+        # Save
+        safe_label = config['label'].replace(' ', '_').lower()
+        p_png = plots_dir / f"molecular_chains_{safe_label}.png"
+        p_pdf = plots_dir / f"molecular_chains_{safe_label}.pdf"
+        fig.savefig(p_png, dpi=300, bbox_inches='tight')
+        fig.savefig(p_pdf, bbox_inches='tight')
+        plt.close(fig)
+        
+        logger.info(f"Saved molecular chain visualization: {p_png}")
+        saved_files.extend([p_png, p_pdf])
+    
+    return saved_files
+
+
 def main():
     ap = argparse.ArgumentParser(description="Phase 1 Post Analysis (v4 molfuse)")
     ap.add_argument("--workspace_dir", type=str, required=True, help="Path to experiment_workspace_v4")
@@ -1585,6 +1823,13 @@ def main():
     if density_files:
         manifest.setdefault("density_2d", []).extend([str(p) for p in density_files])
     logger.info("Finished 2D density plots")
+    
+    # 4e) Molecular similarity chain visualization
+    logger.info("START: Molecular similarity chains (ACTIVE -> MF -> ZINC)")
+    chain_files = _plot_molecular_similarity_chains(workspace_dir, args.phase, df_runs, df_grouped, out_dir, logger)
+    if chain_files:
+        manifest.setdefault("molecular_chains", []).extend([str(p) for p in chain_files])
+    logger.info("Finished molecular chain visualizations")
 
     # Write manifest
     (out_dir/"plots_manifest.json").write_text(json.dumps(manifest, indent=2))
