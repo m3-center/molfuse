@@ -36,6 +36,7 @@ from tqdm import tqdm
 # RDKit imports
 from rdkit import Chem
 from rdkit.Chem import AllChem
+import os
 
 # Mordred imports
 from mordred import Calculator, descriptors
@@ -188,7 +189,12 @@ def embed_3d(mol: Chem.Mol, seed: int = 42, max_attempts: int = 3) -> Optional[C
         m = Chem.AddHs(mol)
         params = AllChem.ETKDGv3()
         params.randomSeed = seed
-        params.numThreads = 0
+        # Respect SLURM/OMP thread count when available to avoid oversubscription
+        try:
+            nthreads = int(os.environ.get("SLURM_CPUS_PER_TASK", "0"))
+        except Exception:
+            nthreads = 0
+        params.numThreads = nthreads if nthreads > 0 else 0
         for _ in range(max_attempts):
             if AllChem.EmbedMolecule(m, params) == 0:
                 try:

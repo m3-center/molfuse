@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --partition=any
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=8
-#SBATCH --mem=16G
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=32G
 #SBATCH --time=0-04:00:00
 #SBATCH --job-name=mordred_eval
 #SBATCH --chdir=/home/%u/UMMBAS_screening_experiments
@@ -24,7 +25,7 @@
 #
 
 # Resolve repo root and move there so relative paths work (fallback if --chdir unsupported)
-WORKDIR="/home/ahagg2s/UMMBAS_screening_experiments"
+WORKDIR="${WORKDIR:-$HOME/UMMBAS_screening_experiments}"
 echo "[SLURM] WORKDIR=${WORKDIR}"
 cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 

@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --partition=hpc
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
 #SBATCH --mem=360G
 #SBATCH --time=0-08:00:00
 #SBATCH --output=slurm_logs/%x_%j.out
