@@ -230,7 +230,7 @@ def main() -> None:
         X_act = scaler.transform(df_act_feat.to_numpy(dtype=float))
         # Save scaler
         scaler_path = ws["artifacts"] / "scaler.joblib"
-        joblib.dump(scaler, scaler_path)
+        joblib.dump(scaler, scaler_path, compress=5)
         logger.info(f"Saved scaler to {scaler_path}")
 
         # Step 1 memory free: drop heavy feature columns from DataFrames (keep metadata only)
@@ -325,7 +325,7 @@ def main() -> None:
 
         # Passthrough scaler marker for fingerprints (no scaling)
         scaler_path = ws["artifacts"] / "scaler.joblib"
-        joblib.dump({"type": "passthrough"}, scaler_path)
+        joblib.dump({"type": "passthrough"}, scaler_path, compress=5)
         logger.info(f"Saved passthrough scaler marker to {scaler_path}")
 
         # Step 1 memory free: drop fingerprint column from DataFrames (keep metadata only)
@@ -356,7 +356,7 @@ def main() -> None:
         Z_act = model.transform(X_act)
         logger.info(f"PCA fitted: dim={dim}")
         model_path = ws["artifacts"] / "pca_model.joblib"
-        joblib.dump(model, model_path)
+        joblib.dump(model, model_path, compress=5)
         logger.info(f"Saved PCA model to {model_path}")
     elif method == "umap":
         logger.info(
@@ -375,7 +375,7 @@ def main() -> None:
             f"UMAP fitted: dim={dim}, n_neighbors={int(umap_params.get('n_neighbors', 50))}, min_dist={float(umap_params.get('min_dist', 0.01))}, metric={umap_params.get('metric', 'jaccard' if representation=='fingerprints' else 'euclidean')}, random_state=None"
         )
         model_path = ws["artifacts"] / "umap_model.joblib"
-        joblib.dump(model, model_path)
+        joblib.dump(model, model_path, compress=5)
         logger.info(f"Saved UMAP model to {model_path}")
     else:
         raise ValueError(f"Unsupported method: {method}")
