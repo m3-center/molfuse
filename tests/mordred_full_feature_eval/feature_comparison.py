@@ -140,8 +140,13 @@ def load_target_ligands(default_dir: Path, target_kw_path: Optional[Path], n: in
     col = infer_smiles_column(df)
     if col is None:
         raise ValueError(f"Could not find SMILES column in target ligands file: {target_kw_path}")
+    # Clean and deduplicate by SMILES first
     df = df[df[col].notna()].rename(columns={col: "smiles"})
-    df = df.drop_duplicates(subset=["smiles"]).sample(n=min(n, len(df)), random_state=seed)
+    df = df.drop_duplicates(subset=["smiles"])  # ensure population reflects unique molecules
+    # Sample at most n from the deduplicated set; if n >= population, keep all
+    k = min(int(n), len(df))
+    if k < len(df):
+        df = df.sample(n=k, random_state=seed)
     df = df[["smiles"]].copy()
     df["source"] = "target"
     return df
