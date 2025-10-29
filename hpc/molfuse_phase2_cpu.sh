@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=molfuse_phase2
-#SBATCH --output=slurm_logs/phase2_%j.out
-#SBATCH --error=slurm_logs/phase2_%j.err
-#SBATCH --time=12:00:00
-#SBATCH --mem=64G
-#SBATCH --cpus-per-task=32
-#SBATCH --partition=any
+#SBATCH --partition=hpc
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=180G
+#SBATCH --time=0-08:00:00
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
 
 # molfuse Phase 2: Affinity Cutoff Sensitivity (Re-scoring Only)
 # Single-job runner for Phase 2 execution
@@ -41,6 +42,11 @@ python -m molfuse.cli.phase2 \
     --config "$CONFIG_PATH" \
     --workspace "$WORKSPACE_DIR"
 
-echo "========================================="
-echo "Phase 2 job completed"
-echo "========================================="
+EXIT_CODE=$?
+echo ""
+echo "=========================================="
+echo "Job finished with exit code: ${EXIT_CODE}"
+echo "End Time: $(date)"
+echo "=========================================="
+exit ${EXIT_CODE}
+
