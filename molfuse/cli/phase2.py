@@ -133,19 +133,62 @@ def main() -> None:
         logger.info(f"Loading MF source CSV: {mf_csv_path}")
         df_mf_source = pd.read_csv(mf_csv_path, low_memory=False)
 
-        if len(df_mf_source) != len(emb_mf):
-            logger.error(
-                f"Row count mismatch: MF source={len(df_mf_source)}, embedding={len(emb_mf)}. "
-                f"Phase 1 data may have changed. Skipping {model_key}."
-            )
-            continue
-
         # Check for affinity column
         if "Standard Value (nM)" not in df_mf_source.columns:
             logger.warning(f"No 'Standard Value (nM)' column in MF source; cannot apply cutoffs. Skipping {model_key}.")
             continue
 
-        affinity_nM = pd.to_numeric(df_mf_source["Standard Value (nM)"], errors="coerce")
+        # Match MF source rows to embedding rows by SMILES (preferred) or Compound ID
+        # Phase 1 has filtered/deduplicated the MF data, so we need to match rows
+        smiles_col_emb = None
+        for col in ["canonical_smiles", "SMILES"]:
+            if col in emb_mf.columns:
+                smiles_col_emb = col
+                break
+        
+        id_col_emb = "Compound ChEMBL ID" if "Compound ChEMBL ID" in emb_mf.columns else None
+
+        if not smiles_col_emb and not id_col_emb:
+            logger.error(f"No SMILES or Compound ID column in embedding; cannot match to source. Skipping {model_key}.")
+            continue
+
+        # Try matching by SMILES first
+        if smiles_col_emb:
+            smiles_col_src = None
+            for col in ["canonical_smiles", "SMILES"]:
+                if col in df_mf_source.columns:
+                    smiles_col_src = col
+                    break
+            
+            if smiles_col_src:
+                logger.info(f"Matching MF rows by SMILES ({smiles_col_emb} in embedding, {smiles_col_src} in source)")
+                # Create a mapping: SMILES -> affinity
+                affinity_map = df_mf_source.set_index(smiles_col_src)["Standard Value (nM)"]
+                affinity_nM = emb_mf[smiles_col_emb].map(affinity_map)
+                
+                n_matched = affinity_nM.notna().sum()
+                logger.info(f"Matched {n_matched}/{len(emb_mf)} MF rows by SMILES")
+                
+                if n_matched < len(emb_mf) * 0.95:  # Less than 95% matched
+                    logger.warning(f"Only {n_matched}/{len(emb_mf)} rows matched; some affinity data may be missing")
+            else:
+                logger.error(f"SMILES column not found in MF source; cannot match. Skipping {model_key}.")
+                continue
+        elif id_col_emb and "Compound ChEMBL ID" in df_mf_source.columns:
+            logger.info(f"Matching MF rows by Compound ChEMBL ID")
+            affinity_map = df_mf_source.set_index("Compound ChEMBL ID")["Standard Value (nM)"]
+            affinity_nM = emb_mf[id_col_emb].map(affinity_map)
+            
+            n_matched = affinity_nM.notna().sum()
+            logger.info(f"Matched {n_matched}/{len(emb_mf)} MF rows by Compound ID")
+            
+            if n_matched < len(emb_mf) * 0.95:
+                logger.warning(f"Only {n_matched}/{len(emb_mf)} rows matched; some affinity data may be missing")
+        else:
+            logger.error(f"Cannot match MF rows (no common key between embedding and source). Skipping {model_key}.")
+            continue
+
+        affinity_nM = pd.to_numeric(affinity_nM, errors="coerce")
 
         # Build evaluation set labels (same for all cutoffs)
         labels = np.concatenate([np.ones(len(Z_act), dtype=int), np.zeros(len(Z_zinc), dtype=int)])
