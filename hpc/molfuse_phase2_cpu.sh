@@ -11,9 +11,6 @@
 # Single-job runner for Phase 2 execution
 # Usage: sbatch hpc/molfuse_phase2_cpu.sh <config_path> <workspace_dir> <conda_env>
 
-set -e
-set -u
-
 if [ "$#" -lt 3 ]; then
     echo "Usage: sbatch $0 <config_path> <workspace_dir> <conda_env>"
     exit 1

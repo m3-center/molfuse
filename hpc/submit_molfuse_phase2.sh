@@ -2,9 +2,6 @@
 # Batch submit helper for molfuse Phase 2
 # Usage: bash hpc/submit_molfuse_phase2.sh <config_dir> <workspace_dir> <conda_env> [--dry-run]
 
-set -e
-set -u
-
 if [ "$#" -lt 3 ]; then
     echo "Usage: $0 <config_dir> <workspace_dir> <conda_env> [--dry-run]"
     echo "Example: bash hpc/submit_molfuse_phase2.sh configs/molfuse_phase2_grid experiment_workspace_v4 ummbas_screening"
