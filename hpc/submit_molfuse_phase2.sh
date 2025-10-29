@@ -61,7 +61,7 @@ for CONFIG_PATH in "$CONFIG_DIR"/*.json; do
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "DRY-RUN: Would submit $CONFIG_NAME"
         SUBMITTED=$((SUBMITTED + 1))
-    else:
+    else
         echo "SUBMIT: $CONFIG_NAME"
         sbatch hpc/molfuse_phase2_cpu.sh "$CONFIG_PATH" "$WORKSPACE_DIR" "$CONDA_ENV"
         SUBMITTED=$((SUBMITTED + 1))
