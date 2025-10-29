@@ -59,10 +59,26 @@ def dedup_by_smiles(df: pd.DataFrame, label: str, logger: logging.Logger) -> pd.
     if smiles_col is None:
         raise RuntimeError(f"{label}: cannot deduplicate by SMILES; no 'canonical_smiles' or 'SMILES' column present")
     before = len(df)
-    # Keep first occurrence of each SMILES string
-    deduped = df.drop_duplicates(subset=[smiles_col]).copy()
-    after = len(deduped)
-    logger.info(f"{label}: deduplicated by {smiles_col}: {before} -> {after} (removed {before-after})")
+    
+    # Use median aggregation for affinity if column exists, first occurrence for all other columns
+    if "Standard Value (nM)" in df.columns:
+        # Build aggregation dictionary
+        agg_dict = {}
+        for col in df.columns:
+            if col == smiles_col:
+                continue  # Skip the groupby column
+            elif col == "Standard Value (nM)":
+                agg_dict[col] = "median"  # Median for affinity (robust to outliers)
+            else:
+                agg_dict[col] = "first"  # First occurrence for metadata
+        
+        deduped = df.groupby(smiles_col, as_index=False).agg(agg_dict)
+        logger.info(f"{label}: deduplicated by {smiles_col} using median affinity: {before} -> {len(deduped)} (removed {before-len(deduped)})")
+    else:
+        # No affinity column (e.g., ZINC decoys); use simple drop_duplicates
+        deduped = df.drop_duplicates(subset=[smiles_col], keep="first").copy()
+        logger.info(f"{label}: deduplicated by {smiles_col} (no affinity, kept first): {before} -> {len(deduped)} (removed {before-len(deduped)})")
+    
     return deduped
 
 

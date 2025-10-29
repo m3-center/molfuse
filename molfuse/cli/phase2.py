@@ -163,10 +163,21 @@ def main() -> None:
             if smiles_col_src:
                 logger.info(f"Matching MF rows by SMILES ({smiles_col_emb} in embedding, {smiles_col_src} in source)")
                 
-                # Deduplicate source by SMILES: take minimum (most potent) affinity per compound
-                logger.info("Deduplicating source CSV by SMILES (keeping minimum affinity per compound)")
-                df_source_dedup = df_mf_source.groupby(smiles_col_src, as_index=False)["Standard Value (nM)"].min()
-                logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique SMILES")
+                # Deduplicate source by SMILES: use median affinity aggregation (matching Phase 1 logic)
+                logger.info("Deduplicating source CSV by SMILES (aggregating to median affinity per compound, matching Phase 1)")
+                
+                # Build aggregation dictionary
+                agg_dict = {}
+                for col in df_mf_source.columns:
+                    if col == smiles_col_src:
+                        continue  # Skip the groupby column
+                    elif col == "Standard Value (nM)":
+                        agg_dict[col] = "median"  # Median for affinity (robust to outliers)
+                    else:
+                        agg_dict[col] = "first"  # First occurrence for metadata
+                
+                df_source_dedup = df_mf_source.groupby(smiles_col_src, as_index=False).agg(agg_dict)
+                logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique SMILES (median affinity)")
                 
                 # Create a mapping: SMILES -> affinity
                 affinity_map = df_source_dedup.set_index(smiles_col_src)["Standard Value (nM)"]
@@ -183,10 +194,21 @@ def main() -> None:
         elif id_col_emb and "Compound ChEMBL ID" in df_mf_source.columns:
             logger.info(f"Matching MF rows by Compound ChEMBL ID")
             
-            # Deduplicate source by ChEMBL ID: take minimum (most potent) affinity per compound
-            logger.info("Deduplicating source CSV by ChEMBL ID (keeping minimum affinity per compound)")
-            df_source_dedup = df_mf_source.groupby("Compound ChEMBL ID", as_index=False)["Standard Value (nM)"].min()
-            logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique ChEMBL IDs")
+            # Deduplicate source by ChEMBL ID: use median affinity aggregation (matching Phase 1 logic)
+            logger.info("Deduplicating source CSV by ChEMBL ID (aggregating to median affinity per compound, matching Phase 1)")
+            
+            # Build aggregation dictionary
+            agg_dict = {}
+            for col in df_mf_source.columns:
+                if col == "Compound ChEMBL ID":
+                    continue  # Skip the groupby column
+                elif col == "Standard Value (nM)":
+                    agg_dict[col] = "median"  # Median for affinity (robust to outliers)
+                else:
+                    agg_dict[col] = "first"  # First occurrence for metadata
+            
+            df_source_dedup = df_mf_source.groupby("Compound ChEMBL ID", as_index=False).agg(agg_dict)
+            logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique ChEMBL IDs (median affinity)")
             
             affinity_map = df_source_dedup.set_index("Compound ChEMBL ID")["Standard Value (nM)"]
             affinity_nM = emb_mf[id_col_emb].map(affinity_map)
