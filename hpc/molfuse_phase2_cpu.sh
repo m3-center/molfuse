@@ -9,38 +9,39 @@
 #SBATCH --error=slurm_logs/%x_%j.err
 
 # molfuse Phase 2: Affinity Cutoff Sensitivity (Re-scoring Only)
-# Single-job runner for Phase 2 execution
-# Usage: sbatch hpc/molfuse_phase2_cpu.sh <config_path> <workspace_dir> <conda_env>
+# Usage:
+# sbatch hpc/molfuse_phase2_cpu.sh <CONFIG_JSON> <WORKSPACE_DIR>
+# Example:
+# sbatch hpc/molfuse_phase2_cpu.sh configs/molfuse_phase2_grid/phase2_cutoff_sweep.json experiment_workspace_v4
 
-if [ "$#" -lt 3 ]; then
-    echo "Usage: sbatch $0 <config_path> <workspace_dir> <conda_env>"
-    exit 1
+CONFIG_PATH="${1:-}"
+WORKSPACE_DIR="${2:-experiment_workspace_v4}"
+
+if [[ -z "$CONFIG_PATH" ]]; then
+  echo "CONFIG_JSON path is required as first argument" >&2
+  exit 1
 fi
 
-CONFIG_PATH=$1
-WORKSPACE_DIR=$2
-CONDA_ENV=$3
+# Extract config basename for job name
+CONFIG_BASENAME=$(basename "$CONFIG_PATH" .json)
 
-echo "========================================="
-echo "molfuse Phase 2: Cutoff Sensitivity"
-echo "========================================="
-echo "Config: $CONFIG_PATH"
-echo "Workspace: $WORKSPACE_DIR"
-echo "Conda env: $CONDA_ENV"
-echo "Job ID: $SLURM_JOB_ID"
-echo "Node: $SLURM_NODELIST"
-echo "========================================="
+# Ensure slurm_logs directory exists
+mkdir -p slurm_logs || true
 
-# Activate conda environment
+# Log startup information
+echo "=========================================="
+echo "SLURM Job: Phase 2 - ${CONFIG_BASENAME}"
+echo "=========================================="
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Node: $(hostname)"
+echo "Start Time: $(date)"
+echo "Config: ${CONFIG_PATH}"
+echo "Workspace: ${WORKSPACE_DIR}"
+echo "=========================================="
+echo ""
+
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
-
-# Create slurm_logs directory if needed
-mkdir -p slurm_logs
-
-# Run Phase 2
-python -m molfuse.cli.phase2 \
-    --config "$CONFIG_PATH" \
-    --workspace "$WORKSPACE_DIR"
+python -m molfuse.cli.phase2 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 
 EXIT_CODE=$?
 echo ""

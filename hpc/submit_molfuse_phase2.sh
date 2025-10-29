@@ -1,28 +1,35 @@
 #!/bin/bash
-# Batch submit helper for molfuse Phase 2
-# Usage: bash hpc/submit_molfuse_phase2.sh <config_dir> <workspace_dir> <conda_env> [--dry-run]
+# Submit Phase 2 config to SLURM
+# Usage: bash hpc/submit_molfuse_phase2.sh [--dry-run] [CONFIG_DIR] [WORKSPACE_DIR]
+# Defaults: CONFIG_DIR=configs/molfuse_phase2_grid, WORKSPACE_DIR=experiment_workspace_v4
+# 
+# Examples:
+#   bash hpc/submit_molfuse_phase2.sh --dry-run
+#   bash hpc/submit_molfuse_phase2.sh
+#   bash hpc/submit_molfuse_phase2.sh configs/molfuse_phase2_grid experiment_workspace_v4
 
-if [ "$#" -lt 3 ]; then
-    echo "Usage: $0 <config_dir> <workspace_dir> <conda_env> [--dry-run]"
-    echo "Example: bash hpc/submit_molfuse_phase2.sh configs/molfuse_phase2_grid experiment_workspace_v4 ummbas_screening"
-    exit 1
+# Parse dry-run flag
+DRY_RUN=false
+if [[ "$1" == "--dry-run" ]]; then
+  DRY_RUN=true
+  shift
 fi
 
-CONFIG_DIR=$1
-WORKSPACE_DIR=$2
-CONDA_ENV=$3
-DRY_RUN=0
+CONFIG_DIR="${1:-configs/molfuse_phase2_grid}"
+WORKSPACE_DIR="${2:-experiment_workspace_v4}"
 
-if [ "$#" -ge 4 ] && [ "$4" == "--dry-run" ]; then
-    DRY_RUN=1
+if [[ ! -d "$CONFIG_DIR" ]]; then
+  echo "Config directory not found: $CONFIG_DIR" >&2
+  exit 1
 fi
+
+mkdir -p slurm_logs || true
 
 echo "========================================="
 echo "molfuse Phase 2 Batch Submit"
 echo "========================================="
 echo "Config dir: $CONFIG_DIR"
 echo "Workspace: $WORKSPACE_DIR"
-echo "Conda env: $CONDA_ENV"
 echo "Dry run: $DRY_RUN"
 echo "========================================="
 
@@ -55,12 +62,12 @@ for CONFIG_PATH in "$CONFIG_DIR"/*.json; do
         continue
     fi
     
-    if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$DRY_RUN" = true ]; then
         echo "DRY-RUN: Would submit $CONFIG_NAME"
         SUBMITTED=$((SUBMITTED + 1))
     else
         echo "SUBMIT: $CONFIG_NAME"
-        sbatch hpc/molfuse_phase2_cpu.sh "$CONFIG_PATH" "$WORKSPACE_DIR" "$CONDA_ENV"
+        sbatch hpc/molfuse_phase2_cpu.sh "$CONFIG_PATH" "$WORKSPACE_DIR"
         SUBMITTED=$((SUBMITTED + 1))
     fi
 done
