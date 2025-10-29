@@ -37,17 +37,54 @@ Outputs and logging:
 
   Note: The example config is set to fingerprints + UMAP with Jaccard. To run a features baseline instead, set `representation: "features"`, switch `method: "pca"` or keep `method: "umap"` with `metric: "euclidean"`, and point CSVs to `*_extracted_features.csv`.
 
-- Phase 2 (logs cutoff config):
+- Phase 2 (cutoff sensitivity; re-scoring only):
+
+  1. Generate Phase 2 config:
   ```console
-  python -m molfuse.cli.phase2 --config configs/molfuse_phase1_example.json --workspace ./experiment_workspace_v4
+  python scripts/generate_molfuse_phase2_configs_v4.py
   ```  
+  
+  2. Run Phase 2 (auto-selects best Phase 1 models):
+  ```console
+  python -m molfuse.cli.phase2 --config configs/molfuse_phase2_grid/phase2_cutoff_sweep.json --workspace ./experiment_workspace_v4
+  ```
+  
+  3. Analyze results:
+  ```console
+  python scripts/phase2_post_analysis.py --workspace_dir ./experiment_workspace_v4 --phase2_run_name cutoff_sweep --output_dir reporting/phase2_post_analysis
+  ```
 
 Notes:
 - If your config omits `actives_features_csv` or points to a non-existent file, the CLI will split the MF file by target accession (e.g., P00519) to derive actives and exclude them from MF training.
 - UMAP uses `random_state=None` for parallelism by default.
  - Control behavior when no MF pass the cutoff via `on_empty_cutoff`: `"error"` (default) or `"fallback"`.
 
+## Phase 2: Affinity Cutoff Sensitivity
+
+**Research Question**: Can we improve EF@1% by measuring distance only to more potent ligands from the MF cloud?
+
+**Design**: Re-scoring only (NO retraining)
+- Reuses Phase 1 best models and pre-computed embeddings
+- Filters MF cloud by affinity cutoff [100, 1000, 10000, 100000] nM
+- Re-scores actives+ZINC via 1-NN to filtered MF
+- Computes metrics per cutoff
+
+**Key Invariant**: No model retraining; only scoring changes with MF cloud filtering.
+
+**Workflow**:
+1. Complete Phase 1 (or have at least 1 PCA + 1 UMAP run per representation)
+2. Generate Phase 2 config: `python scripts/generate_molfuse_phase2_configs_v4.py`
+3. Run Phase 2: `python -m molfuse.cli.phase2 --config configs/molfuse_phase2_grid/phase2_cutoff_sweep.json --workspace experiment_workspace_v4`
+4. Analyze: `python scripts/phase2_post_analysis.py --workspace_dir experiment_workspace_v4 --phase2_run_name cutoff_sweep --output_dir reporting/phase2_post_analysis`
+
+**Outputs**:
+- `workspace/phase2/cutoff_sweep/<phase1_run_name>/cutoff_<X>nM/metrics.json`
+- `workspace/phase2/cutoff_sweep/<phase1_run_name>/cutoff_<X>nM/ranked_scores.csv`
+- Post-analysis: cutoff curves, heatmaps, quality-quantity plots, best cutoffs JSON
+
 ## HPC usage (SLURM)
+
+### Phase 1
 
 1) Generate Phase 1 configs (replicates and full grids):
 
@@ -64,6 +101,25 @@ Notes:
   bash hpc/submit_molfuse_phase1.sh configs/molfuse_phase1_grid experiment_workspace_v4 ummbas_screening
 
   Internally runs `sbatch hpc/molfuse_phase1_cpu.sh <config> <workspace> <conda_env>`.
+
+### Phase 2
+
+1) Generate Phase 2 config:
+
+  python scripts/generate_molfuse_phase2_configs_v4.py
+
+  Outputs to `configs/molfuse_phase2_grid/phase2_cutoff_sweep.json`.
+
+2) Submit Phase 2 job (after Phase 1 completes):
+
+  bash hpc/submit_molfuse_phase2.sh configs/molfuse_phase2_grid experiment_workspace_v4 ummbas_screening
+
+  Internally runs `sbatch hpc/molfuse_phase2_cpu.sh <config> <workspace> <conda_env>`.
+  Idempotent: skips if `phase2_summary.json` exists.
+
+3) Post-analysis (after Phase 2 completes):
+
+  python scripts/phase2_post_analysis.py --workspace_dir experiment_workspace_v4 --phase2_run_name cutoff_sweep --output_dir reporting/phase2_post_analysis
 
 Notes on fingerprints:
 - Fingerprint CSV paths in the generator are derived by replacing `extracted_features.csv` with `extracted_fingerprints.csv`. Adjust the pattern if your filenames differ.

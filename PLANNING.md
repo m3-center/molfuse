@@ -151,9 +151,18 @@ Notes:
 - New diagnostics saved per run: `failure_reasons_2d.csv`, `failure_reasons_3d.csv`, `descriptor_nan_counts.csv`, plus JSONs with failure_reasons.
  - New coverage artifacts (post-update): `feature_coverage_2d.csv`, `feature_coverage_2d3d.csv`, `row_completeness.csv`; optional `coverage_grid.csv` and `coverage_pareto.png` when `--enable_sweep` is enabled.
 
-### Phase 2 (cutoff sweeps)
-- Reuse Phase 1 models and MF+ZINC simspaces.
-- For each cutoff: filter MF cloud, rescore actives+ZINC, recompute metrics and Spearman rho; save outputs.
+### Phase 2 (affinity cutoff sensitivity - RE-SCORING ONLY, NO RETRAINING)
+- **Research Question**: Can we improve EF@1% by measuring distance only to more potent ligands from the MF cloud?
+- **Hypothesis**: Stricter affinity cutoffs will enrich high-potency actives by creating a more selective scoring function
+- Reuse Phase 1 models, scalers, and pre-computed embeddings (MF, ZINC, actives)
+- Select best 4 Phase 1 runs: PCA/features, PCA/fingerprints, UMAP/features, UMAP/fingerprints
+- For each selected model × cutoff [100, 1000, 10000, 100000] nM:
+  - Load Phase 1 embeddings (NO re-projection)
+  - Filter MF embedding by affinity cutoff
+  - Re-score actives+ZINC via exact 1-NN to filtered MF cloud
+  - Compute metrics and Spearman rho
+  - Save per-cutoff outputs
+- **Key invariant**: No model retraining; only scoring changes with MF cloud filtering
 
 ### Analyses (included in v4.0)
 - Phase 1 potency-stratified enrichment (port of `analyze_potency_stratified_enrichment.py`) under `molfuse/analysis/phase1_potency.py` with CLI wrapper; PNG+PDF outputs; multiprocessing.
@@ -184,10 +193,26 @@ Notes:
  - [x] Persist scaler/model artifacts (joblib) in run artifacts
  - [x] Create Phase 1 config generator and SLURM scripts
 
-### 🧪 Phase 2 (reuse Phase 1 models)
-- [ ] Implement phases.phase2 cutoff sweeps; reuse simspaces/models
-- [ ] Verify MF cutoff filtering logic and metrics
- - [ ] Mirror Phase 1 logging and embedding outputs in Phase 2
+### 🧪 Phase 2 (affinity cutoff sensitivity - re-scoring only)
+- [x] Implement model selection utility (`molfuse/analysis/select_best_phase1.py`)
+- [x] Implement Phase 2 CLI (`molfuse/cli/phase2.py`) - load embeddings, filter MF, re-score
+- [x] Implement config generator (`scripts/generate_molfuse_phase2_configs_v4.py`)
+- [x] Verify MF cutoff filtering logic (apply to embeddings, not raw data)
+- [x] Save per-cutoff metrics and ranked scores
+- [x] Implement Phase 2 post-analysis (`scripts/phase2_post_analysis.py`)
+- [x] Create HPC scripts (`hpc/molfuse_phase2_cpu.sh`, `hpc/submit_molfuse_phase2.sh`)
+- [x] Update documentation (README_V4_MOLFUSE.md)
+
+### 🧪 Phase 3 (MF cloud ablation - FULL RETRAINING)
+- [ ] **Research Question**: What happens to similarity space when MF cloud size decreases? Does performance degrade?
+- [ ] **Hypothesis**: Performance will degrade with smaller MF clouds due to reduced diversity; UMAP may be more sensitive than PCA
+- [ ] Use Phase 2 optimal cutoff + Phase 1 best hyperparameters
+- [ ] Implement MF subsampling logic for sizes [0, 1K, 10K, 50K, 100K, full]
+- [ ] For each (model × MF size): retrain scaler, retrain DR model, project actives, score, compute metrics
+- [ ] Implement Phase 3 CLI (`molfuse/cli/phase3.py`) - full training pipeline with MF ablation
+- [ ] Implement config generator (`scripts/generate_molfuse_phase3_configs_v4.py`)
+- [ ] Implement Phase 3 post-analysis (`scripts/phase3_post_analysis.py`) - ablation curves
+- [ ] Create HPC scripts for Phase 3
 
 ### 📊 Analyses
 - [ ] Port potency-stratified analysis (Phase 1) to molfuse/analysis/phase1_potency.py
@@ -319,23 +344,35 @@ Notes:
 **Status**: ✅ Complete - Results show PCA features-5D and UMAP features (nn=3-10, md=0.0-0.01) perform best
 
 #### Phase 2: Affinity Cutoff Sensitivity **[REORDERED - was Phase 4]**
-- **Q1**: Which cutoff gives best High-potent EF@1% (0.1-100 nM ligands)?
-- **Q2**: Do PCA and UMAP prefer different cutoffs?
-- **Q3**: How does cutoff affect Medium (100-1000 nM) vs Weak (1000-100K nM) enrichment?
-- **Q4**: What is optimal cutoff for Phase 3 (MF cloud ablation)?
+- **Q1**: Can we improve EF@1% by measuring distance only to more potent (lower cutoff) ligands?
+- **Q2**: Which cutoff gives best High-potent EF@1% (0.1-100 nM ligands)?
+- **Q3**: Do PCA and UMAP show different cutoff sensitivities?
+- **Q4**: How does cutoff affect Medium (100-1000 nM) vs Weak (1000-100K nM) enrichment?
+- **Q5**: What is optimal cutoff for Phase 3 (MF cloud ablation)?
 
-**Hypothesis**: Stricter cutoffs (100 nM) will enrich high-potent ligands but reduce overall diversity; permissive cutoffs (100 μM) maximize diversity but may include non-specific binders.
+**Hypothesis**: Stricter cutoffs (100 nM) will enrich high-potent ligands because they share chemical features required for tight binding; permissive cutoffs (100 μM) maximize diversity but may include non-specific binders.
 
-**Status**: 📋 Ready for execution - Config generator and orchestrator created (Oct 18, 2025)
+**Design**: Re-scoring only (NO retraining); reuse Phase 1 embeddings; filter MF cloud by cutoff; measure 1-NN distance to filtered MF.
 
-#### Phase 3: MF Cloud Phase Transition **[REORDERED - was Phase 2]**
-- **Q1**: Does MF cloud size affect PCA vs UMAP relative performance?
-- **Q2**: Is there a critical MF cloud mass where PCA overtakes UMAP?
-- **Q3**: What is the mechanism behind the phase transition?
+**Status**: 📋 Ready for implementation (Oct 29, 2025)
 
-**Hypothesis**: Small MF clouds favor UMAP (local structure); large MF clouds favor PCA (global variance)
+#### Phase 3: MF Cloud Ablation **[REORDERED - was Phase 2]**
+- **Q1**: What happens to the similarity space when MF cloud size decreases?
+- **Q2**: Does performance degrade with smaller MF clouds? By how much?
+- **Q3**: Is there a critical MF cloud mass where PCA overtakes UMAP (phase transition)?
+- **Q4**: What is the minimum viable MF cloud size for useful enrichment?
+- **Q5**: Does the degradation curve differ between features and fingerprints?
 
-**Status**: 📋 Pending - Config generator needs update to use optimal cutoff from Phase 2
+**Hypothesis**: Virtual screening performance will degrade as MF cloud size decreases because:
+1. Smaller MF clouds reduce chemical diversity coverage
+2. Fewer training samples may lead to overfitting or unstable embeddings
+3. Distance-based scoring becomes less reliable with sparse reference sets
+
+Secondary hypothesis (phase transition): Small MF clouds favor UMAP (local structure); large MF clouds favor PCA (global variance).
+
+**Design**: FULL RETRAINING for each MF size [0, 1K, 10K, 50K, 100K, full]; use Phase 1 best hyperparameters + Phase 2 optimal cutoff; train new scalers and DR models.
+
+**Status**: 📋 Pending - Requires Phase 2 completion to identify optimal cutoff
 
 #### Phase 4: Cross-Protein Generalization **[REORDERED - was Phase 3]**
 - **Q1**: Do optimal hyperparameters transfer across proteins in same MF?

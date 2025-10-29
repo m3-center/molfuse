@@ -1,3 +1,52 @@
+### October 29, 2025: Phase 2 and Phase 3 experimental design clarification
+
+- Research Questions and Hypotheses (Clarified)
+  - **Phase 2 (Affinity Cutoff Sensitivity)**:
+    - RQ: Can we improve EF@1% by measuring distance only to more potent ligands from the MF cloud?
+    - H1: Stricter affinity cutoffs (100 nM) will enrich high-potency actives because high-potency ligands share chemical features required for tight binding
+    - H2: Permissive cutoffs (100 μM) maximize diversity but may include non-specific binders that add noise
+    - Design: Re-scoring only (NO retraining); reuse Phase 1 pre-trained models and embeddings; filter MF cloud by cutoff and re-compute 1-NN distances
+  - **Phase 3 (MF Cloud Ablation)**:
+    - RQ: What happens to the similarity space when MF cloud size decreases? Does performance degrade?
+    - H1: Performance will degrade with smaller MF clouds due to reduced chemical diversity coverage
+    - H2: Fewer training samples may lead to overfitting or unstable embeddings
+    - H3: Distance-based scoring becomes less reliable with sparse reference sets
+    - H4 (phase transition): Small MF clouds favor UMAP (local structure); large MF clouds favor PCA (global variance)
+    - Design: FULL RETRAINING for each MF size [0, 1K, 10K, 50K, 100K, full]; use Phase 1 best hyperparameters + Phase 2 optimal cutoff
+
+- Changes Made (Code or configuration)
+  - Created `PHASE2_PHASE3_CLARIFICATION.md`: comprehensive documentation of Phase 2 and Phase 3 experimental designs
+    - Clarified that Phase 2 = re-scoring only (no model retraining)
+    - Clarified that Phase 3 = full retraining with MF ablation
+    - Documented dependency chain: Phase 1 → Phase 2 (optimal cutoff) → Phase 3 (ablation with optimal cutoff) → Phase 4 (generalization)
+  - Updated `PLANNING.md`:
+    - Rewrote Phase 2 section to emphasize re-scoring design (load embeddings, filter MF, re-score)
+    - Rewrote Phase 3 section to emphasize full retraining design (subsample MF, retrain scaler+model, project, score)
+    - Updated research questions to align with experimental designs
+    - Separated Phase 2 and Phase 3 task checklists
+  - Planning notes:
+    - Phase 2 is computationally cheap (minutes per model × cutoff); only re-scoring pre-computed embeddings
+    - Phase 3 is computationally expensive (hours per model × MF size); full training pipeline for each ablation condition
+    - Phase 2 cutoff list: [100, 1000, 10000, 100000] nM (aligns with potency tiers)
+    - Phase 3 MF sizes: [0, 1000, 10000, 50000, 100000, full] (0 = ZINC-only control)
+    - Model selection: Best 4 Phase 1 runs (PCA/features, PCA/fingerprints, UMAP/features, UMAP/fingerprints)
+    - Robustness: Phase 2 can run while Phase 1 is incomplete; skip method/representation combos if no valid Phase 1 runs exist
+    - Potency stratification: Phase 2 post-analysis will include potency-tier breakdowns (High/Medium/Weak)
+
+- Experiments Run (paths / SHAs)
+  - None; planning phase only
+
+- Observations and Results
+  - **Critical distinction established**: Phase 2 and Phase 3 test fundamentally different hypotheses
+    - Phase 2: Does the *composition* of the MF reference set affect scoring quality? (cutoff-based filtering)
+    - Phase 3: Does the *size* of the MF training set affect model quality? (ablation-based subsampling)
+  - **Experimental dependency**: Phase 3 requires Phase 2 completion to identify optimal cutoff per method/representation
+  - **Implementation priority**: Phase 2 first (simple, fast, informs Phase 3); defer Phase 3 until Phase 2 analysis complete
+  - **Documentation cross-references**:
+    - See `PHASE2_PHASE3_CLARIFICATION.md` for full experimental designs
+    - See `PLANNING.md` Phase 2/3 sections for updated task checklists
+    - See `.github/copilot-instructions.md` for project invariants (no retraining in Phase 2, full retraining in Phase 3)
+
 ### October 28, 2025: Stereochemistry investigation: 2D vs 3D Mordred descriptors and data audit
 
 - Research Questions and Hypotheses

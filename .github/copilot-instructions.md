@@ -3,16 +3,21 @@
 Purpose: make AI agents productive fast on this repo. Focus on how things actually work here (not generic tips).
 
 ## Big picture
-- MolFuSE is an MF-guided virtual screening pipeline. v3 (stable) lives in archived_scripts and is deprecated; v4 refactor lives in `molfuse/` with CLIs for Phase 1/2 and HPC support.
+- MolFuSE is an MF-guided virtual screening pipeline. v3 (stable) lives in archived_scripts and is deprecated; v4 refactor lives in `molfuse/` with CLIs for Phase 1/2/3 and HPC support.
 - Core flow (Phase 1): load MF cloud + ZINC (+ actives), enforce target exclusion and zero-overlap, scale features (or parse fingerprints), fit DR (PCA/UMAP) on MF+ZINC only, project actives, score by exact 1-NN to MF, compute EF/ROC/PR and Spearman on actives.
+- Phase 2 (Affinity Cutoff Sensitivity): **RE-SCORING ONLY**. Reuse Phase 1 models and embeddings; filter MF cloud by affinity cutoff [100, 1000, 10000, 100000] nM; re-score actives+ZINC via 1-NN to filtered MF; compute metrics. No retraining. Research question: does scoring against high-potency-only MF improve EF@1%?
+- Phase 3 (MF Cloud Ablation): **FULL RETRAINING**. Subsample MF cloud to sizes [0, 1K, 10K, 50K, 100K, full]; retrain scaler+DR model for each size using Phase 1 best hyperparameters + Phase 2 optimal cutoff; score and compute metrics. Research question: does reducing MF cloud size degrade performance (expected: yes)?
 
 ## Architecture (where to look)
-- `molfuse/cli/phase1.py` (entrypoint) and `molfuse/cli/phase2.py` (scaffold). Always use `molfuse.io.paths.make_run_dirs` to create work dirs.
+- `molfuse/cli/phase1.py` (entrypoint) and `molfuse/cli/phase2.py` (scaffold; to be implemented). Always use `molfuse.io.paths.make_run_dirs` to create work dirs.
+- Phase 2 design: Load Phase 1 embeddings (`embedding_*.csv`), filter MF by cutoff, re-score via 1-NN. NO model retraining.
+- Phase 3 design (future): Subsample MF, retrain scaler+model, project, score. FULL retraining pipeline.
 - DR: `molfuse/dr/pca.py`, `molfuse/dr/umap_.py` (fit and transform), Data prep: `molfuse/data/prep.py` (scaler, feature selection).
 - Scoring/metrics: `molfuse/scoring/nn.py` (exact 1-NN), `molfuse/metrics/metrics.py` (EF@k%, ROC/PR, Spearman).
 - Configs: `configs/` (example + grids); generator: `scripts/generate_molfuse_phase1_configs_v4.py`.
 - HPC: `hpc/molfuse_phase1_cpu.sh` (per-run), `hpc/submit_molfuse_phase1.sh` (batch + idempotent skip via `phase1_summary.json`).
 - v3 docs/workflows: `README.md`, `README_V3_PIPELINE.md`; v4 invariants: `README_V4_MOLFUSE.md`.
+- Phase 2/3 clarifications: `PHASE2_PHASE3_CLARIFICATION.md` (experimental designs, research questions).
 
 ## Project conventions (treat these as invariants)
 - No leakage: StandardScaler fits on MF+ZINC only; actives are transformed with that scaler.
