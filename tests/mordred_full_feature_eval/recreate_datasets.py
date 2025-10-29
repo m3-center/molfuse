@@ -315,6 +315,25 @@ def _save_cache(cache_path: Path, df: pd.DataFrame, mode: str = 'deduplicate') -
             truly_new.to_csv(cache_path, mode='a', header=False, index=False, compression='gzip')
 
 
+def _get_2d_descriptor_columns(desc_2d3d_df: pd.DataFrame) -> List[str]:
+    """Identify 2D-only descriptor columns from a 2D+3D descriptor DataFrame.
+    
+    Uses Mordred's Calculator to determine which columns are 2D vs 3D-only.
+    Returns list of column names that are 2D descriptors (excluding 3D-only).
+    """
+    from mordred import Calculator, descriptors
+    
+    # Get 2D-only descriptor names
+    calc_2d = Calculator(descriptors, ignore_3D=True)
+    desc_2d_names = set([str(d) for d in calc_2d.descriptors])
+    
+    # Filter columns to only 2D descriptors (excluding 'smiles')
+    desc_cols = [c for c in desc_2d3d_df.columns if c != 'smiles']
+    desc_2d_cols = [c for c in desc_cols if c in desc_2d_names]
+    
+    return desc_2d_cols
+
+
 def compute_mordred_for_smiles(
     smiles_list: List[str],
     use_3d: bool,
@@ -448,6 +467,94 @@ def compute_mordred_for_smiles(
     X_cache = cached_subset[["smiles"] + numeric_cols].copy()
 
     return X_cache, failed_smiles, cache_stats
+
+
+def compute_mordred_unified(
+    smiles_list: List[str],
+    seed: int = 42,
+    cache_dir: Optional[Path] = None,
+    n_jobs: int = 1,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str], Dict[str, Dict[str, int]]]:
+    """Compute both 2D and 2D+3D Mordred descriptors efficiently (compute once, extract 2D subset).
+    
+    Strategy:
+    1. Try to compute 2D+3D descriptors for all molecules (with 3D embedding)
+    2. Extract 2D-only subset from 2D+3D for molecules that succeeded
+    3. For molecules that failed 3D embedding, compute 2D-only descriptors as fallback
+    
+    This avoids redundant computation while ensuring:
+    - 2D output contains ONLY 2D descriptors (no 3D descriptors)
+    - 2D+3D output contains ALL descriptors (2D + 3D)
+    - Maximum coverage (molecules with 3D failures still get 2D descriptors)
+    
+    Args:
+        smiles_list: List of SMILES strings
+        seed: Random seed for 3D embedding
+        cache_dir: Cache directory for persistent storage
+        n_jobs: Number of parallel workers
+    
+    Returns:
+        desc_2d: DataFrame with 2D-only descriptors
+        desc_2d3d: DataFrame with 2D+3D descriptors
+        failed_smiles: List of SMILES that failed all computation
+        cache_stats: Dict with separate stats for 2D and 3D
+    """
+    # Initialize cache stats
+    cache_stats = {
+        "2d": {"cached": 0, "computed": 0, "failed": 0},
+        "3d": {"cached": 0, "computed": 0, "failed": 0},
+    }
+    
+    # Step 1: Try to compute 2D+3D for all molecules
+    desc_2d3d_all, failed_3d, stats_3d = compute_mordred_for_smiles(
+        smiles_list, use_3d=True, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
+    )
+    
+    cache_stats["3d"] = stats_3d
+    
+    # Step 2: Extract 2D-only columns from 2D+3D results
+    if not desc_2d3d_all.empty:
+        desc_2d_cols = _get_2d_descriptor_columns(desc_2d3d_all)
+        desc_2d_from_3d = desc_2d3d_all[['smiles'] + desc_2d_cols].copy()
+        smiles_with_3d = set(desc_2d_from_3d['smiles'].tolist())
+    else:
+        desc_2d_from_3d = pd.DataFrame()
+        smiles_with_3d = set()
+    
+    # Step 3: For molecules that failed 3D, compute 2D-only as fallback
+    failed_3d_set = set(failed_3d)
+    smiles_needing_2d_fallback = [s for s in smiles_list if s in failed_3d_set and s not in smiles_with_3d]
+    
+    if smiles_needing_2d_fallback:
+        print(f"  [Fallback] Computing 2D-only descriptors for {len(smiles_needing_2d_fallback)} molecules that failed 3D embedding")
+        desc_2d_fallback, failed_2d, stats_2d = compute_mordred_for_smiles(
+            smiles_needing_2d_fallback, use_3d=False, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
+        )
+        cache_stats["2d"] = stats_2d
+        
+        # Combine 2D descriptors from both sources
+        if not desc_2d_fallback.empty:
+            # Ensure column alignment (2D fallback may have different column order)
+            if not desc_2d_from_3d.empty:
+                # Align columns to match
+                common_cols = ['smiles'] + [c for c in desc_2d_from_3d.columns if c != 'smiles' and c in desc_2d_fallback.columns]
+                desc_2d_from_3d = desc_2d_from_3d[common_cols]
+                desc_2d_fallback = desc_2d_fallback[common_cols]
+            desc_2d_final = pd.concat([desc_2d_from_3d, desc_2d_fallback], axis=0, ignore_index=True)
+        else:
+            desc_2d_final = desc_2d_from_3d
+        
+        # Failed molecules are those that failed both 2D and 3D
+        failed_all = list(set(failed_3d) & set(failed_2d))
+    else:
+        desc_2d_final = desc_2d_from_3d
+        failed_all = failed_3d
+        # No 2D fallback needed, so 2D stats come from extracting from 3D
+        cache_stats["2d"]["cached"] = len(smiles_with_3d)
+        cache_stats["2d"]["computed"] = 0
+        cache_stats["2d"]["failed"] = 0
+    
+    return desc_2d_final, desc_2d3d_all, failed_all, cache_stats
 
 
 def filter_fingerprints_by_features(
@@ -779,6 +886,7 @@ def verify_recreated_datasets(
         log_print(f"  • Computed (new):      {cache_stats['2d']['computed']:>10,} molecules")
         log_print(f"  • Failed:              {cache_stats['2d']['failed']:>10,} molecules")
         total_2d_cache = cache_stats['2d']['cached'] + cache_stats['2d']['computed']
+        cache_hit_rate_2d = 0.0
         if total_2d_cache > 0:
             cache_hit_rate_2d = cache_stats['2d']['cached'] / total_2d_cache * 100
             log_print(f"  • Cache hit rate:      {cache_hit_rate_2d:>10.2f}%")
@@ -788,6 +896,7 @@ def verify_recreated_datasets(
         log_print(f"  • Computed (new):      {cache_stats['3d']['computed']:>10,} molecules")
         log_print(f"  • Failed:              {cache_stats['3d']['failed']:>10,} molecules")
         total_3d_cache = cache_stats['3d']['cached'] + cache_stats['3d']['computed']
+        cache_hit_rate_3d = 0.0
         if total_3d_cache > 0:
             cache_hit_rate_3d = cache_stats['3d']['cached'] / total_3d_cache * 100
             log_print(f"  • Cache hit rate:      {cache_hit_rate_3d:>10.2f}%")
@@ -918,17 +1027,20 @@ def recreate_datasets_structure(
             del zinc_chunk
             gc.collect()
             
-            # Compute 2D descriptors
-            desc_2d, failed_2d, stats_2d = compute_mordred_for_smiles(
-                smiles_list, use_3d=False, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
+            # Compute both 2D and 2D+3D descriptors efficiently (compute once, extract 2D subset)
+            desc_2d, desc_2d3d, failed_all, chunk_cache_stats = compute_mordred_unified(
+                smiles_list, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
             )
             
             # Accumulate cache stats
-            cache_stats_global["2d"]["cached"] += stats_2d["cached"]
-            cache_stats_global["2d"]["computed"] += stats_2d["computed"]
-            cache_stats_global["2d"]["failed"] += stats_2d["failed"]
+            cache_stats_global["2d"]["cached"] += chunk_cache_stats["2d"]["cached"]
+            cache_stats_global["2d"]["computed"] += chunk_cache_stats["2d"]["computed"]
+            cache_stats_global["2d"]["failed"] += chunk_cache_stats["2d"]["failed"]
+            cache_stats_global["3d"]["cached"] += chunk_cache_stats["3d"]["cached"]
+            cache_stats_global["3d"]["computed"] += chunk_cache_stats["3d"]["computed"]
+            cache_stats_global["3d"]["failed"] += chunk_cache_stats["3d"]["failed"]
             
-            # Merge ALL metadata with descriptors (left merge keeps all original molecules)
+            # Merge 2D descriptors with metadata
             zinc_2d = zinc_meta.merge(desc_2d, left_on="SMILES", right_on="smiles", how="left")
             if "smiles" in zinc_2d.columns:
                 zinc_2d = zinc_2d.drop(columns=["smiles"])
@@ -938,7 +1050,6 @@ def recreate_datasets_structure(
                 first_desc_col = [c for c in desc_2d.columns if c != "smiles"][0]
                 zinc_2d = zinc_2d.dropna(subset=[first_desc_col])
             else:
-                # No descriptors computed - empty dataframe with columns
                 zinc_2d = zinc_2d.iloc[:0]
             
             # Append to file (write header only on first chunk)
@@ -949,17 +1060,7 @@ def recreate_datasets_structure(
             del zinc_2d, desc_2d
             gc.collect()
             
-            # Compute 2D+3D descriptors
-            desc_2d3d, failed_3d, stats_2d3d = compute_mordred_for_smiles(
-                smiles_list, use_3d=True, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
-            )
-            
-            # Accumulate cache stats
-            cache_stats_global["3d"]["cached"] += stats_2d3d["cached"]
-            cache_stats_global["3d"]["computed"] += stats_2d3d["computed"]
-            cache_stats_global["3d"]["failed"] += stats_2d3d["failed"]
-            
-            # Merge ALL metadata with descriptors (left merge keeps all original molecules)
+            # Merge 2D+3D descriptors with metadata
             zinc_2d3d = zinc_meta.merge(desc_2d3d, left_on="SMILES", right_on="smiles", how="left")
             if "smiles" in zinc_2d3d.columns:
                 zinc_2d3d = zinc_2d3d.drop(columns=["smiles"])
@@ -969,7 +1070,6 @@ def recreate_datasets_structure(
                 first_desc_col = [c for c in desc_2d3d.columns if c != "smiles"][0]
                 zinc_2d3d = zinc_2d3d.dropna(subset=[first_desc_col])
             else:
-                # No descriptors computed - empty dataframe with columns
                 zinc_2d3d = zinc_2d3d.iloc[:0]
             
             if not zinc_2d3d.empty or first_chunk:
@@ -1042,17 +1142,20 @@ def recreate_datasets_structure(
             del kw_orig
             gc.collect()
             
-            # Compute 2D descriptors
-            desc_2d, failed_2d, stats_2d = compute_mordred_for_smiles(
-                smiles_list, use_3d=False, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
+            # Compute both 2D and 2D+3D descriptors efficiently (compute once, extract 2D subset)
+            desc_2d, desc_2d3d, failed_all, kw_cache_stats = compute_mordred_unified(
+                smiles_list, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
             )
             
             # Accumulate cache stats
-            cache_stats_global["2d"]["cached"] += stats_2d["cached"]
-            cache_stats_global["2d"]["computed"] += stats_2d["computed"]
-            cache_stats_global["2d"]["failed"] += stats_2d["failed"]
+            cache_stats_global["2d"]["cached"] += kw_cache_stats["2d"]["cached"]
+            cache_stats_global["2d"]["computed"] += kw_cache_stats["2d"]["computed"]
+            cache_stats_global["2d"]["failed"] += kw_cache_stats["2d"]["failed"]
+            cache_stats_global["3d"]["cached"] += kw_cache_stats["3d"]["cached"]
+            cache_stats_global["3d"]["computed"] += kw_cache_stats["3d"]["computed"]
+            cache_stats_global["3d"]["failed"] += kw_cache_stats["3d"]["failed"]
             
-            # Merge ALL metadata with descriptors (left merge keeps all original molecules)
+            # Merge 2D descriptors with metadata
             kw_2d = kw_meta.merge(desc_2d, left_on=smiles_col, right_on="smiles", how="left")
             if "smiles" in kw_2d.columns:
                 kw_2d = kw_2d.drop(columns=["smiles"])
@@ -1062,7 +1165,7 @@ def recreate_datasets_structure(
                 first_desc_col = [c for c in desc_2d.columns if c != "smiles"][0]
                 kw_2d = kw_2d.dropna(subset=[first_desc_col])
             else:
-                kw_2d = kw_2d.iloc[:0]  # Empty dataframe with columns
+                kw_2d = kw_2d.iloc[:0]
             
             out_path_2d = out_2d / kw_name
             kw_2d.to_csv(out_path_2d, index=False)
@@ -1070,17 +1173,7 @@ def recreate_datasets_structure(
             del kw_2d, desc_2d
             gc.collect()
             
-            # Compute 2D+3D descriptors
-            desc_2d3d, failed_3d, stats_2d3d = compute_mordred_for_smiles(
-                smiles_list, use_3d=True, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
-            )
-            
-            # Accumulate cache stats
-            cache_stats_global["3d"]["cached"] += stats_2d3d["cached"]
-            cache_stats_global["3d"]["computed"] += stats_2d3d["computed"]
-            cache_stats_global["3d"]["failed"] += stats_2d3d["failed"]
-            
-            # Merge ALL metadata with descriptors (left merge keeps all original molecules)
+            # Merge 2D+3D descriptors with metadata
             kw_2d3d = kw_meta.merge(desc_2d3d, left_on=smiles_col, right_on="smiles", how="left")
             if "smiles" in kw_2d3d.columns:
                 kw_2d3d = kw_2d3d.drop(columns=["smiles"])
@@ -1090,7 +1183,7 @@ def recreate_datasets_structure(
                 first_desc_col = [c for c in desc_2d3d.columns if c != "smiles"][0]
                 kw_2d3d = kw_2d3d.dropna(subset=[first_desc_col])
             else:
-                kw_2d3d = kw_2d3d.iloc[:0]  # Empty dataframe with columns
+                kw_2d3d = kw_2d3d.iloc[:0]
             
             out_path_2d3d = out_2d3d / kw_name
             kw_2d3d.to_csv(out_path_2d3d, index=False)
