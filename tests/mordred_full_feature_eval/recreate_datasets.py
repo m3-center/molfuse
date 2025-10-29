@@ -211,6 +211,24 @@ def _compute_descriptors_for_mols(mols: List[Optional[Chem.Mol]], success_flags:
     return desc_df
 
 
+def _validate_cache_file(cache_path: Path) -> bool:
+    """Validate that a cache file is readable and not corrupted.
+    
+    Returns True if file is valid, False if corrupted or unreadable.
+    """
+    if not cache_path.exists():
+        return True  # Non-existent file is "valid" (will be created)
+    
+    try:
+        # Try to read just the first chunk to validate the file
+        first_chunk = pd.read_csv(cache_path, nrows=10)
+        if "smiles" not in first_chunk.columns:
+            return False
+        return True
+    except (EOFError, OSError, pd.errors.ParserError):
+        return False
+
+
 def _load_cache_subset(cache_path: Path, needed_smiles: set) -> pd.DataFrame:
     """Load only the needed SMILES from cache using chunked reading to minimize memory."""
     if not cache_path.exists():
@@ -240,7 +258,12 @@ def _load_cache_subset(cache_path: Path, needed_smiles: set) -> pd.DataFrame:
             gc.collect()
             return result
         return pd.DataFrame(columns=["smiles"]).astype({"smiles": str})
-    except Exception:
+    except (EOFError, OSError, pd.errors.ParserError) as e:
+        # Cache file is corrupted - return empty DataFrame and let computation proceed
+        print(f"    ⚠ Cache file corrupted ({type(e).__name__}), skipping cache: {cache_path.name}")
+        backup_path = cache_path.with_suffix('.corrupted')
+        if cache_path.exists():
+            cache_path.rename(backup_path)
         return pd.DataFrame(columns=["smiles"]).astype({"smiles": str})
 
 
@@ -268,10 +291,20 @@ def _save_cache(cache_path: Path, df: pd.DataFrame, mode: str = 'deduplicate') -
         # Deduplication mode (slower, checks for existing SMILES)
         existing_smiles = set()
         
-        # Read existing cache in chunks to track SMILES we already have
-        for chunk in pd.read_csv(cache_path, chunksize=100_000):
-            if "smiles" in chunk.columns:
-                existing_smiles.update(chunk["smiles"].tolist())
+        try:
+            # Read existing cache in chunks to track SMILES we already have
+            for chunk in pd.read_csv(cache_path, chunksize=100_000):
+                if "smiles" in chunk.columns:
+                    existing_smiles.update(chunk["smiles"].tolist())
+        except (EOFError, OSError, pd.errors.ParserError) as e:
+            # Cache file is corrupted - rebuild it
+            print(f"    ⚠ Cache file corrupted ({type(e).__name__}), rebuilding: {cache_path.name}")
+            backup_path = cache_path.with_suffix('.corrupted')
+            if cache_path.exists():
+                cache_path.rename(backup_path)
+            # Create new cache with current data
+            new_data.to_csv(cache_path, index=False, compression='gzip')
+            return
         
         # Only append truly new SMILES (not in cache)
         new_smiles_mask = ~new_data["smiles"].isin(existing_smiles)
@@ -302,6 +335,12 @@ def compute_mordred_for_smiles(
     # Setup cache
     cache_dir = cache_dir or (Path(__file__).resolve().parent / "cache")
     cache_path = cache_dir / ("mordred_3d_cache.csv.gz" if use_3d else "mordred_2d_cache.csv.gz")
+
+    # Validate cache file and remove if corrupted
+    if cache_path.exists() and not _validate_cache_file(cache_path):
+        print(f"  [Cache] Corrupted cache detected, removing: {cache_path.name}")
+        backup_path = cache_path.with_suffix('.corrupted')
+        cache_path.rename(backup_path)
 
     # Determine which SMILES need calculation
     needed_smiles = set(smiles_list)
