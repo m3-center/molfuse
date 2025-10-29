@@ -209,13 +209,16 @@ Notes:
 ### 🧪 Phase 3 (MF cloud ablation - FULL RETRAINING)
 - [ ] **Research Question**: What happens to similarity space when MF cloud size decreases? Does performance degrade?
 - [ ] **Hypothesis**: Performance will degrade with smaller MF clouds due to reduced diversity; UMAP may be more sensitive than PCA
+- [ ] **New Hypothesis (Oct 29)**: Information bottleneck effect should weaken/reverse at MF=0 (no signal-rich anchor)
 - [ ] Use Phase 2 optimal cutoff + Phase 1 best hyperparameters
 - [ ] Implement MF subsampling logic for sizes [0, 1K, 10K, 50K, 100K, full]
-- [ ] For each (model × MF size): retrain scaler, retrain DR model, project actives, score, compute metrics
+- [ ] **Add dimensionality sweep**: Test 2D, 5D, 10D for features+nn=500 to validate bottleneck hypothesis
+- [ ] For each (model × MF size × dimension): retrain scaler, retrain DR model, project actives, score, compute metrics
 - [ ] Implement Phase 3 CLI (`molfuse/cli/phase3.py`) - full training pipeline with MF ablation
 - [ ] Implement config generator (`scripts/generate_molfuse_phase3_configs_v4.py`)
-- [ ] Implement Phase 3 post-analysis (`scripts/phase3_post_analysis.py`) - ablation curves
+- [ ] Implement Phase 3 post-analysis (`scripts/phase3_post_analysis.py`) - ablation curves + dimensionality interaction plots
 - [ ] Create HPC scripts for Phase 3
+- [ ] **Critical validation**: At MF=0, does UMAP+features performance pattern reverse (higher dim = better)?
 
 ### 📊 Analyses
 - [ ] Port potency-stratified analysis (Phase 1) to molfuse/analysis/phase1_potency.py
@@ -365,6 +368,7 @@ Notes:
 - **Q3**: Is there a critical MF cloud mass where PCA overtakes UMAP (phase transition)?
 - **Q4**: What is the minimum viable MF cloud size for useful enrichment?
 - **Q5**: Does the degradation curve differ between features and fingerprints?
+- **Q6 (NEW)**: Does the UMAP dimensionality effect reverse at MF=0 (information bottleneck hypothesis)?
 
 **Hypothesis**: Virtual screening performance will degrade as MF cloud size decreases because:
 1. Smaller MF clouds reduce chemical diversity coverage
@@ -373,7 +377,12 @@ Notes:
 
 Secondary hypothesis (phase transition): Small MF clouds favor UMAP (local structure); large MF clouds favor PCA (global variance).
 
-**Design**: FULL RETRAINING for each MF size [0, 1K, 10K, 50K, 100K, full]; use Phase 1 best hyperparameters + Phase 2 optimal cutoff; train new scalers and DR models.
+**NEW Hypothesis (Oct 29 - Information Bottleneck)**: 
+- At large MF (full cloud): Features+nn=500 prefer low dimensions (2D-5D) due to implicit regularization via bottleneck
+- At MF=0 (no anchor): Effect should weaken or reverse; high dimensions may perform better because there's no MF-ZINC signal to preserve, only ZINC internal structure
+- Critical test: Does 2D → 10D performance pattern flip when MF cloud is removed?
+
+**Design**: FULL RETRAINING for each MF size [0, 1K, 10K, 50K, 100K, full]; use Phase 1 best hyperparameters + Phase 2 optimal cutoff; train new scalers and DR models; **include dimensionality sweep (2D, 5D, 10D) for features+nn=500 to test bottleneck hypothesis**.
 
 **Status**: 📋 Pending - Requires Phase 2 completion to identify optimal cutoff
 

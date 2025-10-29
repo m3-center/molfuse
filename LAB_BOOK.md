@@ -1,3 +1,37 @@
+### October 29, 2025: UMAP dimensionality effects — information bottleneck hypothesis
+
+- Research Question
+  - Why does UMAP+features (nn=500) degrade with dimension (21.1 → 15.2 for 2D → 10D) while UMAP+fingerprints (nn=10) improves (27.7 → 32.9)?
+
+- Hypothesis (Information Bottleneck)
+  - **Large neighborhoods (nn=500) with global similarity**: High dimensions preserve more ZINC-ZINC internal structure (noise)
+  - **2D bottleneck acts as implicit regularization**: Forces UMAP to discard noise, retain MF→active signal
+  - **10D relaxes constraint**: Allows more noise preservation, dilutes discriminative power
+  - **Small neighborhoods (nn=10)**: Enriched for task-relevant pairs (MF↔MF, active↔active); higher dimensions resolve local heterogeneity
+
+- Supporting Evidence (Phase 1 Results)
+  - Features + nn=500: Performance degrades 2D → 10D (bottleneck removal hurts)
+  - Fingerprints + nn=10: Performance improves 2D → 10D (local structure needs dimensions)
+  - PCA: Stable across dimensions for both representations (no neighborhood parameter)
+
+- Testable Predictions
+  1. **Phase 3 (MF ablation)**: Effect should weaken/reverse when MF cloud → 0 (no signal-rich anchor to preserve)
+  2. **Neighborhood composition**: nn=500 includes more ZINC decoys; nn=10 includes more MF compounds
+  3. **Silhouette scores**: nn=10 produces tighter, more separated clusters than nn=500
+
+- Implications for Method Selection
+  - Features + large nn: Prefer low dimensions (2D-5D) to enforce bottleneck
+  - Fingerprints + small nn: Prefer high dimensions (10D+) to resolve local structure
+  - PCA: Dimension-agnostic; stable choice when unsure
+
+- Next Steps
+  - Execute Phase 3 (MF ablation) with dimensionality sweep to test if effect vanishes at MF=0
+  - Add neighborhood composition analysis to Phase 1 post-analysis (what fraction of nn neighbors are MF vs ZINC?)
+  - Document in PUBLICATION.md as critical observation
+
+- Artifacts Generated
+  - PUBLICATION.md updated with "Critical Observations: UMAP Dimensionality Effects and Neighborhood Size"
+
 ### October 29, 2025: Median affinity deduplication implementation (Phase 1 and Phase 2)
 
 - Changes Made (Code)

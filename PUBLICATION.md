@@ -33,11 +33,47 @@ Non-feature metadata columns (e.g., SMILES, accession, IDs) are excluded from mo
 ## Standing Research Questions and Primary Hypotheses
 
 - RQ1: How does MF cloud composition (size, affinity cutoff) determine the relative performance of PCA vs UMAP?
-  - H1: With small or no MF cloud, UMAP’s local structure preservation is advantageous; with large MF clouds, PCA’s global variance dominates.
+  - H1: With small or no MF cloud, UMAP's local structure preservation is advantageous; with large MF clouds, PCA's global variance dominates.
 - RQ2: What UMAP hyperparameter regimes are optimal for retrieval under clean (deduplicated) MF data?
   - H2: The optimal neighborhood size shifts to medium/large values (50–500) after deduplication; min_dist has a weak effect.
 - RQ3: To what extent do results generalize across proteins sharing or not sharing the same MF?
   - H3: Same-MF transfer is stronger than cross-MF; dimensionality choice remains target- and MF-dependent.
+
+## Critical Observations: UMAP Dimensionality Effects and Neighborhood Size
+
+### Divergent Dimensionality Behavior: Features vs Fingerprints
+
+Phase 1 results reveal a striking difference in how UMAP responds to increasing embedding dimensions depending on the molecular representation:
+
+- **UMAP+features (nn=500, Euclidean)**: EF@1% degrades with dimension (21.1 → 19.6 → 15.2 for 2D → 5D → 10D)
+- **UMAP+fingerprints (nn=10, Jaccard)**: EF@1% improves with dimension (27.7 → 31.9 → 32.9 for 2D → 5D → 10D)
+
+This contrasts with PCA, which is stable across dimensions for both representations.
+
+### Information Bottleneck Hypothesis
+
+**Proposed mechanism**: When using large neighborhoods (nn=500) with global similarity (features), high-dimensional embeddings preserve more ZINC-ZINC internal structure—but most of this structure is uninformative noise for the retrieval task. The algorithm must balance preserving:
+1. Informative MF→active relationships (task-relevant signal)
+2. Uninformative ZINC→ZINC relationships (task-irrelevant noise)
+
+At 2D, the severe bottleneck forces UMAP to discard most noise while retaining some signal. At 10D, the relaxed bottleneck allows more noise preservation, diluting discriminative power.
+
+**Supporting evidence**:
+- Small neighborhoods (nn=10) show the opposite pattern: performance improves with dimension because local neighborhoods are enriched for task-relevant pairs (MF↔MF, active↔active).
+- Fingerprints with nn=10 need higher dimensions to resolve local heterogeneity within tight clusters (binary vectors require more dimensions to separate).
+- Features with nn=500 suffer from dimension increase because global structure is dominated by the massive ZINC decoy set (1.29M compounds).
+
+### Implications for Method Selection
+
+1. **Features + large nn**: Prefer low dimensions (2D–5D) to enforce information bottleneck
+2. **Fingerprints + small nn**: Prefer high dimensions (10D+) to resolve local structure
+3. **PCA**: Dimension-agnostic; stable choice when unsure of optimal dimensionality
+
+This explains why dim=2 captures signal for UMAP+features (nn=500): the bottleneck acts as implicit regularization, forcing the algorithm to prioritize high-variance global structure over ZINC internal noise. Higher dimensions remove this constraint, allowing noise to creep back in.
+
+### Research Priority
+
+Phase 3 (MF cloud ablation) will test whether this effect vanishes when MF cloud size approaches zero: if the information bottleneck hypothesis is correct, the dimensionality effect should weaken or reverse when the MF anchor is removed, as there is no longer a signal-rich reference frame to preserve.
 
 ## Notes for Methods
 
