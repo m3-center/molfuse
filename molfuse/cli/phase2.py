@@ -162,8 +162,14 @@ def main() -> None:
             
             if smiles_col_src:
                 logger.info(f"Matching MF rows by SMILES ({smiles_col_emb} in embedding, {smiles_col_src} in source)")
+                
+                # Deduplicate source by SMILES: take minimum (most potent) affinity per compound
+                logger.info("Deduplicating source CSV by SMILES (keeping minimum affinity per compound)")
+                df_source_dedup = df_mf_source.groupby(smiles_col_src, as_index=False)["Standard Value (nM)"].min()
+                logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique SMILES")
+                
                 # Create a mapping: SMILES -> affinity
-                affinity_map = df_mf_source.set_index(smiles_col_src)["Standard Value (nM)"]
+                affinity_map = df_source_dedup.set_index(smiles_col_src)["Standard Value (nM)"]
                 affinity_nM = emb_mf[smiles_col_emb].map(affinity_map)
                 
                 n_matched = affinity_nM.notna().sum()
@@ -176,7 +182,13 @@ def main() -> None:
                 continue
         elif id_col_emb and "Compound ChEMBL ID" in df_mf_source.columns:
             logger.info(f"Matching MF rows by Compound ChEMBL ID")
-            affinity_map = df_mf_source.set_index("Compound ChEMBL ID")["Standard Value (nM)"]
+            
+            # Deduplicate source by ChEMBL ID: take minimum (most potent) affinity per compound
+            logger.info("Deduplicating source CSV by ChEMBL ID (keeping minimum affinity per compound)")
+            df_source_dedup = df_mf_source.groupby("Compound ChEMBL ID", as_index=False)["Standard Value (nM)"].min()
+            logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique ChEMBL IDs")
+            
+            affinity_map = df_source_dedup.set_index("Compound ChEMBL ID")["Standard Value (nM)"]
             affinity_nM = emb_mf[id_col_emb].map(affinity_map)
             
             n_matched = affinity_nM.notna().sum()
