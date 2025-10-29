@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=128G
-#SBATCH --time=0-08:00:00
+#SBATCH --mem=360G
+#SBATCH --time=0-24:00:00
 #SBATCH --job-name=mordred_feature_comp
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
@@ -38,9 +38,9 @@ echo "[SLURM] WORKDIR=${WORKDIR}"
 cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 
 # Defaults (override via SBATCH --export=ALL,VAR=value)
-N_TARGET=${N_TARGET:-500}
-N_MF=${N_MF:-2000}
-N_ZINC=${N_ZINC:-50000}
+N_TARGET=${N_TARGET:-50000}
+N_MF=${N_MF:-500000}
+N_ZINC=${N_ZINC:-10000000}
 OUTPUT_DIR=${OUTPUT_DIR:-tests/mordred_full_feature_eval/output_comparison}
 CACHE_DIR=${CACHE_DIR:-tests/mordred_full_feature_eval/cache}
 UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS:-10}
