@@ -11,7 +11,7 @@ We present MolFuSE, an ultra-large, molecular function–guided virtual screenin
 - Projection-only: scaler/DR fit on MF+ZINC; held-out actives are only projected (no leakage).
 - UMAP is seedless (random_state=None) for HPC parallel execution; PCA uses sklearn defaults.
 - Scoring uses exact 1-NN in embedded space; distance-based score = -min_distance.
-- Deduplication is SMILES-only; MF–ZINC and Actives–(MF/ZINC) overlaps are removed by SMILES.
+- Deduplication: Median affinity aggregation per SMILES (robust to ChEMBL measurement noise); MF–ZINC and Actives–(MF/ZINC) overlaps removed by SMILES.
 - Affinity cutoff applies to MF cloud for scoring only; actives are never filtered by cutoff.
 - Representations and distances:
   - Features: RDKit descriptors scaled with StandardScaler; PCA/UMAP with Euclidean distance.
@@ -43,6 +43,7 @@ Non-feature metadata columns (e.g., SMILES, accession, IDs) are excluded from mo
 
 - Projection-only design to avoid data leakage: fit on MF+ZINC, project held-out actives.
 - Features: 40 RDKit descriptors with StandardScaler; Fingerprints: 2048-bit ECFP4.
+- Deduplication: Median affinity per compound (SMILES-based); robust to ChEMBL multi-assay measurement variance.
 - Metrics: EF@1% primary; ROC-AUC and PR-AUC secondary; 5 replicates per config.
 
 ## Next Updates (Planned)

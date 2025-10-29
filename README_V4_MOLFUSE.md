@@ -7,11 +7,11 @@ Core invariants:
 - UMAP runs without a fixed seed (random_state=None) to enable parallelism
 - Exact 1-NN scoring backend in embedded space; score = -min_distance
 - Affinity cutoff applies to MF cloud for scoring only; actives are not filtered
-- Spearman’s rho(pActivity vs score) is reported for actives
+- Spearman's rho(pActivity vs score) is reported for actives
 - Target-preserving exclusion enforced
  - If applying the affinity cutoff yields an empty MF set, the default policy is fail-fast (error). You can set `on_empty_cutoff: "fallback"` to use the full MF set for scoring instead.
  - Zero MF–ZINC overlap enforced by SMILES; any ZINC that exactly matches an MF compound is removed before training/scoring.
- - Deduplication policy: strictly by SMILES string (canonical_smiles/SMILES). One row per unique molecule.
+ - Deduplication policy: Median affinity aggregation per SMILES (robust to ChEMBL multi-assay measurement variance); one row per unique molecule.
  - Representations supported:
    - Features (scaled; PCA/UMAP-Euclidean)
    - Fingerprints (passthrough; PCA baseline, UMAP-Jaccard)

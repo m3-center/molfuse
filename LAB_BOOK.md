@@ -1,3 +1,34 @@
+### October 29, 2025: Median affinity deduplication implementation (Phase 1 and Phase 2)
+
+- Changes Made (Code)
+  - `molfuse/cli/phase1.py`: Updated `dedup_by_smiles()` to use `groupby(SMILES).agg({'Standard Value (nM)': 'median', other_cols: 'first'})`
+  - `molfuse/cli/phase2.py`: Updated both SMILES-based and ChEMBL ID-based deduplication to use median aggregation
+  - Fallback: ZINC (no affinity column) still uses `drop_duplicates(keep='first')`
+  - Git SHA: fd89b0d (implementation), c36e7a6 (documentation)
+
+- Rationale
+  - ChEMBL duplicates show extreme variability (40 million-fold affinity ranges, 2,127 measurements per compound)
+  - Median is robust to outliers vs first-occurrence (arbitrary/row-order dependent) and minimum (outlier-sensitive)
+  - Aligns with ChEMBL recommendations, virtual screening benchmarks (DUD-E, MUV), and our v3 Oct 26 decision
+
+- Expected Impact
+  - Row counts unchanged (still deduplicate by SMILES/ID)
+  - Affinity values differ (median vs arbitrary first)
+  - Phase 1 embeddings will change (different MF cloud after median aggregation)
+  - **Requires full Phase 1 rerun** with new workspace: `experiment_workspace_v4_median`
+
+- Validation
+  - Syntax verified (py_compile passed)
+  - Unit test confirmed median calculation: [10, 100, 1000] → 100.0 ✓
+
+- Next Steps
+  - Rerun Phase 1 grid: `bash hpc/submit_molfuse_phase1.sh configs/molfuse_phase1_grid experiment_workspace_v4_median`
+  - Phase 2 already aligned (matches Phase 1 median strategy)
+  - Compare EF@1%: first-occurrence vs median strategies
+
+- Artifacts Generated
+  - `MEDIAN_DEDUPLICATION_IMPLEMENTATION.md` (comprehensive documentation)
+
 ### October 29, 2025: Phase 2 and Phase 3 experimental design clarification
 
 - Research Questions and Hypotheses (Clarified)

@@ -191,11 +191,14 @@ Notes:
 - [ ] Wire phases.phase1 to run the sweep grid; log artifacts
  - [x] Add run-scoped file logging and save embeddings (MF/ZINC/Actives)
  - [x] Persist scaler/model artifacts (joblib) in run artifacts
+ - [x] Implement median affinity deduplication for MF and Actives (Oct 29, 2025)
  - [x] Create Phase 1 config generator and SLURM scripts
+ - [ ] **Execute Phase 1 rerun with median deduplication** (new workspace: `experiment_workspace_v4_median`)
 
 ### 🧪 Phase 2 (affinity cutoff sensitivity - re-scoring only)
 - [x] Implement model selection utility (`molfuse/analysis/select_best_phase1.py`)
 - [x] Implement Phase 2 CLI (`molfuse/cli/phase2.py`) - load embeddings, filter MF, re-score
+- [x] Implement median affinity deduplication (matches Phase 1 strategy, Oct 29, 2025)
 - [x] Implement config generator (`scripts/generate_molfuse_phase2_configs_v4.py`)
 - [x] Verify MF cutoff filtering logic (apply to embeddings, not raw data)
 - [x] Save per-cutoff metrics and ranked scores
