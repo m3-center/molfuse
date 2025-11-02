@@ -27,8 +27,14 @@
 # Memory usage: ~20-40GB peak (uses chunked processing)
 #
 # Usage examples:
-#   # Full production run (all molecules, default cache)
+#   # Full production run (all molecules, default cache, skip existing files)
 #   sbatch hpc/mordred_recreate_datasets.sh
+#
+#   # Dry run to preview what would be done
+#   sbatch --export=ALL,DRY_RUN=true hpc/mordred_recreate_datasets.sh
+#
+#   # Force recompute all files (don't skip existing)
+#   sbatch --export=ALL,SKIP_EXISTING=false hpc/mordred_recreate_datasets.sh
 #
 #   # Test run with limited molecules
 #   sbatch --export=ALL,LIMIT_ZINC=10000,LIMIT_KW=1000 hpc/mordred_recreate_datasets.sh
@@ -55,6 +61,8 @@ SEED=${SEED:-42}
 N_JOBS=${N_JOBS:--1}  # -1 = use all available CPUs (64)
 LIMIT_ZINC=${LIMIT_ZINC:-}
 LIMIT_KW=${LIMIT_KW:-}
+SKIP_EXISTING=${SKIP_EXISTING:-true}  # Skip existing files by default
+DRY_RUN=${DRY_RUN:-true}  # Dry run mode (preview only)
 
 # --- Environment Setup ---
 echo "[SLURM] Activating conda environment: ummbas-screening-mordredcommunity"
@@ -72,6 +80,8 @@ echo "  CACHE_DIR=${CACHE_DIR}"
 echo "  SEED=${SEED}"
 echo "  N_JOBS=${N_JOBS}"
 echo "  CPUS_ALLOCATED=${SLURM_CPUS_PER_TASK:-unknown}"
+echo "  SKIP_EXISTING=${SKIP_EXISTING}"
+echo "  DRY_RUN=${DRY_RUN}"
 if [ -n "${LIMIT_ZINC}" ]; then
   echo "  LIMIT_ZINC=${LIMIT_ZINC} (testing mode)"
 else
@@ -100,6 +110,16 @@ fi
 
 if [ -n "${LIMIT_KW}" ]; then
   CMD+=( --limit-kw "${LIMIT_KW}" )
+fi
+
+# Add skip-existing flag control
+if [ "${SKIP_EXISTING}" = "false" ]; then
+  CMD+=( --no-skip-existing )
+fi
+
+# Add dry-run flag if enabled
+if [ "${DRY_RUN}" = "true" ]; then
+  CMD+=( --dry-run )
 fi
 
 echo "[SLURM] Running in $(pwd): ${CMD[*]}"

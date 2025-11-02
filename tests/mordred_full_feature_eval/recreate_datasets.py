@@ -921,7 +921,9 @@ def recreate_datasets_structure(
     cache_dir: Optional[Path] = None,
     n_jobs: int = 1,
     limit_zinc: Optional[int] = None,
-    limit_kw: Optional[int] = None
+    limit_kw: Optional[int] = None,
+    skip_existing: bool = True,
+    dry_run: bool = False
 ) -> tuple[int, int, Dict[str, Dict[str, int]]]:
     """Recreate datasets/molecular_function_features_fingerprints/ structure with full Mordred descriptors.
     
@@ -943,6 +945,8 @@ def recreate_datasets_structure(
         n_jobs: Number of parallel workers (-1 = all CPUs)
         limit_zinc: If set, only process first N molecules from ZINC (for testing)
         limit_kw: If set, only process first N molecules from each KW file (for testing)
+        skip_existing: If True, skip files that already exist in output directories
+        dry_run: If True, only report what would be done without actually computing
     
     Returns:
         (initial_zinc_count, initial_kw_count, cache_stats): Original molecule counts and cache hit statistics
@@ -955,8 +959,15 @@ def recreate_datasets_structure(
         n_jobs = int(os.environ.get('SLURM_CPUS_PER_TASK', cpu_count()))
     print(f"[Parallel] Using {n_jobs} CPU cores for parallel processing")
     
+    if dry_run:
+        print(f"[DRY RUN MODE] No files will be created or modified")
+    if skip_existing:
+        print(f"[SKIP EXISTING] Will skip files that already exist in output directories")
+    
     print(f"\n{'='*80}")
     print("RECREATING DATASETS STRUCTURE WITH FULL MORDRED DESCRIPTORS")
+    if dry_run:
+        print("*** DRY RUN MODE - PREVIEW ONLY ***")
     print(f"{'='*80}")
     
     # Create output directories
@@ -980,6 +991,12 @@ def recreate_datasets_structure(
     # Process ZINC first (in chunks to avoid memory issues)
     print("\n[1/2] Processing ZINC...")
     zinc_orig_path = datasets_dir / "zinc" / "zinc_acquirable_extracted_features.csv"
+    
+    # Check if output files already exist
+    zinc_2d_path = out_2d / "zinc" / "zinc_acquirable_extracted_features.csv"
+    zinc_2d3d_path = out_2d3d / "zinc" / "zinc_acquirable_extracted_features.csv"
+    zinc_exists = zinc_2d_path.exists() and zinc_2d3d_path.exists()
+    
     if zinc_orig_path.exists():
         # First pass: count total molecules
         initial_zinc_count = sum(1 for _ in open(zinc_orig_path)) - 1  # subtract header
@@ -991,123 +1008,157 @@ def recreate_datasets_structure(
             print(f"  Total molecules in ZINC: {initial_zinc_count:,}")
             molecules_to_process = initial_zinc_count
         
-        # Process in chunks to avoid memory overflow
-        chunk_size = 10_000
-        zinc_meta_cols = ["ZINC_ID", "SMILES", "LABEL", "MANUFACTURER", "TRANCHE"]
+        # Check if we should skip this file
+        if skip_existing and zinc_exists:
+            print(f"  ✓ ZINC outputs already exist, skipping")
+            if dry_run:
+                print(f"    [DRY RUN] Would skip: {zinc_2d_path.name} and {zinc_2d3d_path.name}")
+        elif dry_run:
+            print(f"  [DRY RUN] Would process {molecules_to_process:,} ZINC molecules")
+            print(f"    [DRY RUN] Would create: {zinc_2d_path}")
+            print(f"    [DRY RUN] Would create: {zinc_2d3d_path}")
         
-        out_path_2d = out_2d / "zinc" / "zinc_acquirable_extracted_features.csv"
-        out_path_2d3d = out_2d3d / "zinc" / "zinc_acquirable_extracted_features.csv"
-        
-        total_2d = 0
-        total_2d3d = 0
-        total_processed = 0
-        first_chunk = True
-        
-        print(f"  Processing in {chunk_size:,} molecule chunks...")
-        
-        for chunk_idx, zinc_chunk in enumerate(pd.read_csv(zinc_orig_path, chunksize=chunk_size, low_memory=False)):
-            # Check if we've reached the limit
-            if limit_zinc and total_processed >= molecules_to_process:
-                break
+        # Only process if not skipping and not in dry-run mode
+        if not (skip_existing and zinc_exists) and not dry_run:
+            # Process in chunks to avoid memory overflow
+            chunk_size = 10_000
+            zinc_meta_cols = ["ZINC_ID", "SMILES", "LABEL", "MANUFACTURER", "TRANCHE"]
             
-            # Trim chunk if it would exceed limit
-            if limit_zinc:
-                remaining = molecules_to_process - total_processed
-                if len(zinc_chunk) > remaining:
-                    zinc_chunk = zinc_chunk.head(remaining)
+            out_path_2d = out_2d / "zinc" / "zinc_acquirable_extracted_features.csv"
+            out_path_2d3d = out_2d3d / "zinc" / "zinc_acquirable_extracted_features.csv"
             
-            print(f"    Chunk {chunk_idx + 1}: {len(zinc_chunk):,} molecules", end=" → ", flush=True)
-            total_processed += len(zinc_chunk)
+            total_2d = 0
+            total_2d3d = 0
+            total_processed = 0
+            first_chunk = True
             
-            # Extract metadata and SMILES
-            zinc_meta = zinc_chunk[[c for c in zinc_meta_cols if c in zinc_chunk.columns]].copy()
-            smiles_list = zinc_chunk["SMILES"].dropna().astype(str).tolist()
+            print(f"  Processing in {chunk_size:,} molecule chunks...")
             
-            # Free the original chunk immediately
-            del zinc_chunk
-            gc.collect()
+            for chunk_idx, zinc_chunk in enumerate(pd.read_csv(zinc_orig_path, chunksize=chunk_size, low_memory=False)):
+                # Check if we've reached the limit
+                if limit_zinc and total_processed >= molecules_to_process:
+                    break
+                
+                # Trim chunk if it would exceed limit
+                if limit_zinc:
+                    remaining = molecules_to_process - total_processed
+                    if len(zinc_chunk) > remaining:
+                        zinc_chunk = zinc_chunk.head(remaining)
+                
+                print(f"    Chunk {chunk_idx + 1}: {len(zinc_chunk):,} molecules", end=" → ", flush=True)
+                total_processed += len(zinc_chunk)
+                
+                # Extract metadata and SMILES
+                zinc_meta = zinc_chunk[[c for c in zinc_meta_cols if c in zinc_chunk.columns]].copy()
+                smiles_list = zinc_chunk["SMILES"].dropna().astype(str).tolist()
+                
+                # Free the original chunk immediately
+                del zinc_chunk
+                gc.collect()
+                
+                # Compute both 2D and 2D+3D descriptors efficiently (compute once, extract 2D subset)
+                desc_2d, desc_2d3d, failed_all, chunk_cache_stats = compute_mordred_unified(
+                    smiles_list, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
+                )
+                
+                # Accumulate cache stats
+                cache_stats_global["2d"]["cached"] += chunk_cache_stats["2d"]["cached"]
+                cache_stats_global["2d"]["computed"] += chunk_cache_stats["2d"]["computed"]
+                cache_stats_global["2d"]["failed"] += chunk_cache_stats["2d"]["failed"]
+                cache_stats_global["3d"]["cached"] += chunk_cache_stats["3d"]["cached"]
+                cache_stats_global["3d"]["computed"] += chunk_cache_stats["3d"]["computed"]
+                cache_stats_global["3d"]["failed"] += chunk_cache_stats["3d"]["failed"]
+                
+                # Merge 2D descriptors with metadata
+                zinc_2d = zinc_meta.merge(desc_2d, left_on="SMILES", right_on="smiles", how="left")
+                if "smiles" in zinc_2d.columns:
+                    zinc_2d = zinc_2d.drop(columns=["smiles"])
+                
+                # Only keep rows that have descriptors
+                if not desc_2d.empty:
+                    first_desc_col = [c for c in desc_2d.columns if c != "smiles"][0]
+                    zinc_2d = zinc_2d.dropna(subset=[first_desc_col])
+                else:
+                    zinc_2d = zinc_2d.iloc[:0]
+                
+                # Append to file (write header only on first chunk)
+                if not zinc_2d.empty or first_chunk:
+                    zinc_2d.to_csv(out_path_2d, mode='w' if first_chunk else 'a', 
+                                  header=first_chunk, index=False)
+                total_2d += len(zinc_2d)
+                del zinc_2d, desc_2d
+                gc.collect()
+                
+                # Merge 2D+3D descriptors with metadata
+                zinc_2d3d = zinc_meta.merge(desc_2d3d, left_on="SMILES", right_on="smiles", how="left")
+                if "smiles" in zinc_2d3d.columns:
+                    zinc_2d3d = zinc_2d3d.drop(columns=["smiles"])
+                
+                # Only keep rows that have descriptors
+                if not desc_2d3d.empty:
+                    first_desc_col = [c for c in desc_2d3d.columns if c != "smiles"][0]
+                    zinc_2d3d = zinc_2d3d.dropna(subset=[first_desc_col])
+                else:
+                    zinc_2d3d = zinc_2d3d.iloc[:0]
+                
+                if not zinc_2d3d.empty or first_chunk:
+                    zinc_2d3d.to_csv(out_path_2d3d, mode='w' if first_chunk else 'a',
+                                    header=first_chunk, index=False)
+                total_2d3d += len(zinc_2d3d)
+                del zinc_2d3d, desc_2d3d
+                gc.collect()
+                
+                print(f"2D: {total_2d:,}, 2D+3D: {total_2d3d:,}")
+                
+                first_chunk = False
+                del zinc_meta, smiles_list
+                gc.collect()
             
-            # Compute both 2D and 2D+3D descriptors efficiently (compute once, extract 2D subset)
-            desc_2d, desc_2d3d, failed_all, chunk_cache_stats = compute_mordred_unified(
-                smiles_list, seed=seed, cache_dir=cache_dir, n_jobs=n_jobs
-            )
+            print(f"  ✓ ZINC complete: 2D={total_2d:,}, 2D+3D={total_2d3d:,}")
             
-            # Accumulate cache stats
-            cache_stats_global["2d"]["cached"] += chunk_cache_stats["2d"]["cached"]
-            cache_stats_global["2d"]["computed"] += chunk_cache_stats["2d"]["computed"]
-            cache_stats_global["2d"]["failed"] += chunk_cache_stats["2d"]["failed"]
-            cache_stats_global["3d"]["cached"] += chunk_cache_stats["3d"]["cached"]
-            cache_stats_global["3d"]["computed"] += chunk_cache_stats["3d"]["computed"]
-            cache_stats_global["3d"]["failed"] += chunk_cache_stats["3d"]["failed"]
+            # Now filter and recreate ZINC fingerprint files
+            print(f"\n  Processing ZINC fingerprints...")
+            zinc_fp_orig = datasets_dir / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
             
-            # Merge 2D descriptors with metadata
-            zinc_2d = zinc_meta.merge(desc_2d, left_on="SMILES", right_on="smiles", how="left")
-            if "smiles" in zinc_2d.columns:
-                zinc_2d = zinc_2d.drop(columns=["smiles"])
+            # Filter fingerprints for 2D
+            out_fp_2d = out_2d / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
+            n_fp_2d = filter_fingerprints_by_features(zinc_fp_orig, out_path_2d, out_fp_2d, smiles_col="SMILES")
+            print(f"    ✓ 2D fingerprints: {n_fp_2d:,} molecules")
             
-            # Only keep rows that have descriptors
-            if not desc_2d.empty:
-                first_desc_col = [c for c in desc_2d.columns if c != "smiles"][0]
-                zinc_2d = zinc_2d.dropna(subset=[first_desc_col])
-            else:
-                zinc_2d = zinc_2d.iloc[:0]
-            
-            # Append to file (write header only on first chunk)
-            if not zinc_2d.empty or first_chunk:
-                zinc_2d.to_csv(out_path_2d, mode='w' if first_chunk else 'a', 
-                              header=first_chunk, index=False)
-            total_2d += len(zinc_2d)
-            del zinc_2d, desc_2d
-            gc.collect()
-            
-            # Merge 2D+3D descriptors with metadata
-            zinc_2d3d = zinc_meta.merge(desc_2d3d, left_on="SMILES", right_on="smiles", how="left")
-            if "smiles" in zinc_2d3d.columns:
-                zinc_2d3d = zinc_2d3d.drop(columns=["smiles"])
-            
-            # Only keep rows that have descriptors
-            if not desc_2d3d.empty:
-                first_desc_col = [c for c in desc_2d3d.columns if c != "smiles"][0]
-                zinc_2d3d = zinc_2d3d.dropna(subset=[first_desc_col])
-            else:
-                zinc_2d3d = zinc_2d3d.iloc[:0]
-            
-            if not zinc_2d3d.empty or first_chunk:
-                zinc_2d3d.to_csv(out_path_2d3d, mode='w' if first_chunk else 'a',
-                                header=first_chunk, index=False)
-            total_2d3d += len(zinc_2d3d)
-            del zinc_2d3d, desc_2d3d
-            gc.collect()
-            
-            print(f"2D: {total_2d:,}, 2D+3D: {total_2d3d:,}")
-            
-            first_chunk = False
-            del zinc_meta, smiles_list
-            gc.collect()
-        
-        print(f"  ✓ ZINC complete: 2D={total_2d:,}, 2D+3D={total_2d3d:,}")
-        
-        # Now filter and recreate ZINC fingerprint files
-        print(f"\n  Processing ZINC fingerprints...")
-        zinc_fp_orig = datasets_dir / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
-        
-        # Filter fingerprints for 2D
-        out_fp_2d = out_2d / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
-        n_fp_2d = filter_fingerprints_by_features(zinc_fp_orig, out_path_2d, out_fp_2d, smiles_col="SMILES")
-        print(f"    ✓ 2D fingerprints: {n_fp_2d:,} molecules")
-        
-        # Filter fingerprints for 2D+3D
-        out_fp_2d3d = out_2d3d / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
-        n_fp_2d3d = filter_fingerprints_by_features(zinc_fp_orig, out_path_2d3d, out_fp_2d3d, smiles_col="SMILES")
-        print(f"    ✓ 2D+3D fingerprints: {n_fp_2d3d:,} molecules")
+            # Filter fingerprints for 2D+3D
+            out_fp_2d3d = out_2d3d / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
+            n_fp_2d3d = filter_fingerprints_by_features(zinc_fp_orig, out_path_2d3d, out_fp_2d3d, smiles_col="SMILES")
+            print(f"    ✓ 2D+3D fingerprints: {n_fp_2d3d:,} molecules")
         
     else:
         print(f"  ⚠ ZINC file not found: {zinc_orig_path}")
     
     # Process all KW files
     print(f"\n[2/2] Processing {len(kw_files)} KW molecular function files...")
+    
+    files_to_process = []
+    files_skipped = []
+    
     for i, kw_path in enumerate(kw_files, 1):
         kw_name = kw_path.name
+        
+        # Check if output files already exist
+        kw_2d_path = out_2d / kw_name
+        kw_2d3d_path = out_2d3d / kw_name
+        kw_exists = kw_2d_path.exists() and kw_2d3d_path.exists()
+        
+        if skip_existing and kw_exists:
+            files_skipped.append(kw_name)
+            if dry_run:
+                print(f"\n  [{i}/{len(kw_files)}] {kw_name} - [DRY RUN] Would skip (already exists)")
+            continue
+        elif dry_run:
+            print(f"\n  [{i}/{len(kw_files)}] {kw_name} - [DRY RUN] Would process")
+            files_to_process.append(kw_name)
+            continue
+        else:
+            files_to_process.append(kw_name)
+        
         print(f"\n  [{i}/{len(kw_files)}] {kw_name}")
         
         try:
@@ -1218,8 +1269,25 @@ def recreate_datasets_structure(
             gc.collect()
             continue
     
+    # Print skip summary
+    if skip_existing and files_skipped:
+        print(f"\n✓ Skipped {len(files_skipped)} existing KW files")
+    if dry_run:
+        print(f"\n[DRY RUN SUMMARY]")
+        print(f"  Files to process: {len(files_to_process)}")
+        print(f"  Files to skip: {len(files_skipped)}")
+        if files_to_process:
+            print(f"\n  Would process:")
+            for fname in files_to_process[:10]:  # Show first 10
+                print(f"    • {fname}")
+            if len(files_to_process) > 10:
+                print(f"    ... and {len(files_to_process) - 10} more")
+    
     print(f"\n{'='*80}")
-    print("DATASETS STRUCTURE RECREATION COMPLETED")
+    if dry_run:
+        print("DRY RUN COMPLETED - NO FILES WERE CREATED")
+    else:
+        print("DATASETS STRUCTURE RECREATION COMPLETED")
     print(f"{'='*80}")
     print(f"\n✓ Full 2D descriptors:    {out_2d}")
     print(f"✓ Full 2D+3D descriptors: {out_2d3d}")
@@ -1338,6 +1406,27 @@ Examples:
         help="Limit number of molecules per KW file for testing (default: process all)"
     )
     
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=True,
+        help="Skip files that already exist in output directories (default: True)"
+    )
+    
+    parser.add_argument(
+        "--no-skip-existing",
+        action="store_false",
+        dest="skip_existing",
+        help="Recompute all files even if they exist"
+    )
+    
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Preview what would be done without actually computing (default: False)"
+    )
+    
     args = parser.parse_args()
     
     # Setup paths
@@ -1355,8 +1444,15 @@ Examples:
         cache_dir=cache_dir,
         n_jobs=args.n_jobs,
         limit_zinc=args.limit_zinc,
-        limit_kw=args.limit_kw
+        limit_kw=args.limit_kw,
+        skip_existing=args.skip_existing,
+        dry_run=args.dry_run
     )
+    
+    # Skip verification in dry-run mode
+    if args.dry_run:
+        print(f"\n[DRY RUN] Skipping verification")
+        return
     
     # Verify and report
     log_file = out_dir / "verification_report.log"
