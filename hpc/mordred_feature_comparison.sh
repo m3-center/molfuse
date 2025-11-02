@@ -2,34 +2,41 @@
 #SBATCH --partition=any
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=360G
-#SBATCH --time=0-24:00:00
-#SBATCH --job-name=mordred_feature_comp
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH --time=0-04:00:00
+#SBATCH --job-name=mordred_feature_comp_v2
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
 #
-# SLURM submission script for Mordred full-feature comparison (PARALLELIZED for 64 CPUs)
-# Runs tests/mordred_full_feature_eval/feature_comparison.py on HPC with parallel processing.
+# SLURM submission script for Mordred full-feature comparison v2 (pre-computed features)
+# Runs tests/mordred_full_feature_eval/feature_comparison_v2.py on HPC.
 #
-# This script compares three descriptor sets:
-#   - Current 40-feature subset
-#   - Full 2D Mordred descriptors (1613 features)
-#   - Full 2D+3D Mordred descriptors (1826 features)
+# This script compares three descriptor sets using PRE-COMPUTED features:
+#   - Current 40-feature subset (from datasets/molecular_function_features_fingerprints/)
+#   - Full 2D Mordred descriptors (1613 features, from datasets_2d_all/)
+#   - Full 2D+3D Mordred descriptors (1826 features, from datasets_2d3d_all/)
 #
-# Parallelization: Uses all 64 CPUs for:
-#   - SMILES parsing and 3D embedding (multiprocessing Pool)
-#   - UMAP neighbor search and optimization
+# Key differences from v1:
+#   - NO descriptor computation (much faster)
+#   - Loads from pre-computed CSV files
+#   - Uses Phase 1 evaluation protocol (within-file accession split)
+#   - Requires completed dataset recreation (recreate_datasets.py)
+#
+# Resource requirements:
+#   - 16 CPUs sufficient (UMAP parallelism only)
+#   - 128 GB RAM sufficient (no descriptor computation)
+#   - ~2-4 hours runtime (vs 24+ hours for v1)
 #
 # Usage examples:
 #   sbatch hpc/mordred_feature_comparison.sh
-#   sbatch --export=ALL,N_TARGET=300,N_MF=600,N_ZINC=600 hpc/mordred_feature_comparison.sh
-#   sbatch --export=ALL,N_TARGET=500,N_MF=2000,N_ZINC=50000 hpc/mordred_feature_comparison.sh
-#   sbatch --export=ALL,N_JOBS=32 hpc/mordred_feature_comparison.sh  # Use fewer cores if needed
+#   sbatch --export=ALL,KW_FILE=KW-0808_Transferase_affinity_extracted_features.csv,TARGET_ACCESSION=P00519 hpc/mordred_feature_comparison.sh
+#   sbatch --export=ALL,N_MF=600,N_ZINC=600 hpc/mordred_feature_comparison.sh
+#   sbatch --export=ALL,DRY_RUN=1 hpc/mordred_feature_comparison.sh  # Dry run (print command only)
 #
 # To override variables, pass them via --export=ALL,VAR=VALUE,...
-# Common overrides: OUTPUT_DIR, N_TARGET, N_MF, N_ZINC, CACHE_DIR, N_JOBS
+# Common overrides: KW_FILE, TARGET_ACCESSION, N_MF, N_TARGET, N_ZINC, OUTPUT_DIR, DRY_RUN
 #
 
 # Resolve repo root and move there so relative paths work
@@ -38,22 +45,33 @@ echo "[SLURM] WORKDIR=${WORKDIR}"
 cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 
 # Defaults (override via SBATCH --export=ALL,VAR=value)
-N_TARGET=${N_TARGET:-50000}
-N_MF=${N_MF:-500000}
-N_ZINC=${N_ZINC:-10000000}
-OUTPUT_DIR=${OUTPUT_DIR:-tests/mordred_full_feature_eval/output_comparison}
-CACHE_DIR=${CACHE_DIR:-tests/mordred_full_feature_eval/cache}
-UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS:-10}
-UMAP_MIN_DIST=${UMAP_MIN_DIST:-0.1}
-ENABLE_SWEEP=${ENABLE_SWEEP:-1}
-N_JOBS=${N_JOBS:--1}  # -1 = use all available CPUs (64)
+# Required: KW file and target accession for Phase 1 style split
+KW_FILE="${KW_FILE:-KW-0808_Transferase_affinity_extracted_features.csv}"
+TARGET_ACCESSION="${TARGET_ACCESSION:-P00519}"
 
-# Coverage-aware selection thresholds
-PF_TARGET=${PF_TARGET:-0.95}
-PF_MF=${PF_MF:-0.7}
-PR_TARGET_GUARD=${PR_TARGET_GUARD:-0.2}
-PR_MF=${PR_MF:-0.6}
-PR_ZINC=${PR_ZINC:-0.8}
+# Sampling parameters (None = use all)
+N_MF=${N_MF:-}          # MF cloud sample size (blank = all)
+N_TARGET=${N_TARGET:-}  # Target actives sample size (blank = all)
+N_ZINC=${N_ZINC:-600}   # ZINC decoys sample size
+
+# Data directories (pre-computed features)
+BASE_DIR="${BASE_DIR:-.}"
+FULL_2D_DIR="${FULL_2D_DIR:-/home/ahagg2s/UMMBAS_screening_experiments/output_recalculated_full_datasets/datasets_2d_all}"
+FULL_2D3D_DIR="${FULL_2D3D_DIR:-/home/ahagg2s/UMMBAS_screening_experiments/output_recalculated_full_datasets/datasets_2d3d_all}"
+
+# Evaluation parameters
+AFFINITY_CUTOFF_NM=${AFFINITY_CUTOFF_NM:-100}
+SEED=${SEED:-42}
+
+# UMAP parameters
+UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS:-15}
+UMAP_MIN_DIST=${UMAP_MIN_DIST:-0.1}
+
+# Output
+OUTPUT_DIR=${OUTPUT_DIR:-tests/mordred_full_feature_eval/output_v2_${KW_FILE%.csv}_${TARGET_ACCESSION}}
+
+# Dry run flag (set to 1 to print command only)
+DRY_RUN=${DRY_RUN:-0}
 
 # --- Environment Setup ---
 echo "[SLURM] Activating conda environment: ummbas-screening-mordredcommunity"
@@ -61,44 +79,63 @@ source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
 
 # Create output directory
 mkdir -p "${OUTPUT_DIR}"
-mkdir -p "${CACHE_DIR}"
 
 # Log configuration
 echo "[SLURM] Configuration:"
-echo "  N_TARGET=${N_TARGET}"
-echo "  N_MF=${N_MF}"
+echo "  KW_FILE=${KW_FILE}"
+echo "  TARGET_ACCESSION=${TARGET_ACCESSION}"
+echo "  N_MF=${N_MF:-all}"
+echo "  N_TARGET=${N_TARGET:-all}"
 echo "  N_ZINC=${N_ZINC}"
-echo "  OUTPUT_DIR=${OUTPUT_DIR}"
-echo "  CACHE_DIR=${CACHE_DIR}"
+echo "  AFFINITY_CUTOFF_NM=${AFFINITY_CUTOFF_NM}"
+echo "  SEED=${SEED}"
+echo "  BASE_DIR=${BASE_DIR}"
+echo "  FULL_2D_DIR=${FULL_2D_DIR}"
+echo "  FULL_2D3D_DIR=${FULL_2D3D_DIR}"
 echo "  UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS}"
 echo "  UMAP_MIN_DIST=${UMAP_MIN_DIST}"
-echo "  ENABLE_SWEEP=${ENABLE_SWEEP}"
-echo "  N_JOBS=${N_JOBS}"
+echo "  OUTPUT_DIR=${OUTPUT_DIR}"
+echo "  DRY_RUN=${DRY_RUN}"
 echo "  CPUS_ALLOCATED=${SLURM_CPUS_PER_TASK:-unknown}"
 
 # Build command
 CMD=(
-  python tests/mordred_full_feature_eval/feature_comparison.py
-    --output_dir "${OUTPUT_DIR}"
-    --n_target "${N_TARGET}"
-    --n_mf "${N_MF}"
+  python tests/mordred_full_feature_eval/feature_comparison_v2.py
+    --kw_file "${KW_FILE}"
+    --target_accession "${TARGET_ACCESSION}"
     --n_zinc "${N_ZINC}"
+    --base_dir "${BASE_DIR}"
+    --full_2d_dir "${FULL_2D_DIR}"
+    --full_2d3d_dir "${FULL_2D3D_DIR}"
+    --affinity_cutoff_nM "${AFFINITY_CUTOFF_NM}"
+    --seed "${SEED}"
     --umap_n_neighbors "${UMAP_N_NEIGHBORS}"
     --umap_min_dist "${UMAP_MIN_DIST}"
-    --cache_dir "${CACHE_DIR}"
-    --n_jobs "${N_JOBS}"
-    --pf_target "${PF_TARGET}"
-    --pf_mf "${PF_MF}"
-    --pr_target_guard "${PR_TARGET_GUARD}"
-    --pr_mf "${PR_MF}"
-    --pr_zinc "${PR_ZINC}"
+    --output_dir "${OUTPUT_DIR}"
 )
 
-if [ "${ENABLE_SWEEP}" = "1" ]; then
-  CMD+=( --enable_sweep )
+# Add optional sampling parameters if set
+if [ -n "${N_MF}" ]; then
+  CMD+=( --n_mf "${N_MF}" )
 fi
 
-echo "[SLURM] Running in $(pwd): ${CMD[*]}"
+if [ -n "${N_TARGET}" ]; then
+  CMD+=( --n_target "${N_TARGET}" )
+fi
+
+echo "[SLURM] Running in $(pwd)"
+echo "[SLURM] Command: ${CMD[*]}"
+
+if [ "${DRY_RUN}" = "1" ]; then
+  echo "[SLURM] DRY RUN MODE - Command NOT executed"
+  echo "[SLURM]"
+  echo "[SLURM] Full command:"
+  printf '%s \\\n' "${CMD[@]}"
+  echo ""
+  echo "[SLURM] To execute, run without DRY_RUN=1"
+  exit 0
+fi
+
 echo "[SLURM] Start time: $(date)"
 
 "${CMD[@]}"
@@ -108,11 +145,17 @@ echo "[SLURM] End time: $(date)"
 echo "[SLURM] Exit code: ${EXIT_CODE}"
 
 if [ ${EXIT_CODE} -eq 0 ]; then
-  echo "[SLURM] ✓ Feature comparison completed successfully"
+  echo "[SLURM] ✓ Feature comparison v2 completed successfully"
   echo "[SLURM] Results saved to: ${OUTPUT_DIR}"
-  echo "[SLURM] Cache saved to: ${CACHE_DIR}"
+  echo "[SLURM]"
+  echo "[SLURM] Output files:"
+  echo "[SLURM]   - summary.json (metrics and config)"
+  echo "[SLURM]   - metrics_comparison.csv (side-by-side table)"
+  echo "[SLURM]   - umap_*.png (visualizations)"
+  echo "[SLURM]   - scored_molecules_*.csv (ranked results)"
+  echo "[SLURM]   - movement_*.png (Procrustes alignment plots)"
 else
-  echo "[SLURM] ✗ Feature comparison failed with exit code ${EXIT_CODE}"
+  echo "[SLURM] ✗ Feature comparison v2 failed with exit code ${EXIT_CODE}"
 fi
 
 exit ${EXIT_CODE}
