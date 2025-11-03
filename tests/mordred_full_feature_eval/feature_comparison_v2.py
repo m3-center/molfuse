@@ -92,7 +92,7 @@ def load_kw_with_features(
         df_mf: DataFrame with SMILES + features + affinity (MF cloud)
     """
     # Load from CSV with optimizations (PyArrow engine + no type inference)
-    print(f"  Loading from CSV: {feature_csv.name}", flush=True)
+    print(f"  Loading from CSV: {feature_csv.resolve()}", flush=True)
     try:
         # Try PyArrow engine for 3-5x faster parsing
         print(f"  Attempting PyArrow engine...", flush=True)
@@ -174,7 +174,7 @@ def load_zinc_with_features(
         df_zinc: DataFrame with SMILES + features
     """
     # Load original ZINC (just to get SMILES list for sampling)
-    print(f"  Loading ZINC SMILES from: {zinc_csv.name}", flush=True)
+    print(f"  Loading ZINC SMILES from: {zinc_csv.resolve()}", flush=True)
     try:
         # Try PyArrow engine for faster parsing
         df_zinc_orig = pd.read_csv(zinc_csv, dtype=str, engine='pyarrow')
@@ -194,7 +194,7 @@ def load_zinc_with_features(
         df_zinc_orig = df_zinc_orig.sample(n=n_zinc, random_state=seed)
     
     # Load ZINC features from CSV with optimizations
-    print(f"  Loading ZINC features from CSV: {feature_csv.name}", flush=True)
+    print(f"  Loading ZINC features from CSV: {feature_csv.resolve()}", flush=True)
     try:
         # Try PyArrow engine for faster parsing
         print(f"  Attempting PyArrow engine...", flush=True)
@@ -561,7 +561,7 @@ def run_comparison(args: argparse.Namespace) -> None:
     
     features_40_csv = features_40_dir / kw_file
     
-    print(f"  Features file: {features_40_csv.name}")
+    print(f"  Features file: {features_40_csv.resolve()}", flush=True)
     
     if not features_40_csv.exists():
         raise FileNotFoundError(f"40-feature CSV not found: {features_40_csv}")
