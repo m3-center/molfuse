@@ -523,8 +523,20 @@ def run_comparison(args: argparse.Namespace) -> None:
     
     # 1A) Load 40-feature representation
     print("\n[1/3] Loading 40-feature representation...")
-    affinity_csv = affinity_dir / kw_file
+    
+    # Affinity files don't have "_extracted_features" suffix, features files do
+    # E.g., affinity: "KW-0808_Transferase_affinity.csv"
+    #       features: "KW-0808_Transferase_affinity_extracted_features.csv"
+    if kw_file.endswith("_extracted_features.csv"):
+        affinity_filename = kw_file.replace("_extracted_features.csv", ".csv")
+    else:
+        affinity_filename = kw_file
+    
+    affinity_csv = affinity_dir / affinity_filename
     features_40_csv = features_40_dir / kw_file
+    
+    print(f"  Affinity file: {affinity_csv.name}")
+    print(f"  Features file: {features_40_csv.name}")
     
     if not affinity_csv.exists():
         raise FileNotFoundError(f"Affinity CSV not found: {affinity_csv}")
@@ -974,7 +986,8 @@ def parse_args() -> argparse.Namespace:
     
     # Required arguments
     p.add_argument("--kw_file", required=True,
-                   help="KW file name (e.g., 'KW-0808_Transferase_affinity_extracted_features.csv')")
+                   help="KW file name for features (e.g., 'KW-0808_Transferase_affinity_extracted_features.csv'). "
+                        "Script will automatically find corresponding affinity file (without '_extracted_features' suffix)")
     p.add_argument("--target_accession", required=True,
                    help="Target accession to split actives from MF (e.g., 'P00519')")
     
