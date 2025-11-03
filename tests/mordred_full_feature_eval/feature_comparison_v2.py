@@ -111,8 +111,20 @@ def load_kw_with_features(
         # Convert to Parquet for future runs (one-time cost)
         try:
             print(f"  Converting to Parquet for faster future loads...")
+            n_rows_csv = len(df)
             df.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
-            print(f"  ✓ Saved: {parquet_path.name}")
+            
+            # Validate: check row count matches
+            df_check = pd.read_parquet(parquet_path)
+            n_rows_parquet = len(df_check)
+            if n_rows_csv != n_rows_parquet:
+                print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
+                # Delete corrupted Parquet file
+                parquet_path.unlink()
+                print(f"  Deleted corrupted Parquet file")
+            else:
+                print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
+            del df_check
         except Exception as e:
             print(f"  Warning: Could not save Parquet file: {e}")
     
@@ -129,6 +141,9 @@ def load_kw_with_features(
     
     # Deduplicate by SMILES (median affinity if duplicates)
     if 'Standard Value (nM)' in df_actives.columns:
+        # Convert affinity column to numeric before aggregation (required when loaded with dtype=str)
+        df_actives['Standard Value (nM)'] = pd.to_numeric(df_actives['Standard Value (nM)'], errors='coerce')
+        
         # Build aggregation dict for all columns
         agg_dict = {'Standard Value (nM)': 'median'}
         for col in df_actives.columns:
@@ -139,6 +154,9 @@ def load_kw_with_features(
         df_actives = df_actives.drop_duplicates(subset=['SMILES'], keep='first')
     
     if 'Standard Value (nM)' in df_mf.columns:
+        # Convert affinity column to numeric before aggregation (required when loaded with dtype=str)
+        df_mf['Standard Value (nM)'] = pd.to_numeric(df_mf['Standard Value (nM)'], errors='coerce')
+        
         agg_dict = {'Standard Value (nM)': 'median'}
         for col in df_mf.columns:
             if col not in ['SMILES', 'Standard Value (nM)']:
@@ -213,8 +231,20 @@ def load_zinc_with_features(
         # Convert to Parquet for future runs
         try:
             print(f"  Converting ZINC to Parquet for faster future loads...")
+            n_rows_csv = len(df_feat)
             df_feat.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
-            print(f"  ✓ Saved: {parquet_path.name}")
+            
+            # Validate: check row count matches
+            df_check = pd.read_parquet(parquet_path)
+            n_rows_parquet = len(df_check)
+            if n_rows_csv != n_rows_parquet:
+                print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
+                # Delete corrupted Parquet file
+                parquet_path.unlink()
+                print(f"  Deleted corrupted Parquet file")
+            else:
+                print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
+            del df_check
         except Exception as e:
             print(f"  Warning: Could not save Parquet file: {e}")
     
