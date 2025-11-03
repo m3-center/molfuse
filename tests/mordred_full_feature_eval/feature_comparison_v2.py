@@ -101,32 +101,46 @@ def load_kw_with_features(
     else:
         # Load from CSV with optimizations (2-10x faster: PyArrow engine + no type inference)
         print(f"  Loading from CSV: {feature_csv.name}")
+        
+        # If sampling is requested, only load enough rows to satisfy the sample (10-100x faster for test mode)
+        total_needed = None
+        if n_mf is not None or n_target is not None:
+            # Estimate: load 10x more rows than needed to ensure we have enough after filtering
+            mf_needed = (n_mf or 0) * 10 if n_mf else 0
+            target_needed = (n_target or 0) * 10 if n_target else 0
+            total_needed = max(mf_needed + target_needed, 1000)  # At least 1000 rows
+            print(f"  (Sampling mode: loading first {total_needed} rows for efficiency)")
+        
         try:
             # Try PyArrow engine for 3-5x faster parsing
-            df = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
+            df = pd.read_csv(feature_csv, dtype=str, engine='pyarrow', nrows=total_needed)
         except (ImportError, Exception):
             # Fallback to default engine if PyArrow not available
-            df = pd.read_csv(feature_csv, dtype=str, low_memory=False)
+            df = pd.read_csv(feature_csv, dtype=str, low_memory=False, nrows=total_needed)
         
         # Convert to Parquet for future runs (one-time cost)
-        try:
-            print(f"  Converting to Parquet for faster future loads...")
-            n_rows_csv = len(df)
-            df.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
-            
-            # Validate: check row count matches
-            df_check = pd.read_parquet(parquet_path)
-            n_rows_parquet = len(df_check)
-            if n_rows_csv != n_rows_parquet:
-                print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
-                # Delete corrupted Parquet file
-                parquet_path.unlink()
-                print(f"  Deleted corrupted Parquet file")
-            else:
-                print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
-            del df_check
-        except Exception as e:
-            print(f"  Warning: Could not save Parquet file: {e}")
+        # Skip Parquet conversion if we only loaded a subset (sampling mode)
+        if total_needed is None:
+            try:
+                print(f"  Converting to Parquet for faster future loads...")
+                n_rows_csv = len(df)
+                df.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
+                
+                # Validate: check row count matches
+                df_check = pd.read_parquet(parquet_path)
+                n_rows_parquet = len(df_check)
+                if n_rows_csv != n_rows_parquet:
+                    print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
+                    # Delete corrupted Parquet file
+                    parquet_path.unlink()
+                    print(f"  Deleted corrupted Parquet file")
+                else:
+                    print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
+                del df_check
+            except Exception as e:
+                print(f"  Warning: Could not save Parquet file: {e}")
+        else:
+            print(f"  (Skipping Parquet conversion in sampling mode - only loaded subset)")
     
     # Check for required columns
     if 'SMILES' not in df.columns:
@@ -221,32 +235,42 @@ def load_zinc_with_features(
         df_feat = pd.read_parquet(parquet_path)
     else:
         print(f"  Loading ZINC features from CSV: {feature_csv.name}")
+        
+        # If sampling ZINC, only load enough rows (10x buffer for deduplication + overlap removal)
+        nrows_zinc = n_zinc * 10 if n_zinc else None
+        if nrows_zinc:
+            print(f"  (Sampling mode: loading first {nrows_zinc} rows for efficiency)")
+        
         try:
             # Try PyArrow engine for faster parsing
-            df_feat = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
+            df_feat = pd.read_csv(feature_csv, dtype=str, engine='pyarrow', nrows=nrows_zinc)
         except (ImportError, Exception):
             # Fallback to default engine
-            df_feat = pd.read_csv(feature_csv, dtype=str, low_memory=False)
+            df_feat = pd.read_csv(feature_csv, dtype=str, low_memory=False, nrows=nrows_zinc)
         
         # Convert to Parquet for future runs
-        try:
-            print(f"  Converting ZINC to Parquet for faster future loads...")
-            n_rows_csv = len(df_feat)
-            df_feat.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
-            
-            # Validate: check row count matches
-            df_check = pd.read_parquet(parquet_path)
-            n_rows_parquet = len(df_check)
-            if n_rows_csv != n_rows_parquet:
-                print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
-                # Delete corrupted Parquet file
-                parquet_path.unlink()
-                print(f"  Deleted corrupted Parquet file")
-            else:
-                print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
-            del df_check
-        except Exception as e:
-            print(f"  Warning: Could not save Parquet file: {e}")
+        # Skip Parquet conversion if we only loaded a subset (sampling mode)
+        if nrows_zinc is None:
+            try:
+                print(f"  Converting ZINC to Parquet for faster future loads...")
+                n_rows_csv = len(df_feat)
+                df_feat.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
+                
+                # Validate: check row count matches
+                df_check = pd.read_parquet(parquet_path)
+                n_rows_parquet = len(df_check)
+                if n_rows_csv != n_rows_parquet:
+                    print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
+                    # Delete corrupted Parquet file
+                    parquet_path.unlink()
+                    print(f"  Deleted corrupted Parquet file")
+                else:
+                    print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
+                del df_check
+            except Exception as e:
+                print(f"  Warning: Could not save Parquet file: {e}")
+        else:
+            print(f"  (Skipping Parquet conversion in sampling mode - only loaded subset)")
     
     if 'SMILES' not in df_feat.columns:
         raise ValueError(f"SMILES column not found in {feature_csv}")
