@@ -78,6 +78,7 @@ def load_kw_with_features(
     """Load KW feature file and split into target actives and MF cloud (Phase 1 style).
     
     The feature CSV already contains both affinity data AND features (all in one file).
+    Uses Polars for faster loading (3-10x speedup vs pandas for large files).
     
     Args:
         feature_csv: Path to feature CSV (has SMILES + Standard Value (nM) + accession + descriptors)
@@ -90,8 +91,14 @@ def load_kw_with_features(
         df_actives: DataFrame with SMILES + features + affinity (target molecules)
         df_mf: DataFrame with SMILES + features + affinity (MF cloud)
     """
-    # Load feature file (already contains affinity + features together)
-    df = pd.read_csv(feature_csv, low_memory=False)
+    # Load feature file using Polars (3-10x faster than pandas for large CSVs)
+    try:
+        import polars as pl
+        df = pl.read_csv(feature_csv).to_pandas()
+    except ImportError:
+        # Fallback to pandas if Polars not available
+        print("  Warning: Polars not available, falling back to pandas (slower)")
+        df = pd.read_csv(feature_csv, low_memory=False)
     
     # Check for required columns
     if 'SMILES' not in df.columns:
@@ -145,6 +152,8 @@ def load_zinc_with_features(
 ) -> pd.DataFrame:
     """Load ZINC molecules with features.
     
+    Uses Polars for faster loading of large feature files.
+    
     Args:
         zinc_csv: Path to ZINC CSV (original, for SMILES list)
         feature_csv: Path to ZINC feature CSV
@@ -155,7 +164,11 @@ def load_zinc_with_features(
         df_zinc: DataFrame with SMILES + features
     """
     # Load original ZINC (just to get SMILES list for sampling)
-    df_zinc_orig = pd.read_csv(zinc_csv, low_memory=False)
+    try:
+        import polars as pl
+        df_zinc_orig = pl.read_csv(zinc_csv).to_pandas()
+    except ImportError:
+        df_zinc_orig = pd.read_csv(zinc_csv, low_memory=False)
     
     if 'SMILES' not in df_zinc_orig.columns:
         raise ValueError(f"SMILES column not found in {zinc_csv}")
@@ -165,8 +178,12 @@ def load_zinc_with_features(
     if len(df_zinc_orig) > n_zinc:
         df_zinc_orig = df_zinc_orig.sample(n=n_zinc, random_state=seed)
     
-    # Load features
-    df_feat = pd.read_csv(feature_csv, low_memory=False)
+    # Load features using Polars
+    try:
+        import polars as pl
+        df_feat = pl.read_csv(feature_csv).to_pandas()
+    except ImportError:
+        df_feat = pd.read_csv(feature_csv, low_memory=False)
     
     if 'SMILES' not in df_feat.columns:
         raise ValueError(f"SMILES column not found in {feature_csv}")
