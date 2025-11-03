@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --partition=hpc
+#SBATCH --partition=any
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
