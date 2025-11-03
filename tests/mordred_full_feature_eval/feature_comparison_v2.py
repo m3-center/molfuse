@@ -111,7 +111,6 @@ def load_kw_affinity_with_features(
         df_aff_actives = df_aff_actives.groupby('SMILES', as_index=False).agg({
             'Standard Value (nM)': 'median',
             'accession': 'first',
-            **{col: 'first' for col in df_aff_actives.columns if col not in ['SMILES', 'Standard Value (nM)', 'accession']}
         })
     else:
         df_aff_actives = df_aff_actives.drop_duplicates(subset=['SMILES'], keep='first')
@@ -120,10 +119,20 @@ def load_kw_affinity_with_features(
         df_aff_mf = df_aff_mf.groupby('SMILES', as_index=False).agg({
             'Standard Value (nM)': 'median',
             'accession': 'first',
-            **{col: 'first' for col in df_aff_mf.columns if col not in ['SMILES', 'Standard Value (nM)', 'accession']}
         })
     else:
         df_aff_mf = df_aff_mf.drop_duplicates(subset=['SMILES'], keep='first')
+    
+    # Keep only essential metadata columns from affinity data (SMILES, Standard Value, accession)
+    # This avoids merge suffix issues (_aff, _feat) when merging with feature data
+    affinity_cols_to_keep = ['SMILES']
+    if 'Standard Value (nM)' in df_aff_actives.columns:
+        affinity_cols_to_keep.append('Standard Value (nM)')
+    if 'accession' in df_aff_actives.columns:
+        affinity_cols_to_keep.append('accession')
+    
+    df_aff_actives = df_aff_actives[affinity_cols_to_keep].copy()
+    df_aff_mf = df_aff_mf[affinity_cols_to_keep].copy()
     
     # Sample if requested
     if n_target and len(df_aff_actives) > n_target:
@@ -138,9 +147,9 @@ def load_kw_affinity_with_features(
     if 'SMILES' not in df_feat.columns:
         raise ValueError(f"SMILES column not found in {feature_csv}")
     
-    # Merge affinity with features (keep affinity metadata)
-    df_actives = df_aff_actives.merge(df_feat, on='SMILES', how='inner', suffixes=('_aff', '_feat'))
-    df_mf = df_aff_mf.merge(df_feat, on='SMILES', how='inner', suffixes=('_aff', '_feat'))
+    # Merge affinity with features (no suffix needed since we kept only essential columns)
+    df_actives = df_aff_actives.merge(df_feat, on='SMILES', how='inner')
+    df_mf = df_aff_mf.merge(df_feat, on='SMILES', how='inner')
     
     print(f"  Loaded actives: {len(df_aff_actives)} (affinity) → {len(df_actives)} (with features)")
     print(f"  Loaded MF: {len(df_aff_mf)} (affinity) → {len(df_mf)} (with features)")
@@ -235,7 +244,7 @@ def select_feature_columns(df: pd.DataFrame) -> List[str]:
     Returns:
         List of feature column names
     """
-    # Exclude known metadata columns
+    # Exclude known metadata columns (and any with _aff or _feat suffixes from merges)
     exclude = {
         'SMILES', 'smiles', 'canonical_smiles',
         'Compound ChEMBL ID', 'Target ChEMBL ID', 'Target Name',
@@ -244,9 +253,12 @@ def select_feature_columns(df: pd.DataFrame) -> List[str]:
         'source', 'label'
     }
     
-    # Select numeric columns not in exclude list
+    # Select numeric columns not in exclude list and not ending with _aff or _feat
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    feature_cols = [c for c in numeric_cols if c not in exclude]
+    feature_cols = [c for c in numeric_cols 
+                    if c not in exclude 
+                    and not c.endswith('_aff') 
+                    and not c.endswith('_feat')]
     
     return feature_cols
 
@@ -752,32 +764,23 @@ def run_comparison(args: argparse.Namespace) -> None:
         # Concatenate for UMAP fit
         X_train_concat = np.vstack([res['X_mf'], res['X_zinc']])
         
-        # Fit UMAP
-        emb_train = compute_umap_2d(
-            X_train_concat,
+        # Fit UMAP on MF+ZINC (Phase 1 workflow)
+        reducer = umap.UMAP(
+            n_components=2,
             n_neighbors=args.umap_n_neighbors,
             min_dist=args.umap_min_dist,
             metric='euclidean',
-            seed=None  # UMAP parallelism
+            random_state=None,  # UMAP parallelism
+            verbose=False
         )
+        emb_train = reducer.fit_transform(X_train_concat)
         
         # Split embeddings
         n_mf = len(res['X_mf'])
         Z_mf = emb_train[:n_mf]
         Z_zinc = emb_train[n_mf:]
         
-        # Transform actives (using UMAP transformer - approximate)
-        # Note: UMAP transform is approximate; for exact results we'd refit
-        # For now, we'll project actives into the space
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=args.umap_n_neighbors,
-            min_dist=args.umap_min_dist,
-            metric='euclidean',
-            random_state=None,
-            verbose=False
-        )
-        reducer.fit(X_train_concat)
+        # Transform actives using the fitted UMAP (Phase 1 workflow)
         Z_actives = reducer.transform(res['X_actives'])
         
         print(f"  UMAP embeddings: MF={Z_mf.shape}, ZINC={Z_zinc.shape}, Actives={Z_actives.shape}")
@@ -1032,7 +1035,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output_dir", default="tests/mordred_full_feature_eval/output_v2",
                    help="Output directory for results")
     
-    return p.parse_args()
+    # Test mode
+    p.add_argument("--test", action="store_true",
+                   help="Test mode: use minimal sample sizes for quick validation (n_mf=50, n_target=20, n_zinc=50, completes in <1 min)")
+    
+    args = p.parse_args()
+    
+    # Override sampling parameters in test mode
+    if args.test:
+        print("\n[TEST MODE] Using minimal sample sizes for quick validation")
+        args.n_mf = 50
+        args.n_target = 20
+        args.n_zinc = 50
+        if args.output_dir == "tests/mordred_full_feature_eval/output_v2":
+            args.output_dir = "tests/mordred_full_feature_eval/output_v2_test"
+    
+    return args
 
 
 if __name__ == "__main__":
