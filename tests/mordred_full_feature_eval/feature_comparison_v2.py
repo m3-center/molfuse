@@ -263,7 +263,7 @@ def extract_40_feature_subset(df: pd.DataFrame) -> List[str]:
     return [c for c in CURRENT_FEATURE_NAMES_40 if c in df.columns]
 
 
-def clean_scale_features(X: pd.DataFrame) -> Tuple[np.ndarray, List[str]]:
+def clean_scale_features(X: pd.DataFrame) -> Tuple[np.ndarray, List[str], SimpleImputer, StandardScaler]:
     """Clean and scale features: cast numeric, remove zero-variance, impute, scale.
     
     Args:
@@ -288,12 +288,13 @@ def clean_scale_features(X: pd.DataFrame) -> Tuple[np.ndarray, List[str]]:
     # Impute NaNs (median)
     imputer = SimpleImputer(strategy='median')
     X_imp = imputer.fit_transform(X)
-    
+
     # Scale
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_imp)
-    
-    return X_scaled, nonzero_cols
+
+    # Return trained imputer and scaler so callers can transform other sets (e.g., actives)
+    return X_scaled, nonzero_cols, imputer, scaler
 
 
 def compute_umap_2d(
@@ -693,28 +694,34 @@ def run_comparison(args: argparse.Namespace) -> None:
         X_train = pd.concat([X_mf, X_z], axis=0, ignore_index=True)
         
         print(f"  Cleaning and scaling...")
-        X_train_scaled, kept_cols = clean_scale_features(X_train)
-        
+        X_train_scaled, kept_cols, imputer, scaler = clean_scale_features(X_train)
+
         # Split back
         n_mf = len(X_mf)
         X_mf_scaled = X_train_scaled[:n_mf]
         X_z_scaled = X_train_scaled[n_mf:]
-        
-        # Transform actives with same columns
+
+        # Prepare actives: keep same columns, ensure numeric types, and drop NaNs (Phase 1 style)
         X_act_kept = X_act[kept_cols].copy()
         for c in X_act_kept.columns:
             X_act_kept[c] = pd.to_numeric(X_act_kept[c], errors='coerce')
-        X_act_kept = X_act_kept.dropna()
         
-        # Refit scaler on kept columns for actives
-        imputer = SimpleImputer(strategy='median')
-        scaler = StandardScaler()
-        X_act_imp = imputer.fit_transform(X_act_kept)
-        X_act_scaled = scaler.fit_transform(X_act_imp)
+        # Drop rows with any NaN (matching Phase 1 behavior)
+        X_act_kept = X_act_kept.dropna(axis=0, how='any')
+        
+        # Update df_act to match the kept rows (for consistency in later steps)
+        df_act = df_act.loc[X_act_kept.index].copy()
+
+        # Use the same imputer and scaler fit on training (MF+ZINC) to transform actives.
+        if len(X_act_kept) == 0:
+            X_act_scaled = np.empty((0, len(kept_cols)), dtype=float)
+        else:
+            X_act_imp = imputer.transform(X_act_kept)
+            X_act_scaled = scaler.transform(X_act_imp)
         
         print(f"  Features after cleaning: {len(kept_cols)}")
         print(f"  Train set: MF={len(X_mf_scaled)}, ZINC={len(X_z_scaled)}")
-        print(f"  Actives: {len(X_act_scaled)}")
+        print(f"  Actives: {len(X_act_scaled)}") # type: ignore
         
         # Store
         results[rep_name] = {
