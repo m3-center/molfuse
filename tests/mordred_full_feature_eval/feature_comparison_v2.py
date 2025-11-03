@@ -100,6 +100,7 @@ def load_kw_with_features(
     # Check for Parquet version and convert if needed
     parquet_path = feature_csv.with_suffix('.parquet')
     
+    # NOTE: If you encounter dtype errors, delete existing .parquet files to force re-conversion
     if parquet_path.exists():
         # Load from Parquet (10-100x faster)
         print(f"  Loading from Parquet: {parquet_path.name}")
@@ -153,6 +154,10 @@ def load_kw_with_features(
         raise ValueError(f"SMILES column not found in {feature_csv}")
     if 'accession' not in df.columns:
         raise ValueError(f"accession column not found in {feature_csv}")
+    
+    # Ensure Standard Value is numeric (defensive: dtype specification may not always work)
+    if 'Standard Value (nM)' in df.columns:
+        df['Standard Value (nM)'] = pd.to_numeric(df['Standard Value (nM)'], errors='coerce')
     
     # Split by accession (Phase 1 style)
     mask_target = (df['accession'] == target_accession)
