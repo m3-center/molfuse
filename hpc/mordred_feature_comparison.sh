@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-#SBATCH --partition=any
+#SBATCH --partition=hpc
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
-#SBATCH --time=0-04:00:00
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=300G
+#SBATCH --time=0-16:00:00
 #SBATCH --job-name=mordred_feature_comp_v2
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err

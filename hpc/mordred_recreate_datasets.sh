@@ -62,7 +62,7 @@ N_JOBS=${N_JOBS:--1}  # -1 = use all available CPUs (64)
 LIMIT_ZINC=${LIMIT_ZINC:-}
 LIMIT_KW=${LIMIT_KW:-}
 SKIP_EXISTING=${SKIP_EXISTING:-true}  # Skip existing files by default
-DRY_RUN=${DRY_RUN:-true}  # Dry run mode (preview only)
+DRY_RUN=${DRY_RUN:-false}  # Dry run mode (preview only)
 
 # --- Environment Setup ---
 echo "[SLURM] Activating conda environment: ummbas-screening-mordredcommunity"
