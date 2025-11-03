@@ -92,13 +92,17 @@ def load_kw_with_features(
         df_mf: DataFrame with SMILES + features + affinity (MF cloud)
     """
     # Load from CSV with optimizations (PyArrow engine + no type inference)
-    print(f"  Loading from CSV: {feature_csv.name}")
+    print(f"  Loading from CSV: {feature_csv.name}", flush=True)
     try:
         # Try PyArrow engine for 3-5x faster parsing
+        print(f"  Attempting PyArrow engine...", flush=True)
         df = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
-    except (ImportError, Exception):
+        print(f"  ✓ Loaded with PyArrow: {len(df)} rows", flush=True)
+    except (ImportError, Exception) as e:
         # Fallback to default engine if PyArrow not available
+        print(f"  PyArrow failed ({type(e).__name__}), using default engine...", flush=True)
         df = pd.read_csv(feature_csv, dtype=str, low_memory=False)
+        print(f"  ✓ Loaded with default engine: {len(df)} rows", flush=True)
     
     # Check for required columns
     if 'SMILES' not in df.columns:
@@ -170,12 +174,16 @@ def load_zinc_with_features(
         df_zinc: DataFrame with SMILES + features
     """
     # Load original ZINC (just to get SMILES list for sampling)
+    print(f"  Loading ZINC SMILES from: {zinc_csv.name}", flush=True)
     try:
         # Try PyArrow engine for faster parsing
         df_zinc_orig = pd.read_csv(zinc_csv, dtype=str, engine='pyarrow')
-    except (ImportError, Exception):
+        print(f"  ✓ Loaded ZINC SMILES with PyArrow: {len(df_zinc_orig)} rows", flush=True)
+    except (ImportError, Exception) as e:
         # Fallback to default engine
+        print(f"  PyArrow failed ({type(e).__name__}), using default engine...", flush=True)
         df_zinc_orig = pd.read_csv(zinc_csv, dtype=str, low_memory=False)
+        print(f"  ✓ Loaded ZINC SMILES with default engine: {len(df_zinc_orig)} rows", flush=True)
     
     if 'SMILES' not in df_zinc_orig.columns:
         raise ValueError(f"SMILES column not found in {zinc_csv}")
@@ -186,13 +194,17 @@ def load_zinc_with_features(
         df_zinc_orig = df_zinc_orig.sample(n=n_zinc, random_state=seed)
     
     # Load ZINC features from CSV with optimizations
-    print(f"  Loading ZINC features from CSV: {feature_csv.name}")
+    print(f"  Loading ZINC features from CSV: {feature_csv.name}", flush=True)
     try:
         # Try PyArrow engine for faster parsing
+        print(f"  Attempting PyArrow engine...", flush=True)
         df_feat = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
-    except (ImportError, Exception):
+        print(f"  ✓ Loaded ZINC features with PyArrow: {len(df_feat)} rows", flush=True)
+    except (ImportError, Exception) as e:
         # Fallback to default engine
+        print(f"  PyArrow failed ({type(e).__name__}), using default engine...", flush=True)
         df_feat = pd.read_csv(feature_csv, dtype=str, low_memory=False)
+        print(f"  ✓ Loaded ZINC features with default engine: {len(df_feat)} rows", flush=True)
     
     if 'SMILES' not in df_feat.columns:
         raise ValueError(f"SMILES column not found in {feature_csv}")
