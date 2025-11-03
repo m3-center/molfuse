@@ -18,22 +18,38 @@
 #   - Full 2D Mordred descriptors (1613 features, from datasets_2d_all/)
 #   - Full 2D+3D Mordred descriptors (1826 features, from datasets_2d3d_all/)
 #
+# Data loading (Phase 1 workflow):
+#   - Loads feature CSVs (which already contain affinity data + accession + features)
+#   - Splits actives from MF cloud by target_accession match
+#   - Example: KW-0808 file contains many targets; P00519 actives extracted by accession
+#
 # Key differences from v1:
 #   - NO descriptor computation (much faster)
 #   - Loads from pre-computed CSV files
-#   - Uses Phase 1 evaluation protocol (within-file accession split)
+#   - Uses Phase 1 evaluation protocol (exact 1-NN, scaler fit on MF+ZINC only)
 #   - Requires completed dataset recreation (recreate_datasets.py)
 #
 # Resource requirements:
 #   - 16 CPUs sufficient (UMAP parallelism only)
 #   - 128 GB RAM sufficient (no descriptor computation)
-#   - ~2-4 hours runtime (vs 24+ hours for v1)
+#   - ~2-4 hours runtime for full dataset (vs 24+ hours for v1)
+#   - <1 minute with --test flag
 #
 # Usage examples:
+#   # Quick test run (<1 min)
+#   sbatch --export=ALL,TEST_MODE=1 hpc/mordred_feature_comparison.sh
+#
+#   # Default: P00519 from KW-0808, all molecules
 #   sbatch hpc/mordred_feature_comparison.sh
-#   sbatch --export=ALL,KW_FILE=KW-0808_Transferase_affinity_extracted_features.csv,TARGET_ACCESSION=P00519 hpc/mordred_feature_comparison.sh
+#
+#   # Subsample for faster testing
 #   sbatch --export=ALL,N_MF=600,N_ZINC=600 hpc/mordred_feature_comparison.sh
-#   sbatch --export=ALL,DRY_RUN=1 hpc/mordred_feature_comparison.sh  # Dry run (print command only)
+#
+#   # Different target from same KW file
+#   sbatch --export=ALL,TARGET_ACCESSION=P00533 hpc/mordred_feature_comparison.sh
+#
+#   # Dry run (print command only)
+#   sbatch --export=ALL,DRY_RUN=1 hpc/mordred_feature_comparison.sh
 #
 # To override variables, pass them via --export=ALL,VAR=VALUE,...
 # Common overrides: KW_FILE, TARGET_ACCESSION, N_MF, N_TARGET, N_ZINC, OUTPUT_DIR, DRY_RUN
@@ -45,11 +61,14 @@ echo "[SLURM] WORKDIR=${WORKDIR}"
 cd "${WORKDIR}" || { echo "[SLURM][ERROR] Repo not found at ${WORKDIR}"; exit 1; }
 
 # Defaults (override via SBATCH --export=ALL,VAR=value)
+# Test mode (set TEST_MODE=1 for quick validation)
+TEST_MODE=${TEST_MODE:-0}
+
 # Required: KW file and target accession for Phase 1 style split
 KW_FILE="${KW_FILE:-KW-0808_Transferase_affinity_extracted_features.csv}"
 TARGET_ACCESSION="${TARGET_ACCESSION:-P00519}"
 
-# Sampling parameters (None = use all)
+# Sampling parameters (None = use all, or set by TEST_MODE)
 N_MF=${N_MF:-}          # MF cloud sample size (blank = all)
 N_TARGET=${N_TARGET:-}  # Target actives sample size (blank = all)
 N_ZINC=${N_ZINC:-600}   # ZINC decoys sample size
@@ -60,7 +79,7 @@ FULL_2D_DIR="${FULL_2D_DIR:-/home/ahagg2s/UMMBAS_screening_experiments/output_re
 FULL_2D3D_DIR="${FULL_2D3D_DIR:-/home/ahagg2s/UMMBAS_screening_experiments/output_recalculated_full_datasets/datasets_2d3d_all}"
 
 # Evaluation parameters
-AFFINITY_CUTOFF_NM=${AFFINITY_CUTOFF_NM:-100}
+AFFINITY_CUTOFF_NM=${AFFINITY_CUTOFF_NM:-100000}  # We want to include all/most data!
 SEED=${SEED:-42}
 
 # UMAP parameters
@@ -73,6 +92,15 @@ OUTPUT_DIR=${OUTPUT_DIR:-tests/mordred_full_feature_eval/output_v2_${KW_FILE%.cs
 # Dry run flag (set to 1 to print command only)
 DRY_RUN=${DRY_RUN:-0}
 
+# --- Test Mode Override ---
+if [ "${TEST_MODE}" = "1" ]; then
+  echo "[SLURM] TEST MODE ENABLED - Using minimal sample sizes"
+  N_MF=50
+  N_TARGET=20
+  N_ZINC=50
+  OUTPUT_DIR="tests/mordred_full_feature_eval/output_v2_test_${TARGET_ACCESSION}"
+fi
+
 # --- Environment Setup ---
 echo "[SLURM] Activating conda environment: ummbas-screening-mordredcommunity"
 source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
@@ -82,6 +110,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 # Log configuration
 echo "[SLURM] Configuration:"
+echo "  TEST_MODE=${TEST_MODE}"
 echo "  KW_FILE=${KW_FILE}"
 echo "  TARGET_ACCESSION=${TARGET_ACCESSION}"
 echo "  N_MF=${N_MF:-all}"

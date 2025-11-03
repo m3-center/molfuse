@@ -68,21 +68,19 @@ CURRENT_FEATURE_NAMES_40 = [
 ]
 
 
-def load_kw_affinity_with_features(
-    affinity_csv: Path,
+def load_kw_with_features(
     feature_csv: Path,
     target_accession: str,
     n_mf: Optional[int] = None,
     n_target: Optional[int] = None,
     seed: int = 42
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Load KW file and split into target actives and MF cloud.
+    """Load KW feature file and split into target actives and MF cloud (Phase 1 style).
     
-    Loads affinity data (for potency values) and matches with features.
+    The feature CSV already contains both affinity data AND features (all in one file).
     
     Args:
-        affinity_csv: Path to affinity CSV (has SMILES + Standard Value (nM) + accession)
-        feature_csv: Path to feature CSV (has SMILES + descriptors)
+        feature_csv: Path to feature CSV (has SMILES + Standard Value (nM) + accession + descriptors)
         target_accession: Accession to identify target actives
         n_mf: Number of MF molecules to sample (None = all)
         n_target: Number of target molecules to sample (None = all)
@@ -92,67 +90,49 @@ def load_kw_affinity_with_features(
         df_actives: DataFrame with SMILES + features + affinity (target molecules)
         df_mf: DataFrame with SMILES + features + affinity (MF cloud)
     """
-    # Load affinity data
-    df_aff = pd.read_csv(affinity_csv, low_memory=False)
+    # Load feature file (already contains affinity + features together)
+    df = pd.read_csv(feature_csv, low_memory=False)
     
     # Check for required columns
-    if 'SMILES' not in df_aff.columns:
-        raise ValueError(f"SMILES column not found in {affinity_csv}")
-    if 'accession' not in df_aff.columns:
-        raise ValueError(f"accession column not found in {affinity_csv}")
+    if 'SMILES' not in df.columns:
+        raise ValueError(f"SMILES column not found in {feature_csv}")
+    if 'accession' not in df.columns:
+        raise ValueError(f"accession column not found in {feature_csv}")
     
     # Split by accession (Phase 1 style)
-    mask_target = (df_aff['accession'] == target_accession)
-    df_aff_actives = df_aff[mask_target].copy()
-    df_aff_mf = df_aff[~mask_target].copy()
+    mask_target = (df['accession'] == target_accession)
+    df_actives = df[mask_target].copy()
+    df_mf = df[~mask_target].copy()
     
     # Deduplicate by SMILES (median affinity if duplicates)
-    if 'Standard Value (nM)' in df_aff_actives.columns:
-        df_aff_actives = df_aff_actives.groupby('SMILES', as_index=False).agg({
-            'Standard Value (nM)': 'median',
-            'accession': 'first',
-        })
+    if 'Standard Value (nM)' in df_actives.columns:
+        # Build aggregation dict for all columns
+        agg_dict = {'Standard Value (nM)': 'median'}
+        for col in df_actives.columns:
+            if col not in ['SMILES', 'Standard Value (nM)']:
+                agg_dict[col] = 'first'
+        df_actives = df_actives.groupby('SMILES', as_index=False).agg(agg_dict)
     else:
-        df_aff_actives = df_aff_actives.drop_duplicates(subset=['SMILES'], keep='first')
+        df_actives = df_actives.drop_duplicates(subset=['SMILES'], keep='first')
     
-    if 'Standard Value (nM)' in df_aff_mf.columns:
-        df_aff_mf = df_aff_mf.groupby('SMILES', as_index=False).agg({
-            'Standard Value (nM)': 'median',
-            'accession': 'first',
-        })
+    if 'Standard Value (nM)' in df_mf.columns:
+        agg_dict = {'Standard Value (nM)': 'median'}
+        for col in df_mf.columns:
+            if col not in ['SMILES', 'Standard Value (nM)']:
+                agg_dict[col] = 'first'
+        df_mf = df_mf.groupby('SMILES', as_index=False).agg(agg_dict)
     else:
-        df_aff_mf = df_aff_mf.drop_duplicates(subset=['SMILES'], keep='first')
-    
-    # Keep only essential metadata columns from affinity data (SMILES, Standard Value, accession)
-    # This avoids merge suffix issues (_aff, _feat) when merging with feature data
-    affinity_cols_to_keep = ['SMILES']
-    if 'Standard Value (nM)' in df_aff_actives.columns:
-        affinity_cols_to_keep.append('Standard Value (nM)')
-    if 'accession' in df_aff_actives.columns:
-        affinity_cols_to_keep.append('accession')
-    
-    df_aff_actives = df_aff_actives[affinity_cols_to_keep].copy()
-    df_aff_mf = df_aff_mf[affinity_cols_to_keep].copy()
+        df_mf = df_mf.drop_duplicates(subset=['SMILES'], keep='first')
     
     # Sample if requested
-    if n_target and len(df_aff_actives) > n_target:
-        df_aff_actives = df_aff_actives.sample(n=n_target, random_state=seed)
+    if n_target and len(df_actives) > n_target:
+        df_actives = df_actives.sample(n=n_target, random_state=seed)
     
-    if n_mf and len(df_aff_mf) > n_mf:
-        df_aff_mf = df_aff_mf.sample(n=n_mf, random_state=seed)
+    if n_mf and len(df_mf) > n_mf:
+        df_mf = df_mf.sample(n=n_mf, random_state=seed)
     
-    # Load features
-    df_feat = pd.read_csv(feature_csv, low_memory=False)
-    
-    if 'SMILES' not in df_feat.columns:
-        raise ValueError(f"SMILES column not found in {feature_csv}")
-    
-    # Merge affinity with features (no suffix needed since we kept only essential columns)
-    df_actives = df_aff_actives.merge(df_feat, on='SMILES', how='inner')
-    df_mf = df_aff_mf.merge(df_feat, on='SMILES', how='inner')
-    
-    print(f"  Loaded actives: {len(df_aff_actives)} (affinity) → {len(df_actives)} (with features)")
-    print(f"  Loaded MF: {len(df_aff_mf)} (affinity) → {len(df_mf)} (with features)")
+    print(f"  Loaded actives: {len(df_actives)}")
+    print(f"  Loaded MF: {len(df_mf)}")
     
     return df_actives, df_mf
 
@@ -342,7 +322,10 @@ def compute_umap_2d(
 
 
 def nn_min_distance_scores(Z_mf: np.ndarray, Z_eval: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Score molecules by 1-NN min distance to MF cloud.
+    """Score molecules by 1-NN min distance to MF cloud (Phase 1 exact algorithm).
+    
+    Uses sklearn.neighbors.NearestNeighbors with 'auto' algorithm selection
+    (KDTree or BallTree) for optimized exact 1-NN search.
     
     Args:
         Z_mf: MF embeddings (n_mf, dim)
@@ -352,18 +335,20 @@ def nn_min_distance_scores(Z_mf: np.ndarray, Z_eval: np.ndarray) -> Tuple[np.nda
         scores: -distance (higher is better)
         distances: Raw distances
     """
-    from scipy.spatial.distance import cdist
+    from sklearn.neighbors import NearestNeighbors
     
-    # Compute pairwise distances
-    dists = cdist(Z_eval, Z_mf, metric='euclidean')
+    # Fit 1-NN on MF cloud (Phase 1 exact algorithm)
+    nn = NearestNeighbors(n_neighbors=1, metric='euclidean', algorithm='auto', n_jobs=-1)
+    nn.fit(Z_mf)
     
-    # Min distance to MF for each eval molecule
-    min_dists = dists.min(axis=1)
+    # Query distances for evaluation set
+    distances, _ = nn.kneighbors(Z_eval, return_distance=True)
+    distances = distances.reshape(-1)
     
     # Score = -distance (higher score = closer to MF)
-    scores = -min_dists
+    scores = -distances
     
-    return scores, min_dists
+    return scores, distances
 
 
 def ef_at_percent(scores: np.ndarray, labels: np.ndarray, percent: float = 1.0) -> float:
@@ -507,7 +492,6 @@ def run_comparison(args: argparse.Namespace) -> None:
     
     # Setup paths
     base_dir = Path(args.base_dir).resolve()
-    affinity_dir = base_dir / "datasets" / "molecular_function_affinity_data"
     features_40_dir = base_dir / "datasets" / "molecular_function_features_fingerprints"
     features_2d_dir = Path(args.full_2d_dir).resolve()
     features_2d3d_dir = Path(args.full_2d3d_dir).resolve()
@@ -537,27 +521,15 @@ def run_comparison(args: argparse.Namespace) -> None:
     # 1A) Load 40-feature representation
     print("\n[1/3] Loading 40-feature representation...")
     
-    # Affinity files don't have "_extracted_features" suffix, features files do
-    # E.g., affinity: "KW-0808_Transferase_affinity.csv"
-    #       features: "KW-0808_Transferase_affinity_extracted_features.csv"
-    if kw_file.endswith("_extracted_features.csv"):
-        affinity_filename = kw_file.replace("_extracted_features.csv", ".csv")
-    else:
-        affinity_filename = kw_file
-    
-    affinity_csv = affinity_dir / affinity_filename
     features_40_csv = features_40_dir / kw_file
     
-    print(f"  Affinity file: {affinity_csv.name}")
     print(f"  Features file: {features_40_csv.name}")
     
-    if not affinity_csv.exists():
-        raise FileNotFoundError(f"Affinity CSV not found: {affinity_csv}")
     if not features_40_csv.exists():
         raise FileNotFoundError(f"40-feature CSV not found: {features_40_csv}")
     
-    df_actives_40, df_mf_40 = load_kw_affinity_with_features(
-        affinity_csv, features_40_csv, target_accession,
+    df_actives_40, df_mf_40 = load_kw_with_features(
+        features_40_csv, target_accession,
         n_mf=args.n_mf, n_target=args.n_target, seed=args.seed
     )
     
@@ -580,8 +552,8 @@ def run_comparison(args: argparse.Namespace) -> None:
     if not zinc_2d_csv.exists():
         raise FileNotFoundError(f"ZINC full 2D CSV not found: {zinc_2d_csv}")
     
-    df_actives_2d, df_mf_2d = load_kw_affinity_with_features(
-        affinity_csv, features_2d_csv, target_accession,
+    df_actives_2d, df_mf_2d = load_kw_with_features(
+        features_2d_csv, target_accession,
         n_mf=args.n_mf, n_target=args.n_target, seed=args.seed
     )
     df_zinc_2d = load_zinc_with_features(zinc_orig_csv, zinc_2d_csv, args.n_zinc, seed=args.seed)
@@ -596,8 +568,8 @@ def run_comparison(args: argparse.Namespace) -> None:
     if not zinc_2d3d_csv.exists():
         raise FileNotFoundError(f"ZINC full 2D+3D CSV not found: {zinc_2d3d_csv}")
     
-    df_actives_2d3d, df_mf_2d3d = load_kw_affinity_with_features(
-        affinity_csv, features_2d3d_csv, target_accession,
+    df_actives_2d3d, df_mf_2d3d = load_kw_with_features(
+        features_2d3d_csv, target_accession,
         n_mf=args.n_mf, n_target=args.n_target, seed=args.seed
     )
     df_zinc_2d3d = load_zinc_with_features(zinc_orig_csv, zinc_2d3d_csv, args.n_zinc, seed=args.seed)
