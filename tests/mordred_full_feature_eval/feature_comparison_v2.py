@@ -115,9 +115,10 @@ def load_kw_with_features(
             'Target ChEMBL ID': str,
             'Target Name': str,
             'Activity Type': str,
+            'Standard Value (nM)': float,  # Explicitly numeric (inference can fail for unusual column names)
             'target_chembl_id': str,
             'accession': str,
-            # All numeric feature columns will be inferred (much more memory-efficient than str)
+            # All other numeric feature columns will be inferred (much more memory-efficient than str)
         }
         
         try:
