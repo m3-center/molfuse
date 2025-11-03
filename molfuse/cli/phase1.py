@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# TODO: Consider implementing CSV loading optimizations from feature_comparison_v2.py:
+#   1. dtype=str to prevent type inference (2-5x faster)
+#   2. engine='pyarrow' for faster parsing (3-5x faster, with graceful fallback)
+#   3. Automatic Parquet conversion with caching (10-100x faster on subsequent runs)
+#   These optimizations reduced 10GB CSV load times from 5-10 minutes to 30-120 seconds.
+#   See tests/mordred_full_feature_eval/feature_comparison_v2.py for implementation reference.
+
 import argparse
 import json
 import re
