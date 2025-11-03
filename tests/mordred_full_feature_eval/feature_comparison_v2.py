@@ -78,7 +78,7 @@ def load_kw_with_features(
     """Load KW feature file and split into target actives and MF cloud (Phase 1 style).
     
     The feature CSV already contains both affinity data AND features (all in one file).
-    Uses PyArrow engine for fast CSV parsing.
+    Automatically uses Parquet format if available (10-100x faster loading).
     
     Args:
         feature_csv: Path to feature CSV (has SMILES + Standard Value (nM) + accession + descriptors)
@@ -91,18 +91,42 @@ def load_kw_with_features(
         df_actives: DataFrame with SMILES + features + affinity (target molecules)
         df_mf: DataFrame with SMILES + features + affinity (MF cloud)
     """
-    # Load from CSV with optimizations (PyArrow engine + no type inference)
-    print(f"  Loading from CSV: {feature_csv.resolve()}", flush=True)
-    try:
-        # Try PyArrow engine for 3-5x faster parsing
-        print(f"  Attempting PyArrow engine...", flush=True)
-        df = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
-        print(f"  ✓ Loaded with PyArrow: {len(df)} rows", flush=True)
-    except (ImportError, Exception) as e:
-        # Fallback to default engine if PyArrow not available
-        print(f"  PyArrow failed ({type(e).__name__}), using default engine...", flush=True)
-        df = pd.read_csv(feature_csv, dtype=str, low_memory=False)
-        print(f"  ✓ Loaded with default engine: {len(df)} rows", flush=True)
+    # Check for Parquet version and convert if needed
+    parquet_path = feature_csv.with_suffix('.parquet')
+    
+    if parquet_path.exists():
+        # Load from Parquet (10-100x faster)
+        print(f"  Loading from Parquet: {parquet_path.name}")
+        df = pd.read_parquet(parquet_path)
+    else:
+        # Load from CSV with optimizations (2-10x faster: PyArrow engine + no type inference)
+        print(f"  Loading from CSV: {feature_csv.name}")
+        try:
+            # Try PyArrow engine for 3-5x faster parsing
+            df = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
+        except (ImportError, Exception):
+            # Fallback to default engine if PyArrow not available
+            df = pd.read_csv(feature_csv, dtype=str, low_memory=False)
+        
+        # Convert to Parquet for future runs (one-time cost)
+        try:
+            print(f"  Converting to Parquet for faster future loads...")
+            n_rows_csv = len(df)
+            df.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
+            
+            # Validate: check row count matches
+            df_check = pd.read_parquet(parquet_path)
+            n_rows_parquet = len(df_check)
+            if n_rows_csv != n_rows_parquet:
+                print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
+                # Delete corrupted Parquet file
+                parquet_path.unlink()
+                print(f"  Deleted corrupted Parquet file")
+            else:
+                print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
+            del df_check
+        except Exception as e:
+            print(f"  Warning: Could not save Parquet file: {e}")
     
     # Check for required columns
     if 'SMILES' not in df.columns:
@@ -162,7 +186,7 @@ def load_zinc_with_features(
 ) -> pd.DataFrame:
     """Load ZINC molecules with features.
     
-    Uses PyArrow engine for fast CSV parsing (3-5x faster than default pandas).
+    Automatically uses Parquet format if available (10-100x faster loading).
     
     Args:
         zinc_csv: Path to ZINC CSV (original, for SMILES list)
@@ -174,16 +198,12 @@ def load_zinc_with_features(
         df_zinc: DataFrame with SMILES + features
     """
     # Load original ZINC (just to get SMILES list for sampling)
-    print(f"  Loading ZINC SMILES from: {zinc_csv.resolve()}", flush=True)
     try:
         # Try PyArrow engine for faster parsing
         df_zinc_orig = pd.read_csv(zinc_csv, dtype=str, engine='pyarrow')
-        print(f"  ✓ Loaded ZINC SMILES with PyArrow: {len(df_zinc_orig)} rows", flush=True)
-    except (ImportError, Exception) as e:
+    except (ImportError, Exception):
         # Fallback to default engine
-        print(f"  PyArrow failed ({type(e).__name__}), using default engine...", flush=True)
         df_zinc_orig = pd.read_csv(zinc_csv, dtype=str, low_memory=False)
-        print(f"  ✓ Loaded ZINC SMILES with default engine: {len(df_zinc_orig)} rows", flush=True)
     
     if 'SMILES' not in df_zinc_orig.columns:
         raise ValueError(f"SMILES column not found in {zinc_csv}")
@@ -193,18 +213,40 @@ def load_zinc_with_features(
     if len(df_zinc_orig) > n_zinc:
         df_zinc_orig = df_zinc_orig.sample(n=n_zinc, random_state=seed)
     
-    # Load ZINC features from CSV with optimizations
-    print(f"  Loading ZINC features from CSV: {feature_csv.resolve()}", flush=True)
-    try:
-        # Try PyArrow engine for faster parsing
-        print(f"  Attempting PyArrow engine...", flush=True)
-        df_feat = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
-        print(f"  ✓ Loaded ZINC features with PyArrow: {len(df_feat)} rows", flush=True)
-    except (ImportError, Exception) as e:
-        # Fallback to default engine
-        print(f"  PyArrow failed ({type(e).__name__}), using default engine...", flush=True)
-        df_feat = pd.read_csv(feature_csv, dtype=str, low_memory=False)
-        print(f"  ✓ Loaded ZINC features with default engine: {len(df_feat)} rows", flush=True)
+    # Load features with Parquet optimization
+    parquet_path = feature_csv.with_suffix('.parquet')
+    
+    if parquet_path.exists():
+        print(f"  Loading ZINC features from Parquet: {parquet_path.name}")
+        df_feat = pd.read_parquet(parquet_path)
+    else:
+        print(f"  Loading ZINC features from CSV: {feature_csv.name}")
+        try:
+            # Try PyArrow engine for faster parsing
+            df_feat = pd.read_csv(feature_csv, dtype=str, engine='pyarrow')
+        except (ImportError, Exception):
+            # Fallback to default engine
+            df_feat = pd.read_csv(feature_csv, dtype=str, low_memory=False)
+        
+        # Convert to Parquet for future runs
+        try:
+            print(f"  Converting ZINC to Parquet for faster future loads...")
+            n_rows_csv = len(df_feat)
+            df_feat.to_parquet(parquet_path, compression='snappy', engine='pyarrow', index=False)
+            
+            # Validate: check row count matches
+            df_check = pd.read_parquet(parquet_path)
+            n_rows_parquet = len(df_check)
+            if n_rows_csv != n_rows_parquet:
+                print(f"  WARNING: Row count mismatch! CSV={n_rows_csv}, Parquet={n_rows_parquet}")
+                # Delete corrupted Parquet file
+                parquet_path.unlink()
+                print(f"  Deleted corrupted Parquet file")
+            else:
+                print(f"  ✓ Saved: {parquet_path.name} ({n_rows_parquet} rows)")
+            del df_check
+        except Exception as e:
+            print(f"  Warning: Could not save Parquet file: {e}")
     
     if 'SMILES' not in df_feat.columns:
         raise ValueError(f"SMILES column not found in {feature_csv}")
@@ -561,7 +603,7 @@ def run_comparison(args: argparse.Namespace) -> None:
     
     features_40_csv = features_40_dir / kw_file
     
-    print(f"  Features file: {features_40_csv.resolve()}", flush=True)
+    print(f"  Features file: {features_40_csv.name}")
     
     if not features_40_csv.exists():
         raise FileNotFoundError(f"40-feature CSV not found: {features_40_csv}")
