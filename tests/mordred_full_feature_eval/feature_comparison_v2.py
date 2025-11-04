@@ -645,6 +645,22 @@ def run_comparison(args: argparse.Namespace) -> None:
     print("STEP 1: Loading data from three representations")
     print("="*80)
     
+    # Load ZINC SMILES once (just identifiers, minimal memory ~100 MB)
+    print("\n[0] Loading ZINC SMILES list (will be reused across representations)...")
+    zinc_orig_csv = base_dir / "datasets" / "zinc_data.csv"
+    
+    dtype_dict = {'SMILES': str}
+    try:
+        df_zinc_smiles = pd.read_csv(zinc_orig_csv, dtype=dtype_dict, engine='pyarrow', usecols=['SMILES'])
+    except (ImportError, Exception):
+        df_zinc_smiles = pd.read_csv(zinc_orig_csv, dtype=dtype_dict, low_memory=False, usecols=['SMILES'])
+    
+    df_zinc_smiles = df_zinc_smiles.drop_duplicates(subset=['SMILES'], keep='first')
+    if args.n_zinc and len(df_zinc_smiles) > args.n_zinc:
+        df_zinc_smiles = df_zinc_smiles.sample(n=args.n_zinc, random_state=args.seed)
+    
+    print(f"  Loaded ZINC SMILES: {len(df_zinc_smiles)} (will reuse for all representations)")
+    
     # 1A) Load 40-feature representation
     print("\n[1/3] Loading 40-feature representation...")
     
@@ -660,8 +676,7 @@ def run_comparison(args: argparse.Namespace) -> None:
         n_mf=args.n_mf, n_target=args.n_target, seed=args.seed
     )
     
-    # Load ZINC
-    zinc_orig_csv = base_dir / "datasets" / "zinc_data.csv"
+    # Load ZINC features and merge with SMILES list
     zinc_40_csv = features_40_dir / "zinc" / "zinc_acquirable_extracted_features.csv"
     
     if not zinc_40_csv.exists():
@@ -770,6 +785,14 @@ def run_comparison(args: argparse.Namespace) -> None:
     print(f"  MF cloud: {len(df_mf_40)}")
     print(f"  ZINC: {len(df_zinc_40)}")
     
+    # Store counts for later reporting (before cleanup)
+    n_valid_smiles = len(valid_smiles)
+    n_smiles_40 = len(smiles_40)
+    
+    # Cleanup: delete SMILES sets and temporary variables
+    del smiles_40, smiles_2d, smiles_2d3d, valid_smiles, df_zinc_smiles
+    gc.collect()
+    
     # ========================================================================
     # STEP 3: Prepare features for each representation
     # ========================================================================
@@ -812,11 +835,18 @@ def run_comparison(args: argparse.Namespace) -> None:
         print(f"    Actives with ANY NaN: {X_act.isna().any(axis=1).sum()} ({100*nan_rate_actives:.1f}%)")
         
         X_train_scaled, kept_cols, imputer, scaler = clean_scale_features(X_train)
+        
+        # Convert to float32 (50% memory savings)
+        X_train_scaled = X_train_scaled.astype(np.float32)
 
         # Split back
         n_mf = len(X_mf)
         X_mf_scaled = X_train_scaled[:n_mf]
         X_z_scaled = X_train_scaled[n_mf:]
+        
+        # Delete training concatenation to free memory immediately
+        del X_train, X_train_scaled
+        gc.collect()
 
         # Prepare actives: keep same columns, ensure numeric types
         X_act_kept = X_act[kept_cols].copy()
@@ -831,6 +861,9 @@ def run_comparison(args: argparse.Namespace) -> None:
         else:
             X_act_imp = imputer.transform(X_act_kept)  # Impute NaNs using training medians
             X_act_scaled = scaler.transform(X_act_imp)
+            
+            # Convert to float32 (50% memory savings)
+            X_act_scaled = X_act_scaled.astype(np.float32)
             
             # Check for any remaining NaNs or infs after imputation (should be rare)
             nan_mask = np.isnan(X_act_scaled).any(axis=1) | np.isinf(X_act_scaled).any(axis=1)
@@ -856,7 +889,10 @@ def run_comparison(args: argparse.Namespace) -> None:
             'kept_cols': kept_cols,
         }
         
+        # Aggressive cleanup: delete large intermediate arrays
+        del X_act, X_mf, X_z, X_act_kept, X_act_imp, feat_cols, kept_cols
         gc.collect()
+        print(f"  Memory freed for {rep_name}")
     
     # ========================================================================
     # STEP 4: UMAP embeddings and scoring
@@ -884,14 +920,20 @@ def run_comparison(args: argparse.Namespace) -> None:
             verbose=False
         )
         emb_train = reducer.fit_transform(X_train_concat)
+        emb_train = emb_train.astype(np.float32)  # Convert to float32
         
         # Split embeddings
         n_mf = len(res['X_mf'])
         Z_mf = emb_train[:n_mf]
         Z_zinc = emb_train[n_mf:]
         
+        # Delete concatenated training data
+        del X_train_concat, emb_train
+        gc.collect()
+        
         # Transform actives using the fitted UMAP (Phase 1 workflow)
         Z_actives = reducer.transform(res['X_actives'])
+        Z_actives = Z_actives.astype(np.float32)  # Convert to float32
         
         print(f"  UMAP embeddings: MF={Z_mf.shape}, ZINC={Z_zinc.shape}, Actives={Z_actives.shape}")
         
@@ -975,7 +1017,10 @@ def run_comparison(args: argparse.Namespace) -> None:
         results[rep_name]['scores'] = scores
         results[rep_name]['labels'] = labels
         
+        # Aggressive cleanup: delete UMAP reducer and large arrays
+        del reducer, Z_mf_scoring, Z_eval, scores, distances, labels
         gc.collect()
+        print(f"  Memory freed after {rep_name} UMAP")
     
     # ========================================================================
     # STEP 5: Save results and visualizations
@@ -998,8 +1043,8 @@ def run_comparison(args: argparse.Namespace) -> None:
         },
         'metrics': all_metrics,
         'molecule_counts': {
-            'valid_smiles_intersection': len(valid_smiles),
-            'molecules_lost': len(smiles_40) - len(valid_smiles),
+            'valid_smiles_intersection': n_valid_smiles,
+            'molecules_lost': n_smiles_40 - n_valid_smiles,
         }
     }
     
