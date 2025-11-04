@@ -436,7 +436,7 @@ def compute_umap_2d(
         embedding: 2D coordinates (n_samples, 2)
     """
     reducer = umap.UMAP(
-        n_components=2,
+        n_components=5,
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         metric=metric,
