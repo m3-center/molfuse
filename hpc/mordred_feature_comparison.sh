@@ -71,7 +71,7 @@ TARGET_ACCESSION="${TARGET_ACCESSION:-P00519}"
 # Sampling parameters (None = use all, or set by TEST_MODE)
 N_MF=${N_MF:-}          # MF cloud sample size (blank = all)
 N_TARGET=${N_TARGET:-}  # Target actives sample size (blank = all)
-N_ZINC=${N_ZINC:-600}   # ZINC decoys sample size
+N_ZINC=${N_ZINC:-}      # ZINC decoys sample size (blank = all; was 600 for testing)
 
 # Data directories (pre-computed features)
 BASE_DIR="${BASE_DIR:-.}"
@@ -132,7 +132,6 @@ CMD=(
   python tests/mordred_full_feature_eval/feature_comparison_v2.py
     --kw_file "${KW_FILE}"
     --target_accession "${TARGET_ACCESSION}"
-    --n_zinc "${N_ZINC}"
     --base_dir "${BASE_DIR}"
     --full_2d_dir "${FULL_2D_DIR}"
     --full_2d3d_dir "${FULL_2D3D_DIR}"
@@ -150,6 +149,10 @@ fi
 
 if [ -n "${N_TARGET}" ]; then
   CMD+=( --n_target "${N_TARGET}" )
+fi
+
+if [ -n "${N_ZINC}" ]; then
+  CMD+=( --n_zinc "${N_ZINC}" )
 fi
 
 echo "[SLURM] Running in $(pwd)"

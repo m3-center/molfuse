@@ -159,6 +159,14 @@ def load_kw_with_features(
     if 'Standard Value (nM)' in df.columns:
         df['Standard Value (nM)'] = pd.to_numeric(df['Standard Value (nM)'], errors='coerce')
     
+    # Convert all non-metadata columns to numeric immediately after loading
+    # (prevents NaN explosion later when actives are processed)
+    metadata_cols = {'Compound ChEMBL ID', 'SMILES', 'Target ChEMBL ID', 'Target Name', 
+                     'Activity Type', 'target_chembl_id', 'accession'}
+    for col in df.columns:
+        if col not in metadata_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
     # Split by accession (Phase 1 style)
     mask_target = (df['accession'] == target_accession)
     df_actives = df[mask_target].copy()
@@ -201,7 +209,7 @@ def load_kw_with_features(
 def load_zinc_with_features(
     zinc_csv: Path,
     feature_csv: Path,
-    n_zinc: int,
+    n_zinc: Optional[int] = None,
     seed: int = 42
 ) -> pd.DataFrame:
     """Load ZINC molecules with features.
@@ -211,7 +219,7 @@ def load_zinc_with_features(
     Args:
         zinc_csv: Path to ZINC CSV (original, for SMILES list)
         feature_csv: Path to ZINC feature CSV
-        n_zinc: Number of ZINC molecules to sample
+        n_zinc: Number of ZINC molecules to sample (None = all)
         seed: Random seed
         
     Returns:
@@ -233,7 +241,7 @@ def load_zinc_with_features(
     
     # Deduplicate and sample
     df_zinc_orig = df_zinc_orig.drop_duplicates(subset=['SMILES'], keep='first')
-    if len(df_zinc_orig) > n_zinc:
+    if n_zinc and len(df_zinc_orig) > n_zinc:
         df_zinc_orig = df_zinc_orig.sample(n=n_zinc, random_state=seed)
     
     # Load features with Parquet optimization
@@ -277,6 +285,11 @@ def load_zinc_with_features(
     
     if 'SMILES' not in df_feat.columns:
         raise ValueError(f"SMILES column not found in {feature_csv}")
+    
+    # Convert all non-SMILES columns to numeric immediately after loading
+    for col in df_feat.columns:
+        if col != 'SMILES':
+            df_feat[col] = pd.to_numeric(df_feat[col], errors='coerce')
     
     # Merge
     df_zinc = df_zinc_orig[['SMILES']].merge(df_feat, on='SMILES', how='inner')
@@ -1085,8 +1098,8 @@ def parse_args() -> argparse.Namespace:
                    help="Number of MF molecules to sample (default: all)")
     p.add_argument("--n_target", type=int, default=None,
                    help="Number of target molecules to sample (default: all)")
-    p.add_argument("--n_zinc", type=int, default=600,
-                   help="Number of ZINC molecules to sample (default: 600)")
+    p.add_argument("--n_zinc", type=int, default=None,
+                   help="Number of ZINC molecules to sample (default: all; was 600 for testing)")
     
     # Data directories
     p.add_argument("--base_dir", default=".",
