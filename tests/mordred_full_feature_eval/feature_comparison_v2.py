@@ -19,6 +19,13 @@ Evaluation protocol (mimicking Phase 1):
 - Compute metrics: EF@1%, ROC-AUC, PR-AUC, Spearman ρ
 - Generate visualizations
 
+Feature selection strategy (aligned with analyze_feature_availability.py results):
+- Uses "training_only" strategy: select features based on MF+ZINC variance (zero-variance removal)
+- Transform actives using fitted imputer/scaler (median imputation for NaNs)
+- This mimics deployment scenario where test set is unknown during training
+- Based on feature availability analysis, this retains ~1477 features (2D) and ~1693 features (2D+3D)
+  vs ~763 features with "all_molecules" (100% coverage) strategy
+
 Key differences from original feature_comparison.py:
 - NO descriptor computation (loads pre-computed features)
 - Loads from affinity CSVs to get potency values for ranking
@@ -798,6 +805,12 @@ def run_comparison(args: argparse.Namespace) -> None:
         X_train = pd.concat([X_mf, X_z], axis=0, ignore_index=True)
         
         print(f"  Cleaning and scaling...")
+        print(f"    Initial features: {len(feat_cols)}")
+        
+        # Check NaN rates before cleaning
+        nan_rate_actives = X_act.isna().any(axis=1).sum() / len(X_act) if len(X_act) > 0 else 0
+        print(f"    Actives with ANY NaN: {X_act.isna().any(axis=1).sum()} ({100*nan_rate_actives:.1f}%)")
+        
         X_train_scaled, kept_cols, imputer, scaler = clean_scale_features(X_train)
 
         # Split back
@@ -805,27 +818,32 @@ def run_comparison(args: argparse.Namespace) -> None:
         X_mf_scaled = X_train_scaled[:n_mf]
         X_z_scaled = X_train_scaled[n_mf:]
 
-        # Prepare actives: keep same columns, ensure numeric types, and drop NaNs (Phase 1 style)
+        # Prepare actives: keep same columns, ensure numeric types
         X_act_kept = X_act[kept_cols].copy()
         for c in X_act_kept.columns:
             X_act_kept[c] = pd.to_numeric(X_act_kept[c], errors='coerce')
         
-        # Drop rows with any NaN (matching Phase 1 behavior)
-        X_act_kept = X_act_kept.dropna(axis=0, how='any')
-        
-        # Update df_act to match the kept rows (for consistency in later steps)
-        df_act = df_act.loc[X_act_kept.index].copy()
-
         # Use the same imputer and scaler fit on training (MF+ZINC) to transform actives.
+        # NOTE: Impute BEFORE dropping rows to match Phase 1 behavior (imputation handles NaNs)
         if len(X_act_kept) == 0:
             X_act_scaled = np.empty((0, len(kept_cols)), dtype=float)
+            print(f"  ERROR: No actives remain after feature subsetting!")
         else:
-            X_act_imp = imputer.transform(X_act_kept)
+            X_act_imp = imputer.transform(X_act_kept)  # Impute NaNs using training medians
             X_act_scaled = scaler.transform(X_act_imp)
+            
+            # Check for any remaining NaNs or infs after imputation (should be rare)
+            nan_mask = np.isnan(X_act_scaled).any(axis=1) | np.isinf(X_act_scaled).any(axis=1)
+            if nan_mask.any():
+                print(f"  WARNING: Dropping {nan_mask.sum()} actives with NaN/Inf after imputation")
+                X_act_scaled = X_act_scaled[~nan_mask]
+                df_act = df_act.iloc[np.where(~nan_mask)[0]].copy()
+            else:
+                df_act = df_act.copy()
         
-        print(f"  Features after cleaning: {len(kept_cols)}")
+        print(f"  Features after cleaning: {len(kept_cols)} (removed {len(feat_cols) - len(kept_cols)} zero-variance)")
         print(f"  Train set: MF={len(X_mf_scaled)}, ZINC={len(X_z_scaled)}")
-        print(f"  Actives: {len(X_act_scaled)}") # type: ignore
+        print(f"  Actives retained: {len(X_act_scaled)} / {len(df_act)} (lost {len(df_act) - len(X_act_scaled)})") # type: ignore
         
         # Store
         results[rep_name] = {
