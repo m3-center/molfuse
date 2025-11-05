@@ -5,22 +5,24 @@ import json
 from pathlib import Path
 from itertools import product
 
-# Simple Phase 1 config generator for molfuse v4
+# Phase 1 config generator for molfuse v4 - Full 2D Mordred features
+# Based on feature_comparison_v2.py results showing full 2D features yield highest EF@1%
 # Writes configs to configs/molfuse_phase1_grid/
 
 BASE = {
     "target": "TyrosineProteinKinaseABL1_P00519",
-    "mf_features_csv": "datasets/molecular_function_features_fingerprints/KW-0808_Transferase_affinity_extracted_features.csv",
-    "zinc_features_csv": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_features.csv",
-    "actives_features_csv": "datasets/molecular_function_features_fingerprints/chembl/ABL1_P00519_actives_extracted_features.csv",
+    # Updated to full 2D Mordred descriptors (1613 raw features)
+    "mf_features_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv",
+    "zinc_features_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv",
+    "actives_features_csv": "output_recalculated_full_datasets/datasets_2d_all/chembl/ABL1_P00519_actives_extracted_features.csv",
     "sample_zinc": -1,
     "affinity_cutoff_nM": 100000,
     "on_empty_cutoff": "error",
 }
 
 # Grid (features)
-PCA_DIMS = [2, 5, 10]
-UMAP_DIMS = [2, 5, 10]
+PCA_DIMS = [2, 5, 10, 20]
+UMAP_DIMS = [2, 5, 10, 20]
 UMAP_NN = [5, 10, 50, 100, 500]
 UMAP_MIN_DIST = [0.0, 0.01, 0.05, 0.1]
 UMAP_METRIC = "euclidean"
@@ -40,7 +42,7 @@ for d in PCA_DIMS:
             "method": "pca",
             "dim": d,
             "umap_params": {"n_neighbors": 50, "min_dist": 0.01, "metric": UMAP_METRIC, "random_state": None},
-            "notes": f"v4.0 generated PCA config (features), replicate {r}",
+            "notes": f"v4.0 generated PCA config (full 2D Mordred features, 1613 raw), replicate {r}",
             "representation": "features",
             "replicate": r,
         }
@@ -56,7 +58,7 @@ for d, nn, md in product(UMAP_DIMS, UMAP_NN, UMAP_MIN_DIST):
             "method": "umap",
             "dim": d,
             "umap_params": {"n_neighbors": nn, "min_dist": md, "metric": UMAP_METRIC, "random_state": None},
-            "notes": f"v4.0 generated UMAP config (features/Euclidean), replicate {r}",
+            "notes": f"v4.0 generated UMAP config (full 2D Mordred features/Euclidean, 1613 raw), replicate {r}",
             "representation": "features",
             "replicate": r,
         }
@@ -64,14 +66,14 @@ for d, nn, md in product(UMAP_DIMS, UMAP_NN, UMAP_MIN_DIST):
         out.write_text(json.dumps(cfg, indent=2))
 
 # Fingerprint grid
-FP_PCA_DIMS = [2, 5, 10]
-FP_UMAP_DIMS = [2, 5, 10]
+FP_PCA_DIMS = [2, 5, 10, 20]
+FP_UMAP_DIMS = [2, 5, 10, 20]
 FP_UMAP_NN = [5, 10, 50, 100, 500]
 FP_UMAP_MIN_DIST = [0.0, 0.01, 0.05, 0.1]
 
 BASE_FP = {
     **BASE,
-    # Point to fingerprint CSVs (adjust path pattern if needed)
+    # Point to fingerprint CSVs in full 2D dataset directory
     "mf_features_csv": BASE["mf_features_csv"].replace("extracted_features.csv", "extracted_fingerprints_ECFP4.csv"),
     "zinc_features_csv": BASE["zinc_features_csv"].replace("extracted_features.csv", "extracted_fingerprints_ECFP4.csv"),
     "actives_features_csv": BASE["actives_features_csv"].replace("extracted_features.csv", "extracted_fingerprints_ECFP4.csv"),

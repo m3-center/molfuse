@@ -1,19 +1,20 @@
 {
-  "run_name": "ABL1_UMAP_fingerprints_10d_nn50_md0p01",
+  "run_name": "ABL1_UMAP_features_5d_nn50_md0p01_full2d",
   "target": "TyrosineProteinKinaseABL1_P00519",
   "method": "umap",
-  "dim": 10,
-  "mf_features_csv": "datasets/molecular_function_features_fingerprints/KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv",
-  "zinc_features_csv": "datasets/molecular_function_features_fingerprints/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
+  "dim": 5,
+  "mf_features_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv",
+  "zinc_features_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv",
+  "actives_features_csv": "output_recalculated_full_datasets/datasets_2d_all/chembl/ABL1_P00519_actives_extracted_features.csv",
   "sample_zinc": 5000,
   "umap_params": {
     "n_neighbors": 50,
     "min_dist": 0.01,
-    "metric": "jaccard",
+    "metric": "euclidean",
     "random_state": null
   },
   "affinity_cutoff_nM": 100000,
   "on_empty_cutoff": "error",
-  "representation": "fingerprints",
-  "notes": "v4.0 example: fingerprints with UMAP (Jaccard); adjust paths if your filenames differ"
+  "representation": "features",
+  "notes": "v4.0 example: full 2D Mordred features (1613 raw) with UMAP/Euclidean; optimized CSV loading with Parquet caching"
 }
