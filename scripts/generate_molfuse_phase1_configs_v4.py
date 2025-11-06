@@ -21,11 +21,12 @@ BASE = {
 }
 
 # Grid (features)
-PCA_DIMS = [2, 5, 10]
-UMAP_DIMS = [2, 5, 10]
+PCA_DIMS = [2, 5, 10, 20]
+UMAP_DIMS = [2, 5, 10, 20]
 UMAP_NN = [5, 10, 50, 100, 500]
-UMAP_MIN_DIST = [0.01, 0.05, 0.1]
+UMAP_MIN_DIST = [0.0, 0.01, 0.1]
 UMAP_METRIC = "euclidean"
+
 
 OUT_DIR = Path("configs/molfuse_phase1_grid")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,10 +67,10 @@ for d, nn, md in product(UMAP_DIMS, UMAP_NN, UMAP_MIN_DIST):
         out.write_text(json.dumps(cfg, indent=2))
 
 # Fingerprint grid
-FP_PCA_DIMS = [] # [2, 5, 10]
-FP_UMAP_DIMS = [] # [2, 5, 10]
-FP_UMAP_NN = [] # [5, 10, 50, 100, 500]
-FP_UMAP_MIN_DIST = [] # [0.0, 0.01, 0.05, 0.1]
+FP_PCA_DIMS = [2, 5, 10, 20] 
+FP_UMAP_DIMS = [2, 5, 10, 20]
+FP_UMAP_NN = [5, 10, 50, 100, 500]
+FP_UMAP_MIN_DIST = [0.0, 0.01, 0.1]
 
 BASE_FP = {
     **BASE,
