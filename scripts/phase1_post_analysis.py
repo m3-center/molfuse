@@ -752,8 +752,47 @@ def _plot_umap_histograms_split(
         "UMAP avg fingerprints",
     ]
     
+    # ===== COMPUTE GLOBAL Y-AXIS LIMITS FOR COMPARABILITY =====
+    # Pre-compute all histograms to determine global y-limits
+    global_max_linear = 0.0
+    global_min_log = float('inf')
+    global_max_log = 0.0
+    
+    for label in method_labels:
+        sub = df_dist[df_dist["label"] == label]
+        if sub.empty:
+            continue
+        
+        for src in ["zinc", "actives"]:
+            dd = sub[sub["source"] == src]["distance"].dropna().to_numpy(dtype=float)
+            if dd.size == 0:
+                continue
+            mask = (dd >= xmin) & (dd <= xmax)
+            dd_filtered = dd[mask]
+            
+            if len(dd_filtered) > 0:
+                # Compute histogram to get density values
+                counts, _ = np.histogram(dd_filtered, bins=50, range=(xmin, xmax), density=True)
+                if len(counts) > 0:
+                    global_max_linear = max(global_max_linear, counts.max())
+                    # For log scale, track non-zero densities
+                    nonzero = counts[counts > 0]
+                    if len(nonzero) > 0:
+                        global_min_log = min(global_min_log, nonzero.min())
+                        global_max_log = max(global_max_log, nonzero.max())
+    
+    # Add 10% headroom for linear, use powers of 10 for log
+    ylim_linear = (0, global_max_linear * 1.1)
+    if np.isfinite(global_min_log) and np.isfinite(global_max_log):
+        ylim_log = (10 ** np.floor(np.log10(global_min_log)), 
+                    10 ** np.ceil(np.log10(global_max_log)))
+    else:
+        ylim_log = (1e-2, 1e2)  # Fallback
+    
+    logger.info(f"Global y-axis limits: Linear={ylim_linear}, Log={ylim_log}")
+    
     # ===== VISUALIZATION 1: Grid with Log Scale =====
-    fig, axes = plt.subplots(2, 5, figsize=(20, 7), sharex=True)
+    fig, axes = plt.subplots(2, 5, figsize=(20, 7), sharex=True, sharey='row')
     
     for idx, label in enumerate(method_labels):
         ax_lin = axes[0, idx]  # Linear scale (top row)
@@ -784,6 +823,7 @@ def _plot_umap_histograms_split(
         
         # Configure linear axis (top)
         ax_lin.set_xlim(xmin, xmax)
+        ax_lin.set_ylim(ylim_linear)  # Shared y-axis for comparability
         ax_lin.set_title(label, fontsize=10, fontweight='bold')
         ax_lin.grid(True, alpha=0.25, axis='y')
         if idx == 0:
@@ -794,6 +834,7 @@ def _plot_umap_histograms_split(
         # Configure log axis (bottom)
         ax_log.set_xlim(xmin, xmax)
         ax_log.set_yscale('log')
+        ax_log.set_ylim(ylim_log)  # Shared y-axis for comparability
         ax_log.set_xlabel("min-distance to MF", fontsize=9)
         ax_log.grid(True, alpha=0.25, which='both')
         if idx == 0:
@@ -811,7 +852,31 @@ def _plot_umap_histograms_split(
     logger.info(f"Saved log-scale histogram grid: {p_png_grid}")
     
     # ===== VISUALIZATION 2: KDE (Kernel Density) overlay for smoother comparison =====
-    fig2, axes2 = plt.subplots(1, 5, figsize=(20, 4), sharey=False)
+    # Pre-compute global y-limit for KDE
+    global_max_kde = 0.0
+    
+    for label in method_labels:
+        sub = df_dist[df_dist["label"] == label]
+        if sub.empty:
+            continue
+        
+        for src in ["zinc", "actives"]:
+            dd = sub[sub["source"] == src]["distance"].dropna().to_numpy(dtype=float)
+            if dd.size < 10:
+                continue
+            mask = (dd >= xmin) & (dd <= xmax)
+            dd_filtered = dd[mask]
+            
+            if len(dd_filtered) > 10:
+                kde = gaussian_kde(dd_filtered, bw_method='scott')
+                x_eval = np.linspace(xmin, xmax, 300)
+                density = kde(x_eval)
+                global_max_kde = max(global_max_kde, density.max())
+    
+    ylim_kde = (0, global_max_kde * 1.1)  # Add 10% headroom
+    logger.info(f"Global KDE y-axis limit: {ylim_kde}")
+    
+    fig2, axes2 = plt.subplots(1, 5, figsize=(20, 4), sharey=True)  # sharey=True for comparability
     
     for idx, label in enumerate(method_labels):
         ax = axes2[idx]
@@ -838,6 +903,7 @@ def _plot_umap_histograms_split(
                        linestyle=ls, linewidth=lw, alpha=0.9)
         
         ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ylim_kde)  # Shared y-axis for comparability
         ax.set_xlabel("min-distance to MF", fontsize=9)
         ax.set_title(label, fontsize=10, fontweight='bold')
         ax.grid(True, alpha=0.25, axis='y')
