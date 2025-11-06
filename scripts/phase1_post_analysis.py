@@ -1024,32 +1024,8 @@ def _plot_2d_scatter_embeddings(
         # Store in config for later use in axis range computation
         config["_data"] = (df_mf, df_zinc, df_actives)
     
-    # Compute global axis ranges across all loaded configurations
-    all_x_vals, all_y_vals = [], []
-    for config in configs_to_plot:
-        if "_data" in config:
-            df_mf, df_zinc, df_actives = config["_data"]
-            all_x_vals.extend([df_mf["z0"].min(), df_mf["z0"].max(), 
-                              df_zinc["z0"].min(), df_zinc["z0"].max(),
-                              df_actives["z0"].min(), df_actives["z0"].max()])
-            all_y_vals.extend([df_mf["z1"].min(), df_mf["z1"].max(),
-                              df_zinc["z1"].min(), df_zinc["z1"].max(),
-                              df_actives["z1"].min(), df_actives["z1"].max()])
-    
-    if all_x_vals and all_y_vals:
-        x_min, x_max = min(all_x_vals), max(all_x_vals)
-        y_min, y_max = min(all_y_vals), max(all_y_vals)
-        # Add 5% padding
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-        x_min -= 0.05 * x_range
-        x_max += 0.05 * x_range
-        y_min -= 0.05 * y_range
-        y_max += 0.05 * y_range
-    else:
-        x_min, x_max, y_min, y_max = None, None, None, None
-    
-    # Now plot with shared axis ranges
+    # Plot with independent axis ranges per subplot (better visibility)
+    # No global axis range computation needed
     for idx, config in enumerate(configs_to_plot):
         ax = axes[idx]
         
@@ -1092,10 +1068,17 @@ def _plot_2d_scatter_embeddings(
         ax.scatter(actives_x, actives_y, c="#E85D2D", s=40, alpha=0.9, label=f"ACTIVES (n={len(df_actives):,})", 
                   edgecolors='white', linewidths=0.5, zorder=3)
         
-        # Set shared axis ranges
-        if x_min is not None:
-            ax.set_xlim(x_min, x_max)
-            ax.set_ylim(y_min, y_max)
+        # Compute independent axis ranges for this subplot (better visibility)
+        x_min = min(mf_x.min(), zinc_x.min(), actives_x.min())
+        x_max = max(mf_x.max(), zinc_x.max(), actives_x.max())
+        y_min = min(mf_y.min(), zinc_y.min(), actives_y.min())
+        y_max = max(mf_y.max(), zinc_y.max(), actives_y.max())
+        
+        # Add 5% padding
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        ax.set_xlim(x_min - 0.05 * x_range, x_max + 0.05 * x_range)
+        ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.05 * y_range)
         
         # Formatting
         ax.set_xlabel("Dimension 1 (z0)", fontsize=10)
@@ -1280,8 +1263,8 @@ def _plot_2d_density_embeddings(
         
         groups = [
             ("MF cloud", df_mf, "#888888", 0),
-            ("ZINC", df_zinc, "#5A7FC0", 1),
-            ("ACTIVES", df_actives, "#E85D2D", 2),
+            ("ACTIVES", df_actives, "#E85D2D", 1),
+            ("ZINC", df_zinc, "#5A7FC0", 2),
         ]
         
         # Individual group plots
