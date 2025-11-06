@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=180G
-#SBATCH --time=0-08:00:00
+#SBATCH --mem=350G
+#SBATCH --time=0-24:00:00
 #SBATCH --output=slurm_logs/%x_%j.out
 #SBATCH --error=slurm_logs/%x_%j.err
 
@@ -39,7 +39,7 @@ echo "Workspace: ${WORKSPACE_DIR}"
 echo "=========================================="
 echo ""
 
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening
+source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
 python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 
 EXIT_CODE=$?
