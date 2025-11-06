@@ -29,6 +29,16 @@ METADATA_COLUMNS = {
     'accession',
 }
 
+# Columns to exclude from numeric type conversion (string data that should remain as-is)
+NON_NUMERIC_COLUMNS = METADATA_COLUMNS | {
+    'Fingerprint',
+    'fingerprint', 
+    'ECFP4',
+    'ecfp4',
+    'FP',
+    'fp',
+}
+
 
 def select_feature_columns(df: pd.DataFrame, min_numeric_fraction: float = 0.95) -> List[str]:
     """

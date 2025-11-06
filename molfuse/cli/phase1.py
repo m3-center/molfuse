@@ -17,7 +17,8 @@ from molfuse.data.prep import (
     fit_scaler_on_mf_zinc, 
     select_feature_columns, 
     remove_zero_variance_features,
-    METADATA_COLUMNS
+    METADATA_COLUMNS,
+    NON_NUMERIC_COLUMNS
 )
 from molfuse.dr.pca import fit_pca
 from molfuse.dr.umap_ import fit_umap
@@ -80,8 +81,9 @@ def load_csv_optimized(csv_path: Path, logger: logging.Logger) -> pd.DataFrame:
     
     # Defensive type conversion: convert all non-metadata columns to numeric
     # (prevents NaN explosion from string columns later in pipeline)
+    # EXCEPT fingerprint columns which must remain as strings for parsing
     for col in df.columns:
-        if col not in METADATA_COLUMNS:
+        if col not in NON_NUMERIC_COLUMNS:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
     # Save Parquet cache for future runs (one-time cost)
