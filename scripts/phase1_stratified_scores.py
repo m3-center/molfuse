@@ -32,8 +32,10 @@ Design Principles:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
+import os
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -46,6 +48,9 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# Global cache for MF data (avoid reloading same file multiple times)
+_MF_CACHE: Dict[str, pd.DataFrame] = {}
 
 # Publication-quality styling
 matplotlib.rcParams.update({
@@ -109,7 +114,7 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
     
     Strategy:
     1. Try actives_features_csv if specified in config
-    2. Fall back to filtering mf_features_csv by accession
+    2. Fall back to filtering mf_features_csv by accession (with caching)
     
     Returns DataFrame with columns: Compound ChEMBL ID, SMILES, Standard Value (nM)
     """
@@ -121,12 +126,13 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
             try:
                 cols_needed = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
                 df = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
-                logger.info(f"Loaded actives from: {p} (rows={len(df)})")
+                # Keep only essential columns to reduce memory
+                df = df[["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)"]].copy()
                 return df
             except Exception as e:
                 logger.warning(f"Failed to load actives CSV {p}: {e}")
     
-    # Strategy 2: Derive from MF file by accession
+    # Strategy 2: Derive from MF file by accession (use cache to avoid reloading)
     mf_path = config.get("mf_features_csv")
     if not mf_path:
         logger.warning("No actives_features_csv or mf_features_csv in config")
@@ -142,20 +148,28 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
         logger.warning(f"MF file not found: {p}")
         return None
     
-    try:
-        cols_needed = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
-        df_all = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
-        
-        if "accession" not in df_all.columns:
-            logger.warning("MF file lacks accession column; cannot filter")
+    # Check cache first
+    cache_key = str(p.resolve())
+    if cache_key not in _MF_CACHE:
+        try:
+            cols_needed = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
+            df_all = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
+            _MF_CACHE[cache_key] = df_all
+            logger.info(f"Cached MF data from {p} (rows={len(df_all)})")
+        except Exception as e:
+            logger.warning(f"Failed to load MF CSV {p}: {e}")
             return None
-        
-        df = df_all[df_all["accession"] == accession].copy()
-        logger.info(f"Derived actives from MF by accession={accession}: rows={len(df)}")
-        return df
-    except Exception as e:
-        logger.warning(f"Failed to derive actives from MF {p}: {e}")
+    else:
+        df_all = _MF_CACHE[cache_key]
+    
+    if "accession" not in df_all.columns:
+        logger.warning("MF file lacks accession column; cannot filter")
         return None
+    
+    df = df_all[df_all["accession"] == accession].copy()
+    # Keep only essential columns
+    df = df[["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)"]].copy()
+    return df
 
 
 def load_ranked_scores(run_dir: Path, logger: logging.Logger) -> Optional[pd.DataFrame]:
@@ -438,10 +452,16 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     actives_df = load_actives_with_affinity(config, target, logger)
     if actives_df is None or actives_df.empty:
         logger.warning(f"No actives data available for {run_dir.name}")
+        del ranked_df
+        gc.collect()
         return None
     
     # Join affinity and assign tiers
     ranked_df = join_affinity_to_ranked(ranked_df, actives_df, logger)
+    
+    # Free actives_df immediately after join
+    del actives_df
+    gc.collect()
     
     # Diagnostic counts
     N_total = len(ranked_df)
@@ -472,8 +492,8 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     # Extract config
     run_config = extract_run_config(summary_json, metrics_json)
     
-    # Return results
-    return {
+    # Prepare results
+    result = {
         "run_name": run_dir.name,
         "target": target,
         **run_config,
@@ -488,6 +508,12 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
         "N_medium": N_medium,
         "N_weak": N_weak,
     }
+    
+    # Free large DataFrames before returning
+    del ranked_df
+    gc.collect()
+    
+    return result
 
 
 # ============================================================================
@@ -720,9 +746,16 @@ Example:
     run_dirs = sorted([d for d in phase_dir.iterdir() if d.is_dir()])
     logger.info(f"Found {len(run_dirs)} run directories")
     
-    # Determine number of workers
-    n_workers = args.n_workers if args.n_workers else None  # None = use all CPUs
-    logger.info(f"Using {n_workers if n_workers else 'all available'} CPU cores for parallel processing")
+    # Determine number of workers (cap at 8 to avoid memory pressure)
+    if args.n_workers:
+        n_workers = min(args.n_workers, 8)
+        if args.n_workers > 8:
+            logger.warning(f"Requested {args.n_workers} workers, capping at 8 to avoid OOM")
+    else:
+        n_workers = min(8, os.cpu_count() or 4)  # Conservative default
+    
+    logger.info(f"Using {n_workers} parallel workers (memory-conservative setting)")
+    logger.info(f"MF data will be cached in memory to avoid reloading")
     
     # Analyze each run in parallel
     results: List[dict] = []

@@ -2,8 +2,8 @@
 #SBATCH --partition=any
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=300G
 #SBATCH --time=0-12:00:00
 #SBATCH --job-name=phase1_analysis
 #SBATCH --output=slurm_logs/phase1_analysis_%j.out
@@ -93,11 +93,14 @@ echo ""
 
 STRATIFIED_OUTPUT="${OUTPUT_BASE_DIR}/phase1_stratified"
 
+# Use conservative worker count to avoid OOM (max 8 workers for memory-intensive operations)
+STRATIFIED_WORKERS=$(( SLURM_CPUS_PER_TASK < 8 ? SLURM_CPUS_PER_TASK : 8 ))
+
 python scripts/phase1_stratified_scores.py \
     --workspace_dir "${WORKSPACE_DIR}" \
     --phase phase1 \
     --output_dir "${STRATIFIED_OUTPUT}" \
-    --n_workers ${SLURM_CPUS_PER_TASK}
+    --n_workers ${STRATIFIED_WORKERS}
 
 STRATIFIED_EXIT=$?
 
