@@ -124,10 +124,10 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
         p = Path(actives_path)
         if p.exists():
             try:
-                cols_needed = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
+                cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)", "accession"]
                 df = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
                 # Keep only essential columns to reduce memory
-                df = df[["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)"]].copy()
+                df = df[["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]].copy()
                 return df
             except Exception as e:
                 logger.warning(f"Failed to load actives CSV {p}: {e}")
@@ -152,7 +152,7 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
     cache_key = str(p.resolve())
     if cache_key not in _MF_CACHE:
         try:
-            cols_needed = ["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)", "accession"]
+            cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)", "accession"]
             df_all = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
             _MF_CACHE[cache_key] = df_all
             logger.info(f"Cached MF data from {p} (rows={len(df_all)})")
@@ -168,7 +168,7 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
     
     df = df_all[df_all["accession"] == accession].copy()
     # Keep only essential columns
-    df = df[["Compound ChEMBL ID", "canonical_smiles", "SMILES", "Standard Value (nM)"]].copy()
+    df = df[["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]].copy()
     return df
 
 
@@ -248,7 +248,7 @@ def join_affinity_to_ranked(ranked_df: pd.DataFrame, actives_df: pd.DataFrame, l
     
     Join strategy:
     1. Try Compound ChEMBL ID (case-insensitive, normalized)
-    2. Fallback to canonical_smiles or SMILES
+    2. Fallback to SMILES
     3. Left join: keep all rows from ranked_df
     4. Assign potency_tier column (NaN for ZINC or actives without affinity)
     
@@ -269,8 +269,8 @@ def join_affinity_to_ranked(ranked_df: pd.DataFrame, actives_df: pd.DataFrame, l
     else:
         # SMILES-based join
         logger.info("Joining by SMILES (ChEMBL ID not available)")
-        smiles_col_r = find_column_ignorecase(ranked_df, ["canonical_smiles", "SMILES"])
-        smiles_col_a = find_column_ignorecase(actives_df, ["canonical_smiles", "SMILES"])
+        smiles_col_r = find_column_ignorecase(ranked_df, ["SMILES"])
+        smiles_col_a = find_column_ignorecase(actives_df, ["SMILES"])
         
         if not smiles_col_r or not smiles_col_a:
             logger.error("Cannot find join key (no ChEMBL ID or SMILES columns)")
