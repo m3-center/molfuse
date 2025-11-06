@@ -555,23 +555,16 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
             row.get("EF1_medium_mean", np.nan),
             row.get("EF1_weak_mean", np.nan),
         ]
-        stds = [
-            row.get("EF1_all_std", 0),
-            row.get("EF1_high_std", 0),
-            row.get("EF1_medium_std", 0),
-            row.get("EF1_weak_std", 0),
-        ]
         
-        # Find max value including error bars
-        for mean_val, std_val in zip(means, stds):
+        # Find max EF value (no error bars for this calculation)
+        for mean_val in means:
             if np.isfinite(mean_val):
-                upper = mean_val + std_val
-                global_max = max(global_max, upper)
+                global_max = max(global_max, mean_val)
     
-    # Add 20% padding to max to ensure all bars fit comfortably
-    y_max = global_max * 1.2
+    # Set y-axis range: max EF value + 5
+    y_max = global_max + 5.0
     
-    logger.info(f"Using shared y-axis range: [0, {y_max:.1f}]")
+    logger.info(f"Using shared y-axis range: [0, {y_max:.1f}] (max EF={global_max:.1f})")
     
     # Second pass: create plots with shared y-axis
     for (rep, method, dim), group in df_grouped.groupby(["representation", "method", "dim"], dropna=False):
