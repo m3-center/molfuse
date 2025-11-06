@@ -336,8 +336,19 @@ def plot_bars_combined(
                         y.append(np.nan)
                         yerr.append(0.0)
                     else:
-                        y.append(float(row.iloc[0][mean_col]))
-                        yerr.append(float(row.iloc[0][std_col]) if std_col in row.columns else 0.0)
+                        # For UMAP (avg): average across all hyperparameter configurations at this dim
+                        # For UMAP (best) and PCA: use single best config
+                        if m == "umap" and len(row) > 1:
+                            # Average across all hyperparameter configs (config-level mean)
+                            y_val = float(row[mean_col].mean())
+                            # Error bar represents variability across configs (not replicates)
+                            yerr_val = float(row[mean_col].std()) if len(row) > 1 else 0.0
+                        else:
+                            # Single config: use its mean and std across replicates
+                            y_val = float(row.iloc[0][mean_col])
+                            yerr_val = float(row.iloc[0][std_col]) if std_col in row.columns else 0.0
+                        y.append(y_val)
+                        yerr.append(yerr_val)
                 xpos = x + offset0 + i*bw
                 # Use slightly different shade for best-UMAP by overlaying hatch on the UMAP-best bars
                 bar_colors = [colors.get(r, None) for _ in methods]
