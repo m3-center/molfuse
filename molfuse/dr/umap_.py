@@ -18,6 +18,7 @@ def fit_umap(
     metric: str = "euclidean",
     random_state: Optional[int] = None,
     n_jobs: int = -1,
+    init: str = "spectral",
 ) -> Tuple["umap.UMAP", np.ndarray]:
     """
     Fit UMAP on training data (MF+ZINC) and return the fitted model and transformed training embedding.
@@ -31,6 +32,7 @@ def fit_umap(
         min_dist=min_dist,
         metric=metric,
         random_state=random_state,  # None → parallel by default
+        init=init,
         verbose=False,
     )
     Z_train = reducer.fit_transform(X_train)
