@@ -165,12 +165,12 @@ def generate_phase3_configs(
     output_dir.mkdir(parents=True, exist_ok=True)
     created_configs = []
     
-    # Base paths (2D Mordred features)
+    # Base paths (2D Mordred features + ECFP4 fingerprints)
     base_paths = {
         "mf_features_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv",
         "zinc_features_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv",
-        "mf_fingerprints_csv": "datasets/molecular_function_features_fingerprints/KW-0808_Transferase_affinity_fingerprints.csv",
-        "zinc_fingerprints_csv": "datasets/molecular_function_features_fingerprints/zinc_acquirable_fingerprints.csv",
+        "mf_fingerprints_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv",
+        "zinc_fingerprints_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
     }
     
     # Generate configs for each method × MF size × replicate
