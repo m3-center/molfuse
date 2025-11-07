@@ -841,9 +841,9 @@ def plot_stratified_degradation_curves(
     
     tier_colors = {
         "overall": "#333333",
-        "high": "#d62728",  # Red
-        "medium": "#ff7f0e",  # Orange
-        "weak": "#1f77b4",  # Blue
+        "high": "#1976D2",     # Blue (high potency)
+        "medium": "#F57C00",   # Orange (medium)
+        "weak": "#C62828",     # Red (weak)
     }
     
     tier_labels = {
@@ -955,9 +955,9 @@ def plot_tier_enrichment_ratio(
     axes = axes.flatten()
     
     tier_colors = {
-        "high": "#d62728",
-        "medium": "#ff7f0e",
-        "weak": "#1f77b4",
+        "high": "#1976D2",     # Blue (high potency)
+        "medium": "#F57C00",   # Orange (medium)
+        "weak": "#C62828",     # Red (weak)
     }
     
     for idx, model_key in enumerate(model_keys):
