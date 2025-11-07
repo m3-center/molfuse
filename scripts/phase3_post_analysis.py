@@ -9,12 +9,19 @@ Aggregates Phase 3 results and generates publication-quality plots:
 - Phase transition analysis (degradation slope heatmap)
 - Replicate variability analysis
 - Correlation between MF size and performance variance
+- Potency-stratified degradation curves (High/Medium/Weak tiers)
+
+Potency Tiers (nM):
+- High:   0.1 ≤ affinity ≤ 100
+- Medium: 100 < affinity ≤ 1,000  
+- Weak:   1,000 < affinity ≤ 100,000
 
 Usage:
     python scripts/phase3_post_analysis.py \
         --workspace_dir experiment_workspace_v4 \
         --phase3_run_name mf_ablation \
-        --output_dir reporting/phase3_post_analysis
+        --output_dir reporting/phase3_post_analysis \
+        --stratify  # Enable potency tier stratification
 """
 from __future__ import annotations
 
@@ -185,6 +192,164 @@ def aggregate_by_condition(df: pd.DataFrame, logger: logging.Logger) -> pd.DataF
 def get_model_key(row: pd.Series) -> str:
     """Generate model_key from method and representation."""
     return f"{row['method']}_{row['representation']}"
+
+
+# ============================================================================
+# Potency Tier Stratification
+# ============================================================================
+
+def assign_potency_tier(affinity_nM: float) -> str:
+    """
+    Assign potency tier based on affinity (nM).
+    
+    Tiers:
+    - High:   0.1 ≤ affinity ≤ 100
+    - Medium: 100 < affinity ≤ 1,000  
+    - Weak:   1,000 < affinity ≤ 100,000
+    """
+    if pd.isna(affinity_nM):
+        return "unknown"
+    elif 0.1 <= affinity_nM <= 100:
+        return "high"
+    elif 100 < affinity_nM <= 1000:
+        return "medium"
+    elif 1000 < affinity_nM <= 100000:
+        return "weak"
+    else:
+        return "unknown"
+
+
+def compute_tier_ef1(
+    ranked_df: pd.DataFrame,
+    tier: str,
+    logger: logging.Logger
+) -> Optional[float]:
+    """
+    Compute EF@1% for a specific potency tier.
+    
+    Args:
+        ranked_df: DataFrame with columns ['score', 'label', 'tier']
+        tier: Potency tier ('high', 'medium', 'weak')
+        logger: Logger instance
+    
+    Returns:
+        EF@1% for the tier, or None if tier has no actives
+    """
+    # Get tier-specific actives
+    tier_actives = ranked_df[(ranked_df["label"] == 1) & (ranked_df["tier"] == tier)]
+    n_tier_actives = len(tier_actives)
+    
+    if n_tier_actives == 0:
+        return None
+    
+    # Total evaluation set size (actives + ZINC)
+    n_total = len(ranked_df)
+    
+    # Top 1% cutoff
+    cutoff_idx = int(np.ceil(n_total * 0.01))
+    
+    # Count tier actives in top 1%
+    top_1pct = ranked_df.head(cutoff_idx)
+    n_tier_found = len(top_1pct[(top_1pct["label"] == 1) & (top_1pct["tier"] == tier)])
+    
+    # EF@1% = (found / total_in_tier) / 0.01
+    ef1 = (n_tier_found / n_tier_actives) / 0.01
+    
+    return ef1
+
+
+def load_actives_with_tiers(
+    workspace_dir: Path,
+    run_name: str,
+    logger: logging.Logger
+) -> Optional[pd.DataFrame]:
+    """
+    Load actives embeddings with affinity values and assign potency tiers.
+    
+    Reads: workspace/phase3/mf_ablation/{run_name}/artifacts/embedding_actives.csv
+    
+    Returns:
+        DataFrame with columns: Compound ChEMBL ID, Standard Value (nM), tier
+    """
+    artifacts_dir = workspace_dir / "phase3" / "mf_ablation" / run_name / "artifacts"
+    actives_path = artifacts_dir / "embedding_actives.csv"
+    
+    if not actives_path.exists():
+        logger.warning(f"Actives embedding not found: {actives_path}")
+        return None
+    
+    try:
+        # Load only ID and affinity columns
+        df = pd.read_csv(actives_path, usecols=lambda c: c in ["Compound ChEMBL ID", "Standard Value (nM)"])
+        
+        # Assign tiers
+        df["tier"] = df["Standard Value (nM)"].apply(assign_potency_tier)
+        
+        return df
+    except Exception as e:
+        logger.warning(f"Failed to load actives with tiers from {actives_path}: {e}")
+        return None
+
+
+def compute_stratified_metrics_for_run(
+    workspace_dir: Path,
+    run_name: str,
+    logger: logging.Logger
+) -> Optional[Dict[str, float]]:
+    """
+    Compute tier-specific EF@1% for a single Phase 3 run.
+    
+    Returns:
+        Dict with keys: ef_1%_overall, ef_1%_high, ef_1%_medium, ef_1%_weak
+    """
+    artifacts_dir = workspace_dir / "phase3" / "mf_ablation" / run_name / "artifacts"
+    
+    # Load ranked scores
+    ranked_path = artifacts_dir / "ranked_scores.csv"
+    if not ranked_path.exists():
+        logger.warning(f"Ranked scores not found: {ranked_path}")
+        return None
+    
+    try:
+        ranked_df = pd.read_csv(ranked_path)
+    except Exception as e:
+        logger.warning(f"Failed to load ranked scores from {ranked_path}: {e}")
+        return None
+    
+    # Load actives with tiers
+    actives_tiers = load_actives_with_tiers(workspace_dir, run_name, logger)
+    if actives_tiers is None:
+        return None
+    
+    # Merge tier info into ranked_df
+    # Match on Compound ChEMBL ID (actives only, ZINC will have NaN tiers)
+    ranked_df = ranked_df.merge(
+        actives_tiers[["Compound ChEMBL ID", "tier"]],
+        on="Compound ChEMBL ID",
+        how="left"
+    )
+    
+    # Fill NaN tiers (ZINC compounds) with "zinc"
+    ranked_df["tier"] = ranked_df["tier"].fillna("zinc")
+    
+    # Compute overall EF@1%
+    n_actives = (ranked_df["label"] == 1).sum()
+    n_total = len(ranked_df)
+    cutoff_idx = int(np.ceil(n_total * 0.01))
+    n_found = (ranked_df.head(cutoff_idx)["label"] == 1).sum()
+    ef1_overall = (n_found / n_actives) / 0.01 if n_actives > 0 else None
+    
+    # Compute tier-specific EF@1%
+    ef1_high = compute_tier_ef1(ranked_df, "high", logger)
+    ef1_medium = compute_tier_ef1(ranked_df, "medium", logger)
+    ef1_weak = compute_tier_ef1(ranked_df, "weak", logger)
+    
+    return {
+        "ef_1%_overall": ef1_overall,
+        "ef_1%_high": ef1_high,
+        "ef_1%_medium": ef1_medium,
+        "ef_1%_weak": ef1_weak,
+    }
 
 
 # ============================================================================
@@ -621,6 +786,229 @@ def analyze_variance_correlation(
     logger.info(f"Saved: {output_path_png.name}")
 
 
+def plot_stratified_degradation_curves(
+    df: pd.DataFrame,
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Plot potency-stratified degradation curves: 4 lines per method (Overall + High + Medium + Weak).
+    
+    Shows how MF cloud size affects enrichment of different potency tiers.
+    """
+    logger.info("Generating potency-stratified degradation curves...")
+    
+    # Aggregate stratified data by (method, representation, mf_size_target)
+    df_stratified["mf_size_target_numeric"] = df_stratified["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    
+    group_keys = ["method", "representation", "mf_size_target_numeric"]
+    
+    agg_dict = {
+        "ef_1%_overall": ["mean", "sem"],
+        "ef_1%_high": ["mean", "sem"],
+        "ef_1%_medium": ["mean", "sem"],
+        "ef_1%_weak": ["mean", "sem"],
+    }
+    
+    df_strat_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
+    
+    # Flatten column names
+    df_strat_agg.columns = [
+        "_".join(col).strip("_") if isinstance(col, tuple) else col
+        for col in df_strat_agg.columns
+    ]
+    
+    # Create model_key
+    df_strat_agg["model_key"] = df_strat_agg.apply(get_model_key, axis=1)
+    model_keys = sorted(df_strat_agg["model_key"].unique())
+    
+    n_models = len(model_keys)
+    if n_models == 0:
+        logger.warning("No models found, skipping stratified curves")
+        return
+    
+    # Layout: 2×2 for 4 models
+    nrows = 2 if n_models > 2 else 1
+    ncols = 2 if n_models > 1 else 1
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 12), sharex=True, sharey=False)
+    if n_models == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+    
+    tier_colors = {
+        "overall": "#333333",
+        "high": "#d62728",  # Red
+        "medium": "#ff7f0e",  # Orange
+        "weak": "#1f77b4",  # Blue
+    }
+    
+    tier_labels = {
+        "overall": "Overall",
+        "high": "High (≤100 nM)",
+        "medium": "Medium (100-1K nM)",
+        "weak": "Weak (1K-100K nM)",
+    }
+    
+    for idx, model_key in enumerate(model_keys):
+        ax = axes[idx]
+        subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+        subset = subset.sort_values("mf_size_target_numeric")
+        
+        method = subset["method"].iloc[0]
+        representation = subset["representation"].iloc[0]
+        
+        x = subset["mf_size_target_numeric"].values
+        
+        # Plot each tier
+        for tier in ["overall", "high", "medium", "weak"]:
+            mean_col = f"ef_1%_{tier}_mean"
+            sem_col = f"ef_1%_{tier}_sem"
+            
+            # Check if columns exist and have data
+            if mean_col not in subset.columns or sem_col not in subset.columns:
+                continue
+            
+            y_mean = subset[mean_col].values
+            y_sem = subset[sem_col].values
+            
+            # Skip if all NaN
+            if np.all(np.isnan(y_mean)):
+                continue
+            
+            ax.errorbar(
+                x, y_mean, yerr=y_sem,
+                marker="o", markersize=5, linewidth=2,
+                label=tier_labels[tier],
+                color=tier_colors[tier],
+                capsize=3, capthick=1.2,
+                alpha=0.9 if tier == "overall" else 0.7
+            )
+        
+        ax.set_xscale("log")
+        ax.set_xlabel("MF Cloud Size (compounds)", fontweight="bold")
+        ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold")
+        ax.set_title(f"{method.upper()} / {representation}", fontweight="bold")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=8)
+    
+    # Hide unused subplots
+    for idx in range(n_models, len(axes)):
+        axes[idx].axis("off")
+    
+    plt.tight_layout()
+    
+    output_path_png = output_dir / "mf_ablation_stratified_curves.png"
+    output_path_pdf = output_dir / "mf_ablation_stratified_curves.pdf"
+    fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path_pdf, bbox_inches="tight")
+    plt.close(fig)
+    
+    logger.info(f"Saved: {output_path_png.name}")
+
+
+def plot_tier_enrichment_ratio(
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Plot enrichment ratio: EF@1%(tier) / EF@1%(overall) across MF sizes.
+    
+    Shows which tiers benefit most/least from large MF clouds.
+    Ratio > 1 means tier performs better than overall average.
+    """
+    logger.info("Generating tier enrichment ratio plot...")
+    
+    # Aggregate
+    df_stratified["mf_size_target_numeric"] = df_stratified["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    
+    group_keys = ["method", "representation", "mf_size_target_numeric"]
+    
+    agg_dict = {
+        "ef_1%_overall": "mean",
+        "ef_1%_high": "mean",
+        "ef_1%_medium": "mean",
+        "ef_1%_weak": "mean",
+    }
+    
+    df_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
+    
+    # Compute ratios
+    for tier in ["high", "medium", "weak"]:
+        df_agg[f"ratio_{tier}"] = df_agg[f"ef_1%_{tier}"] / df_agg["ef_1%_overall"]
+    
+    # Create model_key
+    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
+    model_keys = sorted(df_agg["model_key"].unique())
+    
+    n_models = len(model_keys)
+    if n_models == 0:
+        return
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+    axes = axes.flatten()
+    
+    tier_colors = {
+        "high": "#d62728",
+        "medium": "#ff7f0e",
+        "weak": "#1f77b4",
+    }
+    
+    for idx, model_key in enumerate(model_keys):
+        if idx >= len(axes):
+            break
+        
+        ax = axes[idx]
+        subset = df_agg[df_agg["model_key"] == model_key].copy()
+        subset = subset.sort_values("mf_size_target_numeric")
+        
+        method = subset["method"].iloc[0]
+        representation = subset["representation"].iloc[0]
+        
+        x = subset["mf_size_target_numeric"].values
+        
+        for tier in ["high", "medium", "weak"]:
+            y = subset[f"ratio_{tier}"].values
+            
+            if not np.all(np.isnan(y)):
+                ax.plot(
+                    x, y,
+                    marker="o", markersize=5, linewidth=2,
+                    label=tier.capitalize(),
+                    color=tier_colors[tier]
+                )
+        
+        # Reference line at ratio=1 (tier = overall)
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.5, label="Overall")
+        
+        ax.set_xscale("log")
+        ax.set_xlabel("MF Cloud Size", fontweight="bold")
+        ax.set_ylabel("EF@1%(tier) / EF@1%(overall)", fontweight="bold")
+        ax.set_title(f"{method.upper()} / {representation}", fontweight="bold")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=8)
+    
+    # Hide unused
+    for idx in range(n_models, len(axes)):
+        axes[idx].axis("off")
+    
+    plt.tight_layout()
+    
+    output_path_png = output_dir / "mf_ablation_tier_enrichment_ratio.png"
+    output_path_pdf = output_dir / "mf_ablation_tier_enrichment_ratio.pdf"
+    fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path_pdf, bbox_inches="tight")
+    plt.close(fig)
+    
+    logger.info(f"Saved: {output_path_png.name}")
+
+
 # ============================================================================
 # Summary Statistics and Reports
 # ============================================================================
@@ -797,6 +1185,8 @@ def main():
                        help="Output directory for analysis")
     parser.add_argument("--threshold_pct", type=float, default=80.0,
                        help="Threshold percentage for minimum viable MF size (default: 80)")
+    parser.add_argument("--stratify", action="store_true",
+                       help="Enable potency tier stratification (High/Medium/Weak)")
     args = parser.parse_args()
     
     workspace_dir = Path(args.workspace_dir)
@@ -820,6 +1210,7 @@ def main():
     logger.info(f"Workspace: {workspace_dir}")
     logger.info(f"Phase 3 run: {args.phase3_run_name}")
     logger.info(f"Output: {output_dir}")
+    logger.info(f"Stratify by potency: {args.stratify}")
     logger.info("="*80)
     
     try:
@@ -844,11 +1235,51 @@ def main():
         # 6. Variance correlation
         analyze_variance_correlation(df_agg, output_dir, logger)
         
-        # 7. Summary outputs
+        # 7. Potency-stratified analysis (if enabled)
+        if args.stratify:
+            logger.info("\n" + "="*80)
+            logger.info("POTENCY TIER STRATIFICATION")
+            logger.info("="*80)
+            
+            # Compute tier-specific metrics for all runs
+            logger.info("Computing tier-specific EF@1% for all runs...")
+            stratified_records = []
+            
+            for _, row in df.iterrows():
+                run_name = row["run_name"]
+                tier_metrics = compute_stratified_metrics_for_run(workspace_dir, run_name, logger)
+                
+                if tier_metrics:
+                    record = {
+                        "run_name": run_name,
+                        "method": row["method"],
+                        "representation": row["representation"],
+                        "mf_size_target": row["mf_size_target"],
+                        "replicate": row["replicate"],
+                        **tier_metrics
+                    }
+                    stratified_records.append(record)
+            
+            if stratified_records:
+                df_stratified = pd.DataFrame(stratified_records)
+                logger.info(f"Computed stratified metrics for {len(df_stratified)} runs")
+                
+                # Save stratified CSV
+                strat_csv = output_dir / "phase3_summary_stratified.csv"
+                df_stratified.to_csv(strat_csv, index=False)
+                logger.info(f"Saved: {strat_csv.name}")
+                
+                # Generate stratified plots
+                plot_stratified_degradation_curves(df, df_stratified, output_dir, logger)
+                plot_tier_enrichment_ratio(df_stratified, output_dir, logger)
+            else:
+                logger.warning("No stratified metrics computed (missing artifacts?)")
+        
+        # 8. Summary outputs
         save_aggregated_summary(df_agg, output_dir, logger)
         min_viable = identify_minimum_viable_sizes(df_agg, args.threshold_pct, output_dir, logger)
         
-        # 8. Generate report
+        # 9. Generate report
         generate_analysis_report(df, df_agg, df_slopes, min_viable, output_dir, logger)
         
         logger.info("="*80)
