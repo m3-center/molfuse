@@ -127,18 +127,32 @@ def collect_phase3_results(
     logger.info(f"  MF sizes: {sorted(df['mf_size_actual'].unique().tolist())}")
     logger.info(f"  Replicates per condition: {df.groupby(['method', 'representation', 'mf_size_actual']).size().unique().tolist()}")
     
+    # Add mf_size_target_numeric for consistent grouping
+    df["mf_size_target_numeric"] = df["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    
     return df
 
 
 def aggregate_by_condition(df: pd.DataFrame, logger: logging.Logger) -> pd.DataFrame:
     """
-    Aggregate results by (method, representation, mf_size_actual).
+    Aggregate results by (method, representation, mf_size_target).
     
     Computes mean, SEM, std for all metrics across replicates.
+    
+    CRITICAL: Groups by mf_size_target (not mf_size_actual) because random subsampling
+    causes slight variations in actual MF size across replicates (e.g., target=1000 gives
+    actual sizes 993, 995, 996, 996, 999 due to affinity filtering + deduplication).
     """
     logger.info("Aggregating results by condition...")
     
-    group_keys = ["method", "representation", "dim", "mf_size_actual", "affinity_cutoff_nM"]
+    # Add mf_size_target_numeric for proper grouping
+    df["mf_size_target_numeric"] = df["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    
+    group_keys = ["method", "representation", "dim", "mf_size_target", "mf_size_target_numeric", "affinity_cutoff_nM"]
     
     agg_dict = {
         "ef_1%": ["mean", "sem", "std", "count"],
@@ -148,6 +162,7 @@ def aggregate_by_condition(df: pd.DataFrame, logger: logging.Logger) -> pd.DataF
         "pr_auc": ["mean", "sem", "std"],
         "n_actives": "first",
         "n_zinc": "first",
+        "mf_size_actual": "mean",  # Average actual size for reporting
     }
     
     df_agg = df.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
@@ -215,13 +230,13 @@ def plot_degradation_curves(
     for idx, model_key in enumerate(model_keys):
         ax = axes[idx]
         subset = df_agg[df_agg["model_key"] == model_key].copy()
-        subset = subset.sort_values("mf_size_actual")
+        subset = subset.sort_values("mf_size_target_numeric")
         
         method = subset["method"].iloc[0]
         representation = subset["representation"].iloc[0]
         
         # Plot mean ± SEM
-        x = subset["mf_size_actual"].values
+        x = subset["mf_size_target_numeric"].values
         y_mean = subset["ef_1%_mean"].values
         y_sem = subset["ef_1%_sem"].values
         
@@ -279,9 +294,9 @@ def plot_comparison_overlay(
     
     for model_key in model_keys:
         subset = df_agg[df_agg["model_key"] == model_key].copy()
-        subset = subset.sort_values("mf_size_actual")
+        subset = subset.sort_values("mf_size_target_numeric")
         
-        x = subset["mf_size_actual"].values
+        x = subset["mf_size_target_numeric"].values
         y_mean = subset["ef_1%_mean"].values
         y_sem = subset["ef_1%_sem"].values
         
@@ -342,9 +357,9 @@ def plot_metrics_grid(
     
     for row_idx, model_key in enumerate(model_keys):
         subset = df_agg[df_agg["model_key"] == model_key].copy()
-        subset = subset.sort_values("mf_size_actual")
+        subset = subset.sort_values("mf_size_target_numeric")
         
-        x = subset["mf_size_actual"].values
+        x = subset["mf_size_target_numeric"].values
         
         for col_idx, (mean_col, sem_col, title) in enumerate(metrics):
             ax = axes[row_idx, col_idx]
@@ -400,11 +415,11 @@ def compute_degradation_slopes(df_agg: pd.DataFrame, logger: logging.Logger) -> 
     
     for model_key in model_keys:
         subset = df_agg[df_agg["model_key"] == model_key].copy()
-        subset = subset.sort_values("mf_size_actual").reset_index(drop=True)
+        subset = subset.sort_values("mf_size_target_numeric").reset_index(drop=True)
         
         for i in range(len(subset) - 1):
-            mf_curr = subset.loc[i, "mf_size_actual"]
-            mf_next = subset.loc[i + 1, "mf_size_actual"]
+            mf_curr = subset.loc[i, "mf_size_target_numeric"]
+            mf_next = subset.loc[i + 1, "mf_size_target_numeric"]
             ef_curr = subset.loc[i, "ef_1%_mean"]
             ef_next = subset.loc[i + 1, "ef_1%_mean"]
             
@@ -506,14 +521,17 @@ def plot_replicate_variance(
         subset = df[df["model_key"] == model_key].copy()
         
         # Prepare data for box plot
-        mf_sizes = sorted(subset["mf_size_actual"].unique())
+        mf_sizes = sorted(subset["mf_size_target_numeric"].unique())
         data_to_plot = []
         labels = []
         
         for mf_size in mf_sizes:
-            ef_values = subset[subset["mf_size_actual"] == mf_size]["ef_1%"].values
+            ef_values = subset[subset["mf_size_target_numeric"] == mf_size]["ef_1%"].values
             data_to_plot.append(ef_values)
-            labels.append(f"{int(mf_size)}")
+            if mf_size == 999999:
+                labels.append("full")
+            else:
+                labels.append(f"{int(mf_size)}")
         
         bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
         
@@ -568,7 +586,7 @@ def analyze_variance_correlation(
     for model_key in sorted(df_agg["model_key"].unique()):
         subset = df_agg[df_agg["model_key"] == model_key].copy()
         
-        x = subset["mf_size_actual"].values
+        x = subset["mf_size_target_numeric"].values
         y = subset["ef_1%_std"].values
         
         ax.scatter(
@@ -642,10 +660,10 @@ def identify_minimum_viable_sizes(
     
     for model_key in sorted(df_agg["model_key"].unique()):
         subset = df_agg[df_agg["model_key"] == model_key].copy()
-        subset = subset.sort_values("mf_size_actual")
+        subset = subset.sort_values("mf_size_target_numeric")
         
-        # Get full-MF performance
-        full_mf = subset[subset["mf_size_actual"] == subset["mf_size_actual"].max()]
+        # Get full-MF performance (largest mf_size_target_numeric)
+        full_mf = subset[subset["mf_size_target_numeric"] == subset["mf_size_target_numeric"].max()]
         if len(full_mf) == 0:
             logger.warning(f"{model_key}: No full-MF data found")
             continue
@@ -657,9 +675,10 @@ def identify_minimum_viable_sizes(
         viable = subset[subset["ef_1%_mean"] >= target_ef1]
         
         if len(viable) > 0:
-            min_size = int(viable["mf_size_actual"].min())
-            min_viable[model_key] = min_size
-            logger.info(f"  {model_key}: {min_size:,} compounds (EF@1% = {viable[viable['mf_size_actual'] == min_size]['ef_1%_mean'].iloc[0]:.2f}, target = {target_ef1:.2f})")
+            min_size_numeric = int(viable["mf_size_target_numeric"].min())
+            min_size_display = "full" if min_size_numeric == 999999 else min_size_numeric
+            min_viable[model_key] = min_size_display
+            logger.info(f"  {model_key}: {min_size_display} compounds (EF@1% = {viable[viable['mf_size_target_numeric'] == min_size_numeric]['ef_1%_mean'].iloc[0]:.2f}, target = {target_ef1:.2f})")
         else:
             min_viable[model_key] = None
             logger.warning(f"  {model_key}: No size achieves {threshold_pct}% threshold")
@@ -706,10 +725,11 @@ def generate_analysis_report(
     report_lines.append("|---|---|---|---|")
     
     for model_key in sorted(df_agg["model_key"].unique()):
-        subset = df_agg[df_agg["model_key"] == model_key].sort_values("mf_size_actual")
+        subset = df_agg[df_agg["model_key"] == model_key].sort_values("mf_size_target_numeric")
         for _, row in subset.iterrows():
+            mf_display = str(row['mf_size_target']) if row['mf_size_target'] != 999999 else "full"
             report_lines.append(
-                f"| {model_key} | {int(row['mf_size_actual']):,} | "
+                f"| {model_key} | {mf_display} | "
                 f"{row['ef_1%_mean']:.2f} ± {row['ef_1%_sem']:.2f} | "
                 f"{int(row['ef_1%_count'])} |"
             )
