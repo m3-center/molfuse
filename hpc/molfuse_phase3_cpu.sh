@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=molfuse_phase3
-#SBATCH --output=logs/slurm/phase3_%A_%a.out
-#SBATCH --error=logs/slurm/phase3_%A_%a.err
+#SBATCH --output=slurm_logs/phase3_%A_%a.out
+#SBATCH --error=slurm_logs/phase3_%A_%a.err
 #SBATCH --time=24:00:00
 #SBATCH --mem=300G
 #SBATCH --cpus-per-task=16
