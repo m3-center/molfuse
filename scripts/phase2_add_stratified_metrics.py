@@ -203,26 +203,69 @@ def load_actives_with_affinity(
         return None
 
 
-def load_ranked_scores(cutoff_dir: Path, logger: logging.Logger) -> Optional[pd.DataFrame]:
-    """Load ranked_scores.csv from Phase 2 cutoff directory."""
+def load_ranked_scores(cutoff_dir: Path, phase1_workspace: Path, phase1_run: str, logger: logging.Logger) -> Optional[pd.DataFrame]:
+    """
+    Load ranked_scores.csv from Phase 2 cutoff directory and join with Phase 1 embeddings to get compound IDs.
+    
+    Phase 2's ranked_scores.csv only has [score, distance, label] without identifiers.
+    We need to load Phase 1's embedding CSVs to get the compound IDs/SMILES.
+    
+    Strategy:
+    1. Load Phase 2 ranked_scores.csv (has: score, distance, label)
+    2. Load Phase 1 embedding_actives.csv and embedding_zinc.csv (have: compound IDs + embeddings)
+    3. The row order should match between Phase 2 scores and Phase 1 embeddings
+    """
     ranked_path = cutoff_dir / "ranked_scores.csv"
     
     if not ranked_path.exists():
-        logger.warning(f"ranked_scores.csv not found: {ranked_path}")
+        logger.warning(f"  ranked_scores.csv not found: {ranked_path}")
+        return None
+    
+    # Load Phase 2 ranked scores (minimal: score, distance, label)
+    try:
+        df_scores = pd.read_csv(ranked_path, low_memory=False)
+    except Exception as e:
+        logger.error(f"  Error loading ranked_scores.csv: {e}")
+        return None
+    
+    # Load Phase 1 embeddings to get compound identifiers
+    phase1_dir = phase1_workspace / "phase1" / phase1_run / "artifacts"
+    
+    actives_emb_path = phase1_dir / "embedding_actives.csv"
+    zinc_emb_path = phase1_dir / "embedding_zinc.csv"
+    
+    if not actives_emb_path.exists() or not zinc_emb_path.exists():
+        logger.error(f"  Phase 1 embedding files not found in {phase1_dir}")
         return None
     
     try:
-        df = pd.read_csv(ranked_path, low_memory=False)
+        # Load only the identifier columns (not the full embeddings)
+        df_actives = pd.read_csv(actives_emb_path, usecols=lambda c: c in ["Compound ChEMBL ID", "SMILES", "canonical_smiles"], low_memory=False)
+        df_zinc = pd.read_csv(zinc_emb_path, usecols=lambda c: c in ["Compound ChEMBL ID", "SMILES", "canonical_smiles", "zinc_id"], low_memory=False)
         
-        # Ensure proper sorting (should already be sorted, but verify)
-        if "score" in df.columns:
-            df = df.sort_values(by="score", ascending=False, kind="stable").reset_index(drop=True)
-        elif "distance" in df.columns:
-            df = df.sort_values(by="distance", ascending=True, kind="stable").reset_index(drop=True)
+        # Concatenate: actives first, then ZINC (should match Phase 1 order)
+        df_ids = pd.concat([df_actives, df_zinc], ignore_index=True)
         
-        return df
+        logger.info(f"  Loaded {len(df_actives)} actives + {len(df_zinc)} ZINC from Phase 1 embeddings")
+        
+        # Verify lengths match
+        if len(df_ids) != len(df_scores):
+            logger.error(f"  Length mismatch: Phase 1 embeddings ({len(df_ids)}) != Phase 2 scores ({len(df_scores)})")
+            return None
+        
+        # Merge by row order (index)
+        df_full = pd.concat([df_ids.reset_index(drop=True), df_scores.reset_index(drop=True)], axis=1)
+        
+        # Sort by score (Phase 2 should already be sorted, but verify)
+        if "score" in df_full.columns:
+            df_full = df_full.sort_values(by="score", ascending=False, kind="stable").reset_index(drop=True)
+        elif "distance" in df_full.columns:
+            df_full = df_full.sort_values(by="distance", ascending=True, kind="stable").reset_index(drop=True)
+        
+        return df_full
+        
     except Exception as e:
-        logger.error(f"Error loading ranked_scores.csv: {e}")
+        logger.error(f"  Error loading Phase 1 embeddings: {e}")
         return None
 
 
@@ -244,24 +287,31 @@ def join_affinity_to_ranked(
     ranked_df = ranked_df.copy()
     actives_df = actives_df.copy()
     
+    # Debug: log available columns
+    logger.info(f"  ranked_df columns (first 10): {list(ranked_df.columns[:10])}")
+    logger.info(f"  actives_df columns: {list(actives_df.columns)}")
+    
     # Find join columns (prefer ChEMBL ID, fallback to SMILES)
-    chembl_col_r = find_column_ignorecase(ranked_df, ["Compound ChEMBL ID", "compound_chembl_id"])
-    chembl_col_a = find_column_ignorecase(actives_df, ["Compound ChEMBL ID", "compound_chembl_id"])
+    chembl_col_r = find_column_ignorecase(ranked_df, ["Compound ChEMBL ID", "compound_chembl_id", "compound chembl id"])
+    chembl_col_a = find_column_ignorecase(actives_df, ["Compound ChEMBL ID", "compound_chembl_id", "compound chembl id"])
     
     if chembl_col_r and chembl_col_a:
-        logger.info("Joining by Compound ChEMBL ID")
+        logger.info(f"  Joining by Compound ChEMBL ID: {chembl_col_r} = {chembl_col_a}")
         ranked_df["_join_key"] = ranked_df[chembl_col_r].astype(str).str.upper().str.strip()
         actives_df["_join_key"] = actives_df[chembl_col_a].astype(str).str.upper().str.strip()
     else:
-        logger.info("Joining by SMILES")
-        smiles_col_r = find_column_ignorecase(ranked_df, ["SMILES", "canonical_smiles"])
-        smiles_col_a = find_column_ignorecase(actives_df, ["SMILES", "canonical_smiles"])
+        # Expanded SMILES column candidates
+        smiles_col_r = find_column_ignorecase(ranked_df, ["SMILES", "canonical_smiles", "smiles", "canonical smiles"])
+        smiles_col_a = find_column_ignorecase(actives_df, ["SMILES", "canonical_smiles", "smiles", "canonical smiles"])
         
         if not smiles_col_r or not smiles_col_a:
-            logger.error("Cannot find join key (no ChEMBL ID or SMILES)")
+            logger.error(f"  Cannot find join key (no ChEMBL ID or SMILES)")
+            logger.error(f"  Searched in ranked_df for: ChEMBL ID, SMILES (case-insensitive)")
+            logger.error(f"  Searched in actives_df for: ChEMBL ID, SMILES (case-insensitive)")
             ranked_df["potency_tier"] = None
             return ranked_df
         
+        logger.info(f"  Joining by SMILES: {smiles_col_r} = {smiles_col_a}")
         ranked_df["_join_key"] = ranked_df[smiles_col_r].astype(str).str.strip()
         actives_df["_join_key"] = actives_df[smiles_col_a].astype(str).str.strip()
     
@@ -374,8 +424,8 @@ def process_cutoff_directory(
         logger.warning(f"  No actives data available, skipping")
         return False
     
-    # Load ranked scores
-    ranked_df = load_ranked_scores(cutoff_dir, logger)
+    # Load ranked scores (joins Phase 2 scores with Phase 1 compound IDs)
+    ranked_df = load_ranked_scores(cutoff_dir, phase1_workspace, phase1_run, logger)
     if ranked_df is None:
         return False
     
