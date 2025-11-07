@@ -85,9 +85,8 @@ echo "Array Task ID: ${SLURM_ARRAY_TASK_ID:-N/A}"
 echo "Node: $(hostname)"
 echo "=========================================="
 
-# Activate conda environment
-eval "$(conda shell.bash hook)"
-conda activate ummbas_screening
+# Activate mamba environment
+source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
 
 # Verify Python environment
 echo "Python: $(which python3)"

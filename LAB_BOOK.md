@@ -1,3 +1,57 @@
+### January 29, 2025: Phase 3 config generator fix — no more assumptions
+
+- Changes Made (Code)
+  - `scripts/generate_molfuse_phase3_configs_v4.py`: Removed hardcoded defaults (`DEFAULT_PHASE1_BEST`, `DEFAULT_PHASE2_CUTOFFS`)
+  - Enhanced `load_phase1_best()` to parse `phase1_summary_grouped.csv` and extract best hyperparameters per (method × representation) based on EF@1%
+  - Enhanced `load_phase2_cutoffs()` to require `phase2_best_cutoffs.json` (fail if missing, no silent fallbacks)
+  - Updated `main()` to default to `reporting/phase1_post_analysis/` and `reporting/phase2_post_analysis/` paths
+  - Git SHA: (pending commit)
+
+- Problem Identified
+  - Original config generator used **hardcoded assumptions**: `dim=20`, `n_neighbors=50`, `min_dist=0.01`, `cutoff=100000 nM`
+  - Phase 3 (MF ablation) should use **experimentally-validated** best hyperparameters from Phase 1/2, not arbitrary defaults
+  - Critical example: UMAP features best at **dim=2** (EF@1% = 25.75), NOT dim=20! Hardcoded defaults would have used wrong dimension.
+
+- Solution
+  - **No silent fallbacks**: If Phase 1/2 results missing, generator raises `FileNotFoundError` instead of using defaults
+  - **Data-driven configs**: Read actual best hyperparameters from `phase1_summary_grouped.csv` and optimal cutoffs from `phase2_best_cutoffs.json`
+  - **Reproducible lineage**: Phase 1 → Phase 2 → Phase 3 (each phase uses validated results from prior phases)
+
+- Validation Results
+  - Generated 120 configs (4 methods × 6 MF sizes × 5 replicates)
+  - Verified critical configs:
+    - `pca_features`: dim=20, cutoff=1000 nM ✅ (Phase 2 optimal, not 100K assumption)
+    - `umap_features`: **dim=2**, cutoff=100 nM, n_neighbors=10, min_dist=0.01 ✅ (actual best, not assumed dim=20!)
+  - All 120 configs use experimentally-determined hyperparameters
+
+- Phase 1 Best Hyperparameters (Extracted from Results)
+  - `pca_features`: dim=20 (EF@1% = 24.27)
+  - `pca_fingerprints`: dim=20 (EF@1% = 13.08)
+  - `umap_features`: **dim=2** (EF@1% = 25.75), n_neighbors=10, min_dist=0.01
+  - `umap_fingerprints`: dim=20 (EF@1% = 33.94), n_neighbors=10, min_dist=0.0
+
+- Phase 2 Optimal Cutoffs (Extracted from Results)
+  - `pca_features`: **1000 nM** (EF@1% = 25.07) ← Not 100K!
+  - `pca_fingerprints`: 100 nM (EF@1% = 16.57)
+  - `umap_features`: 100 nM (EF@1% = 42.96)
+  - `umap_fingerprints`: 100 nM (EF@1% = 45.08)
+
+- Scientific Impact
+  - **Before**: Phase 3 would use arbitrary hyperparameters; results non-interpretable (unknown if degradation due to MF size or suboptimal params)
+  - **After**: Phase 3 uses best-performing configurations; research question preserved ("What happens when MF cloud size decreases while holding other variables constant?")
+  - **Lesson**: Always question assumptions. Default values are not substitutes for experimental data.
+
+- Artifacts Generated
+  - `configs/molfuse_phase3_grid/`: 120 JSON configs with actual Phase 1/2 hyperparameters
+  - `PHASE3_CONFIG_FIX.md`: Detailed documentation of fix, validation, and impact
+  - `README_PHASE3_USAGE.md`: Updated to emphasize required Phase 1/2 results
+
+- Next Steps
+  - Local test: Run `pca_features_dim20_mf10_rep1.json` to verify Phase 3 pipeline
+  - HPC dry-run: `bash hpc/submit_molfuse_phase3.sh --dry-run configs/molfuse_phase3_grid experiment_workspace_v4`
+  - HPC submission: Full 120-run execution
+  - Phase 3 post-analysis: Degradation curves, phase transition point identification
+
 ### October 29, 2025: UMAP dimensionality effects — information bottleneck hypothesis
 
 - Research Question
