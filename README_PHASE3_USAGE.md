@@ -8,12 +8,14 @@
 
 ## Experimental Design
 
-- **MF Cloud Sizes**: `[10, 100, 1000, 10000, 100000, full]`
+- **MF Cloud Sizes**: `[10, 100, 1000, 10000, 100000, full]` (6 sizes)
 - **Methods**: 4 best configs from Phase 1 (PCA/UMAP × features/fingerprints)
+- **Replicates**: 5 replicates per (method × MF size) for statistical robustness
+- **Total Runs**: **120** (4 methods × 6 sizes × 5 replicates)
 - **Retraining**: FULL RETRAINING for each MF size (new scaler + DR model)
 - **Hyperparameters**: Frozen (use Phase 1 best)
 - **Affinity Cutoff**: Method-specific optimal from Phase 2
-- **Subsampling**: Random (reproducible via seed)
+- **Subsampling**: Random (reproducible via seed: replicate × 42)
 - **Held-out Sets**: ZINC + actives remain constant across all MF sizes
 
 ## Workflow
@@ -31,14 +33,14 @@ python scripts/generate_molfuse_phase3_configs_v4.py \
 python scripts/generate_molfuse_phase3_configs_v4.py \
     --output_dir configs/molfuse_phase3_grid
 
-# Custom MF sizes and seed
+# Custom MF sizes and replicates
 python scripts/generate_molfuse_phase3_configs_v4.py \
     --mf_sizes "10,50,100,500,1000,full" \
-    --random_seed 123 \
+    --replicates "1,2,3,4,5" \
     --output_dir configs/molfuse_phase3_grid
 ```
 
-**Output**: 24 configs (4 methods × 6 MF sizes)
+**Output**: **120 configs** (4 methods × 6 MF sizes × 5 replicates)
 
 ### Step 2: Submit to HPC (Parallel Execution)
 
@@ -56,7 +58,7 @@ bash hpc/submit_molfuse_phase3.sh \
 
 **Features**:
 - Idempotent: Skips runs with existing `phase3_summary.json`
-- Parallel: All 24 jobs run simultaneously
+- Parallel: All 120 jobs run simultaneously (subject to cluster limits)
 - Robust: Each job is independent
 
 ### Step 3: Monitor Jobs
@@ -103,7 +105,7 @@ experiment_workspace_v4/phase3/mf_ablation/
 ├── logs/
 │   ├── run.log
 │   └── phase3_summary.json
-├── pca_features_dim20_mf10/
+├── pca_features_dim20_mf10_rep1/
 │   ├── artifacts/
 │   │   ├── scaler.joblib
 │   │   ├── pca_model.joblib
@@ -116,9 +118,9 @@ experiment_workspace_v4/phase3/mf_ablation/
 │   │   └── phase3_summary.json
 │   └── metrics/
 │       └── metrics.json
-├── pca_features_dim20_mf100/
-├── ... (24 total runs)
-└── umap_fingerprints_dim20_mf_full/
+├── pca_features_dim20_mf10_rep2/
+├── ... (120 total runs: 4 methods × 6 sizes × 5 replicates)
+└── umap_fingerprints_dim20_mf_full_rep5/
 ```
 
 ## Key Metrics

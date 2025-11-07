@@ -102,8 +102,8 @@ def generate_phase3_configs(
     phase2_cutoffs: Dict,
     output_dir: Path,
     target: str = "TyrosineProteinKinaseABL1_P00519",
-    mf_sizes: List = None,
-    random_seed: int = 42,
+    mf_sizes: List | None = None,
+    replicates: List[int] | None = None,
 ) -> List[Path]:
     """
     Generate Phase 3 configuration grid.
@@ -114,13 +114,16 @@ def generate_phase3_configs(
         output_dir: Output directory for configs
         target: Target protein
         mf_sizes: List of MF cloud sizes [10, 100, 1000, 10000, 100000, "full"]
-        random_seed: Random seed for MF subsampling
+        replicates: List of replicate numbers [1, 2, 3, 4, 5]
     
     Returns:
         List of created config file paths
     """
     if mf_sizes is None:
         mf_sizes = [10, 100, 1000, 10000, 100000, "full"]
+    
+    if replicates is None:
+        replicates = [1, 2, 3, 4, 5]
     
     output_dir.mkdir(parents=True, exist_ok=True)
     created_configs = []
@@ -133,7 +136,7 @@ def generate_phase3_configs(
         "zinc_fingerprints_csv": "datasets/molecular_function_features_fingerprints/zinc_acquirable_fingerprints.csv",
     }
     
-    # Generate configs for each method × MF size
+    # Generate configs for each method × MF size × replicate
     for model_key, best_config in phase1_best.items():
         method = best_config["method"]
         representation = best_config["representation"]
@@ -144,31 +147,36 @@ def generate_phase3_configs(
         cutoff_nM = phase2_cutoffs.get(method, 100000)
         
         for mf_size in mf_sizes:
-            # Generate run name
-            mf_size_str = str(mf_size) if mf_size != "full" else "full"
-            run_name = f"{method}_{representation}_dim{dim}_mf{mf_size_str}"
-            
-            config = {
-                "run_name": run_name,
-                "phase3_run_name": "mf_ablation",
-                "target": target,
-                "method": method,
-                "representation": representation,
-                "dim": dim,
-                "mf_size": mf_size,
-                "affinity_cutoff_nM": cutoff_nM,
-                "random_seed": random_seed,
-                "umap_params": umap_params,
-                **base_paths,
-            }
-            
-            # Save config
-            config_path = output_dir / f"{run_name}.json"
-            with config_path.open("w") as f:
-                json.dump(config, f, indent=2)
-            
-            created_configs.append(config_path)
-            print(f"✓ Generated: {config_path.name}")
+            for replicate in replicates:
+                # Generate run name (include replicate)
+                mf_size_str = str(mf_size) if mf_size != "full" else "full"
+                run_name = f"{method}_{representation}_dim{dim}_mf{mf_size_str}_rep{replicate}"
+                
+                # Random seed based on replicate number
+                random_seed = replicate * 42  # Seeds: 42, 84, 126, 168, 210
+                
+                config = {
+                    "run_name": run_name,
+                    "phase3_run_name": "mf_ablation",
+                    "target": target,
+                    "method": method,
+                    "representation": representation,
+                    "dim": dim,
+                    "mf_size": mf_size,
+                    "affinity_cutoff_nM": cutoff_nM,
+                    "replicate": replicate,
+                    "random_seed": random_seed,
+                    "umap_params": umap_params,
+                    **base_paths,
+                }
+                
+                # Save config
+                config_path = output_dir / f"{run_name}.json"
+                with config_path.open("w") as f:
+                    json.dump(config, f, indent=2)
+                
+                created_configs.append(config_path)
+                print(f"✓ Generated: {config_path.name}")
     
     return created_configs
 
@@ -185,8 +193,8 @@ def main():
                        help="Target protein")
     parser.add_argument("--mf_sizes", type=str, default="10,100,1000,10000,100000,full",
                        help="Comma-separated MF sizes")
-    parser.add_argument("--random_seed", type=int, default=42,
-                       help="Random seed for MF subsampling")
+    parser.add_argument("--replicates", type=str, default="1,2,3,4,5",
+                       help="Comma-separated replicate numbers")
     args = parser.parse_args()
     
     # Parse inputs
@@ -203,6 +211,9 @@ def main():
         else:
             mf_sizes.append(int(s))
     
+    # Parse replicates
+    replicates = [int(r.strip()) for r in args.replicates.split(",")]
+    
     # Load Phase 1 best and Phase 2 cutoffs
     phase1_best = load_phase1_best(phase1_path)
     phase2_cutoffs = load_phase2_cutoffs(phase2_path)
@@ -212,7 +223,7 @@ def main():
     print("="*80)
     print(f"Target: {args.target}")
     print(f"MF sizes: {mf_sizes}")
-    print(f"Random seed: {args.random_seed}")
+    print(f"Replicates: {replicates}")
     print(f"Output: {output_dir}")
     print()
     
@@ -233,13 +244,14 @@ def main():
         output_dir,
         target=args.target,
         mf_sizes=mf_sizes,
-        random_seed=args.random_seed,
+        replicates=replicates,
     )
     
     print("="*80)
     print(f"✓ Generated {len(created)} Phase 3 configs")
     print(f"  Models: {len(phase1_best)} methods")
     print(f"  MF sizes: {len(mf_sizes)} sizes")
+    print(f"  Replicates: {len(replicates)} replicates")
     print(f"  Total runs: {len(created)}")
     print("="*80)
     print()
