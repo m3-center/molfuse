@@ -276,9 +276,13 @@ def run_phase3(config_path: Path, workspace_dir: Path) -> None:
     mf_size = cfg.get("mf_size", "full")
     random_seed = cfg.get("random_seed", 42)
     
-    # Create run directories
-    run_dir = workspace_dir / "phase3" / cfg.get("phase3_run_name", "mf_ablation") / run_name
-    logs_dir, metrics_dir, artifacts_dir = make_run_dirs(run_dir)
+    # Create run directories using make_run_dirs
+    phase3_run_name = cfg.get("phase3_run_name", "mf_ablation")
+    ws = make_run_dirs(workspace_dir, phase="phase3", run_name=f"{phase3_run_name}/{run_name}")
+    run_dir = ws["base"]
+    logs_dir = ws["logs"]
+    metrics_dir = ws["metrics"]
+    artifacts_dir = ws["artifacts"]
     
     # Setup logger
     log_path = logs_dir / "run.log"
