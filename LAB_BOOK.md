@@ -63,6 +63,64 @@
 - Artifacts Generated
   - `MEDIAN_DEDUPLICATION_IMPLEMENTATION.md` (comprehensive documentation)
 
+### November 7, 2025: Phase 2 potency-tier stratified analysis workflow (post-hoc)
+
+- Research Question
+  - Does scoring against high-potency-only ligands (strict affinity cutoffs) improve enrichment of high-potency actives more than overall actives?
+  - At what cutoff does tier-specific selectivity emerge (if at all)?
+
+- Hypotheses
+  - **H1 (Strictness)**: Stricter cutoffs (100 nM) preferentially enrich high-potency actives (0.1-100 nM) because high-potency ligands share chemical features required for tight binding
+  - **H2 (Quality-Quantity Trade-off)**: Reducing MF cloud size (via strict cutoffs) hurts overall enrichment but improves high-potency selectivity
+  - **H3 (Tier Inversion)**: At some cutoff, high-potency EF@1% exceeds overall EF@1% (crossover point indicates optimal strictness)
+  - **H4 (Method Sensitivity)**: UMAP embeddings show stronger tier separation than PCA (nonlinear methods capture potency-relevant features better)
+
+- Changes Made (Code)
+  - Created `scripts/phase2_add_stratified_metrics.py`: Post-hoc re-analysis script that adds tier-specific metrics to Phase 2 results
+    - Loads `ranked_scores.csv` from Phase 2 cutoff directories (no Phase 2 rerun required)
+    - Joins actives with affinity data from Phase 1 source CSVs (actives or MF CSV)
+    - Assigns potency tiers: High (0.1-100 nM), Medium (100-1K nM), Weak (1K-100K nM)
+    - Computes `ef1_high`, `ef1_medium`, `ef1_weak` for each cutoff
+    - Updates existing `metrics.json` files with stratified metrics (backward-compatible)
+  - Updated `scripts/phase2_post_analysis.py`: Added tier-wise visualization
+    - New function: `plot_cutoff_tier_sensitivity()` generates multi-panel line plot
+    - Shows ONLY best configurations per method (highest average EF@1% across cutoffs)
+    - Plot design: X-axis = cutoff (log scale), Y-axis = EF@1%, 4 lines per panel (All/High/Medium/Weak)
+    - Color scheme: Green (all), Blue (high), Orange (medium), Red (weak)
+    - Features: Shared y-axis, markers, optimal cutoff reference line (gray dashed)
+  - Created `PHASE2_TIER_ANALYSIS_GUIDE.md`: Complete workflow documentation
+    - 3-step workflow: Run Phase 2 → Add stratified metrics → Visualize
+    - Research hypotheses with expected outcomes
+    - Interpretation scenarios (Strictness works/fails, method comparisons)
+    - Troubleshooting section
+
+- Experimental Design (Post-Hoc)
+  - **No Phase 2 rerun required**: Works with existing Phase 2 outputs
+  - **Data source**: Affinity values from Phase 1 actives or MF CSV
+  - **Tier definitions**: 
+    - High: 0.1-100 nM (drug-like, clinically relevant)
+    - Medium: 100-1,000 nM (moderate affinity)
+    - Weak: 1,000-100,000 nM (marginal binders)
+  - **Best config selection**: One PCA + one UMAP config (highest average EF@1% across all cutoffs)
+  - **Visualization**: 2-panel plot (PCA best + UMAP best) with 4 tier lines per panel
+
+- Expected Impact
+  - Publication-quality figure showing cutoff × tier sensitivity
+  - Evidence for/against "strictness improves selectivity" hypothesis
+  - Optimal cutoff recommendation for Phase 3 (may differ by potency tier)
+  - Method comparison: PCA vs UMAP sensitivity to cutoff changes
+
+- Validation (Next Steps)
+  - Run `phase2_add_stratified_metrics.py` on Phase 2 workspace once available
+  - Generate tier-wise plot with `phase2_post_analysis.py`
+  - Analyze crossover points (where High > All)
+  - Test H4 by comparing PCA vs UMAP panel patterns
+
+- Artifacts Generated
+  - `scripts/phase2_add_stratified_metrics.py` (post-hoc re-analysis script, ~440 lines)
+  - `scripts/phase2_post_analysis.py` (updated with tier visualization, ~150 lines added)
+  - `PHASE2_TIER_ANALYSIS_GUIDE.md` (complete workflow documentation, ~300 lines)
+
 ### October 29, 2025: Phase 2 and Phase 3 experimental design clarification
 
 - Research Questions and Hypotheses (Clarified)

@@ -205,6 +205,49 @@ Phase 1 (Hyperparameters) → Phase 2 (Cutoff Sensitivity) → Phase 3 (MF Ablat
 
 **Speedup vs Full Pipeline**: 75% time savings (reusing Phase 1 data)
 
+### Post-Analysis: Potency-Tier Stratified Metrics
+
+**Purpose**: Determine if strict cutoffs preferentially enrich high-potency actives
+
+**Workflow** (3 steps):
+1. **Run Phase 2** (standard pipeline, produces overall metrics only)
+2. **Add Stratified Metrics** (post-hoc re-analysis):
+   ```bash
+   python scripts/phase2_add_stratified_metrics.py \
+       --workspace_dir experiment_workspace_v4 \
+       --phase2_run_name cutoff_sweep
+   ```
+   - Loads `ranked_scores.csv` from Phase 2 results (no Phase 2 rerun required)
+   - Joins actives with affinity data from Phase 1 source CSVs
+   - Assigns potency tiers: High (0.1-100 nM), Medium (100-1K nM), Weak (1K-100K nM)
+   - Computes tier-specific EF@1% for each cutoff
+   - Updates `metrics.json` with `ef1_high`, `ef1_medium`, `ef1_weak`
+
+3. **Visualize Tier Sensitivity**:
+   ```bash
+   python scripts/phase2_post_analysis.py \
+       --workspace_dir experiment_workspace_v4 \
+       --phase2_run_name cutoff_sweep \
+       --output_dir reporting/phase2_post_analysis
+   ```
+   - Generates `cutoff_tier_sensitivity_best_configs.png/pdf`
+   - Shows best PCA config + best UMAP config (2 panels)
+   - 4 lines per panel: All (green), High (blue), Medium (orange), Weak (red)
+   - X-axis: cutoff (log scale), Y-axis: EF@1%
+
+**Research Hypotheses Tested**:
+- **H1 (Strictness)**: Do 100 nM cutoffs preferentially enrich high-potency actives?
+- **H2 (Quality-Quantity Trade-off)**: Does reducing MF cloud hurt overall enrichment?
+- **H3 (Tier Inversion)**: Crossover point where high-potency EF > overall EF?
+- **H4 (Method Sensitivity)**: Do PCA and UMAP differ in tier separation?
+
+**Output Files**:
+- `cutoff_tier_sensitivity_best_configs.png/pdf` (publication figure)
+- `phase2_tier_metrics_best_configs.csv` (data table)
+- `phase2_aggregated_metrics.csv` (all models, all cutoffs)
+
+**Documentation**: See `PHASE2_TIER_ANALYSIS_GUIDE.md` for complete workflow and interpretation
+
 ### Current Status (November 2025)
 
 **Progress**:
@@ -212,11 +255,14 @@ Phase 1 (Hyperparameters) → Phase 2 (Cutoff Sensitivity) → Phase 3 (MF Ablat
 - ✅ Orchestrator: `hpc/submit_molfuse_phase2.sh` ready
 - ✅ CLI: `molfuse/cli/phase2.py` complete with median deduplication
 - ✅ Compatibility verified: Phase 2 works with Phase 1 v4 outputs
+- ✅ Post-hoc stratified analysis: `phase2_add_stratified_metrics.py` ready
+- ✅ Tier visualization: `phase2_post_analysis.py` updated
 - ⏳ Execution: Blocked pending Phase 1 completion
 
 **Deliverables**:
 - Cutoff sensitivity curves (EF@1% vs cutoff)
-- Potency-stratified enrichment tables
+- Potency-stratified enrichment tables (High/Medium/Weak tiers)
+- Tier-wise cutoff sensitivity plot (best configs only)
 - Optimal cutoff recommendation for Phase 3
 - Method-specific cutoff preferences (if divergent)
 
