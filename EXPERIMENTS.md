@@ -209,31 +209,33 @@ Phase 1 (Hyperparameters) → Phase 2 (Cutoff Sensitivity) → Phase 3 (MF Ablat
 
 **Purpose**: Determine if strict cutoffs preferentially enrich high-potency actives
 
-**Workflow** (3 steps):
-1. **Run Phase 2** (standard pipeline, produces overall metrics only)
-2. **Add Stratified Metrics** (post-hoc re-analysis):
-   ```bash
-   python scripts/phase2_add_stratified_metrics.py \
-       --workspace_dir experiment_workspace_v4 \
-       --phase2_run_name cutoff_sweep
-   ```
-   - Loads `ranked_scores.csv` from Phase 2 results (no Phase 2 rerun required)
-   - Joins actives with affinity data from Phase 1 source CSVs
-   - Assigns potency tiers: High (0.1-100 nM), Medium (100-1K nM), Weak (1K-100K nM)
-   - Computes tier-specific EF@1% for each cutoff
-   - Updates `metrics.json` with `ef1_high`, `ef1_medium`, `ef1_weak`
+**Data Structure** (Phase 2 outputs):
+- `ranked_scores.csv` now includes compound identifiers: `[score, distance, label, SMILES, Compound ChEMBL ID, zinc_id]`
+- Enables direct join with affinity data for tier assignment
+- No Phase 1 embedding loading required
 
-3. **Visualize Tier Sensitivity**:
+**Workflow** (simplified, 2 steps):
+1. **Run Phase 2** (standard pipeline):
+   ```bash
+   bash hpc/submit_molfuse_phase2.sh configs/molfuse_phase2_grid experiment_workspace_v4
+   ```
+   - Saves `ranked_scores.csv` with compound identifiers (SMILES, ChEMBL ID)
+   
+2. **Post-Analysis with Tier Stratification**:
    ```bash
    python scripts/phase2_post_analysis.py \
        --workspace_dir experiment_workspace_v4 \
        --phase2_run_name cutoff_sweep \
-       --output_dir reporting/phase2_post_analysis
+       --output_dir reporting/phase2_post_analysis \
+       --compute_tier_metrics  # New flag to enable tier stratification
    ```
+   - Loads `ranked_scores.csv` from each cutoff directory
+   - Joins actives with affinity data from Phase 1 source CSVs
+   - Assigns potency tiers: High (0.1-100 nM), Medium (100-1K nM), Weak (1K-100K nM)
+   - Computes tier-specific EF@1% for each cutoff
    - Generates `cutoff_tier_sensitivity_best_configs.png/pdf`
    - Shows best PCA config + best UMAP config (2 panels)
    - 4 lines per panel: All (green), High (blue), Medium (orange), Weak (red)
-   - X-axis: cutoff (log scale), Y-axis: EF@1%
 
 **Research Hypotheses Tested**:
 - **H1 (Strictness)**: Do 100 nM cutoffs preferentially enrich high-potency actives?
@@ -253,11 +255,10 @@ Phase 1 (Hyperparameters) → Phase 2 (Cutoff Sensitivity) → Phase 3 (MF Ablat
 **Progress**:
 - ✅ Config generator: `generate_molfuse_phase2_configs_v4.py` complete
 - ✅ Orchestrator: `hpc/submit_molfuse_phase2.sh` ready
-- ✅ CLI: `molfuse/cli/phase2.py` complete with median deduplication
+- ✅ CLI: `molfuse/cli/phase2.py` updated to save compound IDs in `ranked_scores.csv`
 - ✅ Compatibility verified: Phase 2 works with Phase 1 v4 outputs
-- ✅ Post-hoc stratified analysis: `phase2_add_stratified_metrics.py` ready
-- ✅ Tier visualization: `phase2_post_analysis.py` updated
-- ⏳ Execution: Blocked pending Phase 1 completion
+- ✅ Tier visualization: `phase2_post_analysis.py` updated with tier stratification
+- ⏳ Execution: **Phase 2 rerun required** (code updated to save identifiers)
 
 **Deliverables**:
 - Cutoff sensitivity curves (EF@1% vs cutoff)

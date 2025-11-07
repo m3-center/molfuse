@@ -63,6 +63,40 @@
 - Artifacts Generated
   - `MEDIAN_DEDUPLICATION_IMPLEMENTATION.md` (comprehensive documentation)
 
+### November 7, 2025: Phase 2 ranked_scores.csv now includes compound identifiers
+
+- Changes Made (Code)
+  - Updated `molfuse/cli/phase2.py` to save compound identifiers in `ranked_scores.csv`
+    - Previously: Only saved `[score, distance, label]` (3 columns)
+    - Now: Saves `[score, distance, label, SMILES, Compound ChEMBL ID, zinc_id]` (full identifiers)
+    - Concatenates identifiers from `emb_act` and `emb_zinc` DataFrames (matches label order)
+    - Enables direct affinity join for tier-stratified analysis without needing Phase 1 embeddings
+  - Removed `scripts/phase2_add_stratified_metrics.py` (no longer needed)
+    - Previous approach: Post-hoc loading of Phase 1 embeddings to get identifiers
+    - New approach: Identifiers saved directly in Phase 2 output
+    - Simpler, more robust, avoids row-order mismatches
+
+- Rationale
+  - Phase 2's original `ranked_scores.csv` lacked compound identifiers, making tier-stratified analysis impossible
+  - Attempted post-hoc solution (loading Phase 1 embeddings by index) produced incorrect results (EF@1%=100.0 for all tiers)
+  - Root cause: Row order changed between Phase 1 embeddings and Phase 2 re-ranked scores
+  - Fix: Save identifiers during Phase 2 execution, not post-hoc
+
+- Expected Impact
+  - **Requires Phase 2 rerun** with updated code
+  - `ranked_scores.csv` will have 6+ columns instead of 3
+  - Tier-stratified analysis can now join actives by ChEMBL ID or SMILES directly
+  - Post-analysis script becomes trivial: load ranked_scores.csv, join affinity, assign tiers, compute EF@1%
+
+- Next Steps
+  - Rerun Phase 2: `bash hpc/submit_molfuse_phase2.sh configs/molfuse_phase2_grid experiment_workspace_v4`
+  - Create simplified post-analysis script (no Phase 1 embedding loading required)
+  - Generate tier-wise cutoff sensitivity plots
+
+- Artifacts Generated
+  - Updated `molfuse/cli/phase2.py` (ranked_scores.csv now includes identifiers)
+  - Removed `scripts/phase2_add_stratified_metrics.py` (obsolete)
+
 ### November 7, 2025: Phase 2 potency-tier stratified analysis workflow (post-hoc)
 
 - Research Question

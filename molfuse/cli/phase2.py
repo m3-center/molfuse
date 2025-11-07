@@ -301,12 +301,30 @@ def main() -> None:
 
             (cutoff_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
-            # Ranked scores
+            # Ranked scores with compound identifiers
+            # Concatenate actives + ZINC identifiers (match embedding order)
+            id_cols_act = [c for c in emb_act.columns if c in ["SMILES", "canonical_smiles", "Compound ChEMBL ID"]]
+            id_cols_zinc = [c for c in emb_zinc.columns if c in ["SMILES", "canonical_smiles", "Compound ChEMBL ID", "zinc_id"]]
+            
+            # Build identifier DataFrames
+            ids_act = emb_act[id_cols_act].reset_index(drop=True) if id_cols_act else pd.DataFrame(index=range(len(emb_act)))
+            ids_zinc = emb_zinc[id_cols_zinc].reset_index(drop=True) if id_cols_zinc else pd.DataFrame(index=range(len(emb_zinc)))
+            
+            # Concatenate: actives first, then ZINC (matches label order)
+            ids_combined = pd.concat([ids_act, ids_zinc], ignore_index=True)
+            
+            # Build ranked DataFrame with identifiers
             ranked = pd.DataFrame({
                 "score": scores,
                 "distance": distances,
                 "label": labels,
             })
+            
+            # Add identifier columns
+            for col in ids_combined.columns:
+                ranked[col] = ids_combined[col].values
+            
+            # Sort by score
             ranked.sort_values("score", ascending=False, inplace=True)
             ranked.to_csv(cutoff_dir / "ranked_scores.csv", index=False)
 
