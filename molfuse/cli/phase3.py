@@ -23,10 +23,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
@@ -39,7 +40,6 @@ from molfuse.data.prep import (
     select_feature_columns,
     remove_zero_variance_features,
     fit_scaler_on_mf_zinc,
-    parse_fingerprint_series,
 )
 from molfuse.dr.pca import fit_pca
 from molfuse.dr.umap_ import fit_umap
@@ -132,6 +132,59 @@ def remove_overlap_by_smiles(df: pd.DataFrame, smiles_col: str, exclude_smiles: 
     if removed > 0:
         logging.getLogger("phase3").info(f"  Removed {removed:,} overlapping SMILES ({n_after:,} remain)")
     return df
+
+
+def parse_fp_series(series: pd.Series, label: str, logger: logging.Logger) -> Tuple[np.ndarray, pd.Index]:
+    """
+    Parse fingerprint series from string format to numpy array.
+    
+    Handles various formats:
+    - "[0,1,0,1,...]" (bracketed)
+    - "0,1,0,1,..." (unbracketed)
+    - With/without quotes and spaces
+    
+    Returns:
+        X: numpy array (n_rows, fp_length) of 0/1 values
+        idx: pandas Index of valid rows
+    """
+    before = len(series)
+    ser = series.astype(str).str.strip().str.replace("\"", "", regex=False)
+    # Drop NaNs or empty strings
+    mask_nonempty = ser.notna() & (ser.str.len() > 0)
+    ser = ser[mask_nonempty]
+
+    parsed_list: List[np.ndarray] = []
+    valid_idx: List[object] = []
+    expected_len: Optional[int] = None
+    
+    for idx, s in ser.items():
+        try:
+            # Sanitize string: remove spaces, trim brackets, drop trailing commas, keep only 0/1/,
+            ss = s.replace(" ", "").strip()
+            if ss.startswith("[") and ss.endswith("]"):
+                ss = ss[1:-1]
+            # Remove any characters not 0,1, or comma (robust to stray quotes or text)
+            ss = re.sub(r"[^01,]", "", ss)
+            ss = ss.strip(",")
+            if not ss:
+                continue
+            arr = np.fromstring(ss, sep=",", dtype=np.uint8)
+            if expected_len is None:
+                expected_len = int(arr.shape[0])
+            if arr.shape[0] != expected_len or expected_len == 0:
+                continue  # skip inconsistent length rows
+            parsed_list.append(arr)
+            valid_idx.append(idx)
+        except Exception:
+            continue
+    
+    if expected_len is None:
+        raise RuntimeError(f"{label}: could not parse any fingerprint rows")
+    
+    X = np.vstack(parsed_list).astype(np.float32)
+    after = X.shape[0]
+    logger.info(f"{label}: parsed fingerprints: rows {before}->{after}, fp_len={expected_len}")
+    return X, pd.Index(valid_idx)
 
 
 def to_pactivity_from_nM(affinity_nM: pd.Series) -> pd.Series:
@@ -326,13 +379,14 @@ def run_phase3(config_path: Path, workspace_dir: Path) -> None:
     else:  # fingerprints
         # Parse fingerprints
         logger.info("Parsing fingerprints...")
-        fp_mf = parse_fingerprint_series(df_mf["Fingerprint"], logger)
-        fp_zinc = parse_fingerprint_series(df_zinc["Fingerprint"], logger)
-        fp_act = parse_fingerprint_series(df_act["Fingerprint"], logger)
+        X_mf, idx_mf = parse_fp_series(df_mf["Fingerprint"], "MF", logger)
+        df_mf = df_mf.loc[idx_mf].copy()
         
-        X_mf = fp_mf
-        X_zinc = fp_zinc
-        X_act = fp_act
+        X_zinc, idx_zinc = parse_fp_series(df_zinc["Fingerprint"], "ZINC", logger)
+        df_zinc = df_zinc.loc[idx_zinc].copy()
+        
+        X_act, idx_act = parse_fp_series(df_act["Fingerprint"], "Actives", logger)
+        df_act = df_act.loc[idx_act].copy()
         
         logger.info(f"Fingerprint dimensions: {X_mf.shape[1]}")
     
