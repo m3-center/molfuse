@@ -853,6 +853,28 @@ def plot_stratified_degradation_curves(
         "weak": "Weak (1K-100K nM)",
     }
     
+    # First pass: collect all y values to determine global y-axis range
+    all_y_values = []
+    for model_key in model_keys:
+        subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+        for tier in ["overall", "high", "medium", "weak"]:
+            mean_col = f"ef_1%_{tier}_mean"
+            sem_col = f"ef_1%_{tier}_sem"
+            if mean_col in subset.columns and sem_col in subset.columns:
+                y_mean = subset[mean_col].values
+                y_sem = subset[sem_col].values
+                valid_mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
+                if valid_mask.any():
+                    all_y_values.extend(y_mean[valid_mask] + y_sem[valid_mask])
+                    all_y_values.extend(y_mean[valid_mask] - y_sem[valid_mask])
+    
+    # Determine global y-axis limits with 10% padding
+    if all_y_values:
+        y_min = max(0, np.min(all_y_values) * 0.9)
+        y_max = np.max(all_y_values) * 1.1
+    else:
+        y_min, y_max = 0, 10
+    
     for idx, model_key in enumerate(model_keys):
         ax = axes[idx]
         subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
@@ -892,6 +914,7 @@ def plot_stratified_degradation_curves(
         ax.set_xlabel("MF Cloud Size (compounds)", fontweight="bold")
         ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold")
         ax.set_title(f"{method.upper()} / {representation}", fontweight="bold")
+        ax.set_ylim(y_min, y_max)
         ax.grid(True, alpha=0.3)
         ax.legend(loc="best", fontsize=8)
     
@@ -960,6 +983,23 @@ def plot_tier_enrichment_ratio(
         "weak": "#C62828",     # Red (weak)
     }
     
+    # First pass: collect all ratio values to determine global y-axis range
+    all_ratio_values = []
+    for model_key in model_keys:
+        subset = df_agg[df_agg["model_key"] == model_key].copy()
+        for tier in ["high", "medium", "weak"]:
+            y = subset[f"ratio_{tier}"].values
+            valid_mask = ~np.isnan(y)
+            if valid_mask.any():
+                all_ratio_values.extend(y[valid_mask])
+    
+    # Determine global y-axis limits with padding
+    if all_ratio_values:
+        y_min = min(0.5, np.min(all_ratio_values) * 0.9)
+        y_max = max(1.5, np.max(all_ratio_values) * 1.1)
+    else:
+        y_min, y_max = 0.5, 1.5
+    
     for idx, model_key in enumerate(model_keys):
         if idx >= len(axes):
             break
@@ -991,6 +1031,7 @@ def plot_tier_enrichment_ratio(
         ax.set_xlabel("MF Cloud Size", fontweight="bold")
         ax.set_ylabel("EF@1%(tier) / EF@1%(overall)", fontweight="bold")
         ax.set_title(f"{method.upper()} / {representation}", fontweight="bold")
+        ax.set_ylim(y_min, y_max)
         ax.grid(True, alpha=0.3)
         ax.legend(loc="best", fontsize=8)
     
