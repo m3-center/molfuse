@@ -452,27 +452,32 @@ def identify_best_cutoffs(df: pd.DataFrame, output_dir: Path) -> None:
 
 def get_best_configs_per_method(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filter to best configuration per method based on Phase 1 overall EF@1%.
+    Filter to best configuration per method × representation combination.
     
     Strategy:
-    1. For each method (PCA/UMAP), find the model_key with highest overall EF@1% (across all cutoffs)
-    2. Return only those model_keys
+    1. For each (method, representation) pair, find the model_key with highest mean EF@1% across all cutoffs
+    2. This gives 4 best configs: PCA/features, PCA/fingerprints, UMAP/features, UMAP/fingerprints
     
     Args:
         df: Aggregated Phase 2 metrics DataFrame
     
     Returns:
-        DataFrame filtered to best configs only
+        DataFrame filtered to best configs only (4 model_keys)
     """
     best_models = []
     
     for method in df["method"].unique():
-        subset = df[df["method"] == method].copy()
-        
-        # Compute mean EF@1% across all cutoffs for each model_key
-        avg_ef1 = subset.groupby("model_key")["ef1"].mean()
-        best_model_key = avg_ef1.idxmax()
-        best_models.append(best_model_key)
+        for rep in df["representation"].unique():
+            subset = df[(df["method"] == method) & (df["representation"] == rep)].copy()
+            
+            if subset.empty:
+                continue
+            
+            # Compute mean EF@1% across all cutoffs for each model_key
+            avg_ef1 = subset.groupby("model_key")["ef1"].mean()
+            if not avg_ef1.empty:
+                best_model_key = avg_ef1.idxmax()
+                best_models.append(best_model_key)
     
     filtered = df[df["model_key"].isin(best_models)].copy()
     return filtered
@@ -508,18 +513,28 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         print("WARNING: No best configs identified. Skipping tier-wise plot.")
         return
     
-    print(f"\nBest configurations per method (for tier-wise plot):")
-    for model_key in df_best["model_key"].unique():
+    print(f"\nBest configurations per method × representation (for tier-wise plot):")
+    for model_key in sorted(df_best["model_key"].unique()):
         method = df_best[df_best["model_key"] == model_key]["method"].iloc[0]
-        print(f"  {method}: {model_key}")
+        rep = df_best[df_best["model_key"] == model_key]["representation"].iloc[0]
+        print(f"  {method}/{rep}: {model_key}")
     
     # Sort by cutoff for proper line plotting
     df_best = df_best.sort_values(by=["model_key", "cutoff_nM"]).reset_index(drop=True)
     
-    # Create multi-panel plot (one panel per best model)
+    # Create multi-panel plot (2×2 grid for 4 model_keys)
     n_models = df_best["model_key"].nunique()
-    fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5), sharey=True, squeeze=False)
-    axes = axes.flatten()
+    
+    if n_models <= 2:
+        # Horizontal layout for 1-2 models
+        fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5), sharey=True, squeeze=False)
+        axes = axes.flatten()
+    else:
+        # 2×2 grid for 3-4 models
+        ncols = 2
+        nrows = int(np.ceil(n_models / ncols))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(12, 5 * nrows), sharey=True, squeeze=False)
+        axes = axes.flatten()
     
     # Color scheme for tiers
     colors = {
