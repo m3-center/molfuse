@@ -48,6 +48,206 @@ except ImportError:
     _HAVE_SNS = False
 
 
+# ============================================================================
+# POTENCY TIER DEFINITIONS
+# ============================================================================
+
+POTENCY_TIERS = {
+    "High": (0.1, 100.0),       # 0.1-100 nM (drug-like)
+    "Medium": (100.0, 1000.0),  # 100-1000 nM (moderate)
+    "Weak": (1000.0, 100000.0), # 1K-100K nM (marginal)
+}
+
+
+def assign_potency_tier(affinity_nM: float) -> Optional[str]:
+    """
+    Assign potency tier based on affinity value (nM).
+    
+    Returns:
+        "High" if 0.1 ≤ affinity ≤ 100
+        "Medium" if 100 < affinity ≤ 1000
+        "Weak" if 1000 < affinity ≤ 100000
+        None otherwise
+    """
+    try:
+        val = float(affinity_nM)
+    except (ValueError, TypeError):
+        return None
+    
+    if val < 0.1 or val > 100000:
+        return None
+    
+    for tier_name, (min_val, max_val) in POTENCY_TIERS.items():
+        if min_val <= val <= max_val:
+            return tier_name
+    
+    return None
+
+
+def compute_ef_at_percent(
+    ranked_df: pd.DataFrame,
+    tier: Optional[str],
+    top_pct: float
+) -> Tuple[Optional[float], int]:
+    """
+    Compute Enrichment Factor at top X% for a specific tier.
+    
+    Args:
+        ranked_df: Full ranked list (actives + ZINC), pre-sorted by score
+        tier: "High", "Medium", "Weak", or None (all actives)
+        top_pct: Fraction (e.g., 0.01 for 1%)
+    
+    Returns:
+        Tuple of (EF value or None, N_actives_in_tier)
+    """
+    if ranked_df.empty:
+        return None, 0
+    
+    N_total = len(ranked_df)
+    k = max(1, int(np.ceil(top_pct * N_total)))
+    top_k = ranked_df.head(k)
+    
+    if tier is None:
+        # All actives
+        mask_all = ranked_df["label"] == 1
+        mask_top = top_k["label"] == 1
+        N_actives = mask_all.sum()
+        hits = mask_top.sum()
+    else:
+        # Specific tier
+        mask_all = (ranked_df["label"] == 1) & (ranked_df["potency_tier"] == tier)
+        mask_top = (top_k["label"] == 1) & (top_k["potency_tier"] == tier)
+        N_actives = int(mask_all.sum())
+        hits = mask_top.sum()
+    
+    if N_actives == 0:
+        return None, 0
+    
+    # EF = (hits / N_actives) / (k / N_total)
+    ef = (hits / N_actives) / (k / N_total)
+    return float(ef), N_actives
+
+
+def load_actives_with_affinity(phase1_workspace: Path, phase1_run: str) -> Optional[pd.DataFrame]:
+    """
+    Load actives with affinity from Phase 1 source data.
+    
+    Strategy:
+    1. Load Phase 1 summary.json to get config
+    2. Load actives CSV or MF CSV with affinity data
+    
+    Returns DataFrame with: Compound ChEMBL ID, SMILES, Standard Value (nM)
+    """
+    phase1_dir = phase1_workspace / "phase1" / phase1_run
+    summary_path = phase1_dir / "logs" / "phase1_summary.json"
+    
+    if not summary_path.exists():
+        return None
+    
+    try:
+        with summary_path.open("r") as f:
+            summary = json.load(f)
+    except Exception:
+        return None
+    
+    config = summary.get("config", {})
+    
+    # Try actives CSV first
+    actives_csv = config.get("actives_features_csv")
+    if actives_csv:
+        p = Path(actives_csv)
+        if p.exists():
+            try:
+                cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]
+                df = pd.read_csv(p, usecols=lambda c: c in cols_needed + ["accession"], low_memory=False)
+                return df[cols_needed].copy()
+            except Exception:
+                pass
+    
+    # Fallback: load MF CSV and filter by target
+    mf_csv = config.get("mf_features_csv")
+    if mf_csv:
+        p = Path(mf_csv)
+        target = config.get("target", "")
+        
+        # Extract accession from target (e.g., "ABL1_P00519" -> "P00519")
+        import re
+        m = re.search(r"_([A-Z0-9]{6})$", target)
+        if m and p.exists():
+            accession = m.group(1)
+            try:
+                cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)", "accession"]
+                df_all = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
+                df = df_all[df_all["accession"] == accession].copy()
+                return df[["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]].copy()
+            except Exception:
+                pass
+    
+    return None
+
+
+def add_tier_metrics_to_cutoff(
+    cutoff_dir: Path,
+    phase1_workspace: Path,
+    phase1_run: str
+) -> Dict:
+    """
+    Compute tier-stratified metrics for one Phase 2 cutoff directory.
+    
+    Returns dict with tier metrics or empty dict if failed.
+    """
+    # Load ranked scores (now has compound IDs from Phase 2)
+    ranked_path = cutoff_dir / "ranked_scores.csv"
+    if not ranked_path.exists():
+        return {}
+    
+    try:
+        ranked_df = pd.read_csv(ranked_path, low_memory=False)
+    except Exception:
+        return {}
+    
+    # Load actives with affinity
+    actives_df = load_actives_with_affinity(phase1_workspace, phase1_run)
+    if actives_df is None or actives_df.empty:
+        return {}
+    
+    # Join affinity to ranked list
+    # Try ChEMBL ID first, fallback to SMILES
+    if "Compound ChEMBL ID" in ranked_df.columns and "Compound ChEMBL ID" in actives_df.columns:
+        join_key = "Compound ChEMBL ID"
+        ranked_df["_join"] = ranked_df[join_key].astype(str).str.upper().str.strip()
+        actives_df["_join"] = actives_df[join_key].astype(str).str.upper().str.strip()
+    elif "SMILES" in ranked_df.columns and "SMILES" in actives_df.columns:
+        join_key = "SMILES"
+        ranked_df["_join"] = ranked_df[join_key].astype(str).str.strip()
+        actives_df["_join"] = actives_df[join_key].astype(str).str.strip()
+    else:
+        return {}
+    
+    # Create affinity lookup
+    affinity_lookup = actives_df[["_join", "Standard Value (nM)"]].dropna(subset=["_join"]).drop_duplicates(subset=["_join"])
+    
+    # Left join (only actives get affinity values)
+    ranked_df = ranked_df.merge(affinity_lookup, on="_join", how="left")
+    
+    # Assign tiers
+    ranked_df["potency_tier"] = ranked_df["Standard Value (nM)"].apply(assign_potency_tier)
+    
+    # Compute tier-specific EF@1%
+    ef1_high, n_high = compute_ef_at_percent(ranked_df, "High", 0.01)
+    ef1_medium, n_medium = compute_ef_at_percent(ranked_df, "Medium", 0.01)
+    ef1_weak, n_weak = compute_ef_at_percent(ranked_df, "Weak", 0.01)
+    
+    return {
+        "ef1_high": ef1_high,
+        "ef1_medium": ef1_medium,
+        "ef1_weak": ef1_weak,
+        "n_actives_high": n_high,
+        "n_actives_medium": n_medium,
+        "n_actives_weak": n_weak,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Phase 2 Post-Analysis: Cutoff Sensitivity")
     p.add_argument("--workspace_dir", type=str, required=True, help="Base workspace directory")
@@ -65,12 +265,17 @@ def save_figure(fig: plt.Figure, output_dir: Path, basename: str) -> None:
     plt.close(fig)
 
 
-def aggregate_phase2_results(phase2_dir: Path) -> pd.DataFrame:
+def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_tiers: bool = True) -> pd.DataFrame:
     """
     Aggregate Phase 2 metrics across models and cutoffs.
 
+    Args:
+        phase2_dir: Phase 2 output directory
+        phase1_workspace: Phase 1 workspace for loading affinity data
+        compute_tiers: If True, compute tier-stratified metrics
+
     Returns DataFrame with columns: model_key, method, representation, dim, cutoff_nM, ef1, ef5, ef10, roc_auc, pr_auc, n_mf,
-                                     ef1_high, ef1_medium, ef1_weak (if available from stratified re-analysis)
+                                     ef1_high, ef1_medium, ef1_weak, n_actives_high, n_actives_medium, n_actives_weak
     """
     rows: List[Dict] = []
 
@@ -94,7 +299,7 @@ def aggregate_phase2_results(phase2_dir: Path) -> pd.DataFrame:
             except Exception:
                 continue
 
-            rows.append({
+            row = {
                 "model_key": f"{metrics.get('method', 'unknown')}_{metrics.get('representation', 'unknown')}",
                 "method": metrics.get("method", "unknown"),
                 "representation": metrics.get("representation", "unknown"),
@@ -107,14 +312,26 @@ def aggregate_phase2_results(phase2_dir: Path) -> pd.DataFrame:
                 "pr_auc": metrics.get("pr_auc", 0.0),
                 "n_mf": metrics.get("n_mf_for_scoring", 0),
                 "phase1_run": metrics.get("phase1_run", "unknown"),
-                # Stratified metrics (from post-hoc re-analysis)
-                "ef1_high": metrics.get("ef1_high", None),
-                "ef1_medium": metrics.get("ef1_medium", None),
-                "ef1_weak": metrics.get("ef1_weak", None),
-                "n_actives_high": metrics.get("n_actives_high", 0),
-                "n_actives_medium": metrics.get("n_actives_medium", 0),
-                "n_actives_weak": metrics.get("n_actives_weak", 0),
-            })
+            }
+            
+            # Compute tier-stratified metrics if requested
+            if compute_tiers:
+                phase1_run = metrics.get("phase1_run", "")
+                if phase1_run:
+                    tier_metrics = add_tier_metrics_to_cutoff(cutoff_dir, phase1_workspace, phase1_run)
+                    row.update(tier_metrics)
+                else:
+                    # No Phase 1 run info, skip tier computation
+                    row.update({
+                        "ef1_high": None,
+                        "ef1_medium": None,
+                        "ef1_weak": None,
+                        "n_actives_high": 0,
+                        "n_actives_medium": 0,
+                        "n_actives_weak": 0,
+                    })
+            
+            rows.append(row)
 
     df = pd.DataFrame(rows)
     return df
@@ -316,6 +533,11 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         ax = axes[idx]
         subset = df_best[df_best["model_key"] == model_key].copy()
         
+        # Get tier counts (use first row, should be same across cutoffs)
+        n_high = subset["n_actives_high"].iloc[0] if "n_actives_high" in subset.columns else 0
+        n_medium = subset["n_actives_medium"].iloc[0] if "n_actives_medium" in subset.columns else 0
+        n_weak = subset["n_actives_weak"].iloc[0] if "n_actives_weak" in subset.columns else 0
+        
         # Plot each tier
         x = subset["cutoff_nM"].values
         
@@ -328,21 +550,24 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         y_high = subset["ef1_high"].values
         mask_high = ~np.isnan(y_high)
         if mask_high.any():
-            ax.plot(x[mask_high], y_high[mask_high], marker="s", label="High (0.1-100 nM)", 
+            ax.plot(x[mask_high], y_high[mask_high], marker="s", 
+                   label=f"High (n={n_high})", 
                    color=colors["High"], linewidth=2, markersize=7, alpha=0.8)
         
         # Medium potency (100-1000 nM)
         y_medium = subset["ef1_medium"].values
         mask_medium = ~np.isnan(y_medium)
         if mask_medium.any():
-            ax.plot(x[mask_medium], y_medium[mask_medium], marker="^", label="Medium (100-1K nM)", 
+            ax.plot(x[mask_medium], y_medium[mask_medium], marker="^", 
+                   label=f"Medium (n={n_medium})", 
                    color=colors["Medium"], linewidth=2, markersize=7, alpha=0.8)
         
         # Weak potency (1K-100K nM)
         y_weak = subset["ef1_weak"].values
         mask_weak = ~np.isnan(y_weak)
         if mask_weak.any():
-            ax.plot(x[mask_weak], y_weak[mask_weak], marker="D", label="Weak (1K-100K nM)", 
+            ax.plot(x[mask_weak], y_weak[mask_weak], marker="D", 
+                   label=f"Weak (n={n_weak})", 
                    color=colors["Weak"], linewidth=2, markersize=7, alpha=0.8)
         
         # Formatting
@@ -355,7 +580,11 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         method = subset["method"].iloc[0]
         rep = subset["representation"].iloc[0]
         dim = subset["dim"].iloc[0]
-        ax.set_title(f"{method.upper()} ({rep}, dim={dim})", fontsize=12, fontweight="bold")
+        
+        # Add tier counts to title
+        title = f"{method.upper()} ({rep}, dim={dim})\n"
+        title += f"Tiers: High={n_high}, Medium={n_medium}, Weak={n_weak}"
+        ax.set_title(title, fontsize=11, fontweight="bold")
         
         ax.legend(loc="best", fontsize=9, framealpha=0.9)
         ax.grid(True, alpha=0.3)
@@ -403,15 +632,29 @@ def main() -> None:
     print(f"Output: {output_dir}")
     print()
 
-    # Aggregate results
-    print("Aggregating Phase 2 results...")
-    df = aggregate_phase2_results(phase2_dir)
+    # Aggregate results (with tier-stratified metrics)
+    print("Aggregating Phase 2 results and computing tier-stratified metrics...")
+    print("(This may take a few minutes...)")
+    df = aggregate_phase2_results(phase2_dir, workspace_dir, compute_tiers=True)
 
     if df.empty:
         print("ERROR: No Phase 2 results found. Check workspace directory.")
         return
 
     print(f"Found {len(df)} results across {df['model_key'].nunique()} models and {df['cutoff_nM'].nunique()} cutoffs")
+    
+    # Report tier counts
+    if "n_actives_high" in df.columns and df["n_actives_high"].notna().any():
+        # Get unique tier counts (should be same across cutoffs for a given target)
+        tier_summary = df[["n_actives_high", "n_actives_medium", "n_actives_weak"]].drop_duplicates()
+        if len(tier_summary) == 1:
+            n_high = int(tier_summary["n_actives_high"].iloc[0])
+            n_medium = int(tier_summary["n_actives_medium"].iloc[0])
+            n_weak = int(tier_summary["n_actives_weak"].iloc[0])
+            print(f"\nPotency tier counts:")
+            print(f"  High (0.1-100 nM): {n_high} actives")
+            print(f"  Medium (100-1K nM): {n_medium} actives")
+            print(f"  Weak (1K-100K nM): {n_weak} actives")
     print()
 
     # Save aggregated CSV
