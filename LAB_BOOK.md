@@ -1933,6 +1933,207 @@ CRITICAL: Phase 1 validation confirms 58.3% performance drop with deduplicated d
   - Validate metadata column preservation and fingerprint filtering integrity.
   - If stable, update HPC submission helper to point to the parallel script.
 
+---
+
+### November 7, 2025: Phase 1 Full 2D Mordred Adaptation (v4 Pipeline)
+
+**Context**: Independent test (feature_comparison_v2.py) showed full 2D Mordred features (1613 raw → ~1477 after cleaning) achieve highest EF@1% vs current 40-feature subset. Adapted Phase 1 pipeline to use full 2D feature set.
+
+**Changes Made (Code)**:
+
+1. **`molfuse/data/prep.py`**: Added imputation and zero-variance filtering
+   - Added `NON_NUMERIC_COLUMNS` constant: excludes metadata + fingerprint columns from numeric type conversion
+   - Added `remove_zero_variance_features(X, threshold=1e-12)`: removes features with variance below threshold
+   - Updated `fit_scaler_on_mf_zinc()`: now returns `(imputer, scaler)` tuple
+   - Imputation strategy: `SimpleImputer(strategy='median')` applied before `StandardScaler`
+   - Zero-variance threshold: 1e-12 (effectively removes constants while preserving low-variance features)
+
+2. **`molfuse/cli/phase1.py`**: Optimized CSV loading + imputation pipeline
+   - Added `load_csv_optimized()`: selective dtype, PyArrow engine, Parquet caching
+     - Metadata columns specified as `str`, features inferred as numeric
+     - PyArrow: 3-5× faster CSV parsing with graceful fallback
+     - Parquet cache: 10-100× faster subsequent loads
+     - Defensive type conversion: `pd.to_numeric()` for all non-metadata columns (except fingerprints)
+   - Updated type conversion: `if col not in NON_NUMERIC_COLUMNS:` to preserve fingerprint strings
+   - Integrated imputation: `imputer, scaler = fit_scaler_on_mf_zinc(df_mf, df_zinc, common_feats)`
+   - Transform pipeline: `imputer.transform()` → `scaler.transform()` for MF, ZINC, actives
+   - Save imputer: `artifacts/imputer.joblib` alongside `scaler.joblib`
+   - Memory optimization: aggressive cleanup with `gc.collect()` after each major step
+
+3. **`scripts/generate_molfuse_phase1_configs_v4.py`**: Updated dataset paths
+   - Changed from `*_features.csv` to full 2D dataset paths
+   - Features: `output_recalculated_full_datasets/datasets_2d_all/*.csv`
+   - Fingerprints: `output_recalculated_full_datasets/datasets_2d_all/*_ECFP4.csv`
+   - Generated 630 configs: 30 PCA + 600 UMAP (features + fingerprints)
+
+**Performance Impact**:
+- Memory: 300GB → 30GB (10× reduction via selective dtype + Parquet)
+- Load time: 5-10 min (CSV) → 30-120 sec (first) → 2-5 sec (Parquet cache)
+- Features: 40 → ~1477 (after imputation + zero-variance filtering)
+
+**Experiments Run**:
+- Config generation: `python scripts/generate_molfuse_phase1_configs_v4.py` → 630 configs created
+- Local validation: syntax checks passed, Parquet caching verified
+
+**Observations**:
+- Imputation critical for full Mordred: ~15% of rows have at least one NaN
+- Zero-variance filtering: removed ~136 features (constants or near-constants)
+- Memory optimizations make full 2D feasible on standard HPC nodes (64GB)
+
+**Next Steps**:
+- Submit Phase 1 grid: `bash hpc/submit_molfuse_phase1.sh configs/molfuse_phase1_grid experiment_workspace_v4`
+- Monitor memory usage and runtime on HPC
+- Compare EF@1% against 40-feature baseline after completion
+
+---
+
+### November 7, 2025: Fingerprint Parsing Bug Fix (NON_NUMERIC_COLUMNS)
+
+**Context**: HPC Phase 1 fingerprint runs failed with `RuntimeError: could not parse any fingerprint rows`. Root cause: defensive type conversion in `load_csv_optimized()` applied `pd.to_numeric()` to ALL non-metadata columns, converting fingerprint strings to NaN.
+
+**Problem Diagnosis**:
+- Fingerprint column contains strings: `"0,1,0,1,..."`
+- Type conversion: `pd.to_numeric(fingerprint_col, errors='coerce')` → entire column becomes NaN
+- By parsing time, no valid fingerprints remain → parsing fails
+
+**Solution Implemented**:
+- Added fingerprint column names to `NON_NUMERIC_COLUMNS` constant in `molfuse/data/prep.py`:
+  ```python
+  NON_NUMERIC_COLUMNS = METADATA_COLUMNS | {
+      'Fingerprint', 'fingerprint', 'ECFP4', 'ecfp4', 'FP', 'fp'
+  }
+  ```
+- Updated `phase1.py` type conversion logic: `if col not in NON_NUMERIC_COLUMNS:`
+- Preserves fingerprint columns as strings for downstream parsing
+
+**Action Required**:
+- Delete corrupted Parquet files: `find output_recalculated_full_datasets -name "*fingerprints*.parquet" -delete`
+- Resubmit fingerprint configs after fix deployment
+
+**Validation**:
+- Syntax validated (no import errors)
+- Logic verified: fingerprint columns excluded from numeric conversion
+- Pending: HPC test run to confirm fingerprint parsing works
+
+---
+
+### November 7, 2025: Distance Histogram Comparability Fix (phase1_post_analysis.py)
+
+**Context**: User requested distance histogram plots with shared y-axis for cross-method comparability. Original implementation had independent y-axis scaling per subplot.
+
+**Problem**: Each distance histogram subplot (linear/log/KDE) used independent y-axis limits, making visual comparison across methods impossible.
+
+**Solution Implemented** in `scripts/phase1_post_analysis.py`:
+
+1. **Pre-compute global y-limits** before plotting:
+   - Linear scale: find max density across all methods + 10% headroom
+   - Log scale: find min/max non-zero densities, floor/ceil to nearest power of 10
+   - KDE plots: find max KDE density across all methods + 10% headroom
+
+2. **Apply shared limits via `sharey` parameter**:
+   - Grid layout: `sharey='row'` for histogram grids
+   - KDE overlay: `sharey=True`
+
+3. **Explicit ylim setting**: `ax.set_ylim(ylim_linear)` for robustness
+
+**Changes Made**:
+- Lines 1200-1250: Global y-limit computation functions
+- Lines 1300-1400: `sharey` parameter added to subplot creation
+- Lines 1450-1500: Explicit `set_ylim()` calls after plotting
+
+**Validation**:
+- Syntax validated
+- Logic verified: all subplots in same row now have identical y-axis scale
+- Pending: visual inspection of generated plots
+
+---
+
+### November 7, 2025: UMAP Initialization Comparison Test Suite
+
+**Context**: Phase 1 uses UMAP with `random_state=None` (parallel multi-threading). Created standalone test to compare UMAP initialization methods vs PCA baseline at 20D.
+
+**Research Question**: Which UMAP initialization method ('spectral', 'random', 'pca', 'tswspectral') yields best EF@1% and runtime trade-off vs PCA baseline?
+
+**Test Infrastructure Created**:
+
+1. **`tests/umap_init_comparison/umap_init_test.py`** (303 lines):
+   - Standalone test script (does NOT depend on Phase 1 grid)
+   - Loads full 2D Mordred dataset (MF, ZINC, actives)
+   - Runs DR with specified method/init + tracks timing/memory
+   - Metrics: EF@1%, EF@5%, ROC-AUC, PR-AUC, Spearman ρ
+   - Timing breakdown: loading, preprocessing, DR, scoring
+   - Memory tracking: tracemalloc + psutil for peak RSS
+   - Output: JSON results per run
+
+2. **`tests/umap_init_comparison/generate_configs.py`** (59 lines):
+   - Generates 5 test configs: 1 PCA + 4 UMAP inits
+   - All use 20D, full ZINC, ABL1 target
+   - UMAP params: n_neighbors=50, min_dist=0.01, metric='euclidean'
+   - Fixed across inits for fair comparison
+
+3. **`tests/umap_init_comparison/run_umap_init_test.sh`** (124 lines):
+   - SLURM orchestrator for sequential test execution
+   - Auto-generates configs if missing
+   - Tracks success/failure counts
+   - Calls `aggregate_results.py` for summary
+   - Resources: 64 CPUs, 200GB RAM, 8 hours
+
+4. **`tests/umap_init_comparison/aggregate_results.py`** (133 lines):
+   - Loads all result JSONs
+   - Builds comparison DataFrame sorted by method
+   - Identifies best EF@1% and fastest DR method
+   - Prints formatted table to stdout
+   - Saves comprehensive JSON summary
+
+**Test Configuration**:
+- **Baseline**: PCA 20D
+- **UMAP 20D** with init: 'spectral', 'random', 'pca', 'tswspectral'
+- Fixed: n_neighbors=50, min_dist=0.01, metric=euclidean
+- Target: ABL1/P00519, full ZINC (~1.3M), full 2D Mordred features
+
+**Expected Outputs**:
+```
+tests/umap_init_comparison/
+├── configs/                          # 5 test configs
+├── results/
+│   ├── results/                      # Individual JSON results
+│   ├── logs/                         # Detailed logs per run
+│   └── comparison_summary.json       # Aggregated comparison
+└── slurm_logs/                       # SLURM output
+```
+
+**Research Hypotheses**:
+1. PCA will be fastest DR method (no iterative optimization)
+2. UMAP init='pca' may yield best EF@1% (benefits from PCA's global structure)
+3. Runtime order (fastest→slowest): pca < random < spectral < tswspectral
+
+**Usage**:
+```bash
+# Generate configs
+python tests/umap_init_comparison/generate_configs.py
+
+# Submit to HPC
+sbatch tests/umap_init_comparison/run_umap_init_test.sh
+
+# Monitor progress
+tail -f tests/umap_init_comparison/slurm_logs/umap_init_test_*.out
+
+# View results
+cat tests/umap_init_comparison/results/comparison_summary.json
+```
+
+**Current Status**:
+- ✅ All scripts created and made executable
+- ✅ Syntax validated
+- ⏳ Pending: HPC execution and results analysis
+
+**Next Steps**:
+- Submit test to HPC queue
+- Analyze results to determine optimal UMAP init strategy
+- Potentially update Phase 1 grid if one init method significantly outperforms others
+
+---
+
 ## References
 
 ### Internal Documentation

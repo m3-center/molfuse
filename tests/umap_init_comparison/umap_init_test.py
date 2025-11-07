@@ -215,6 +215,7 @@ def run_experiment(config_path: Path, workspace_dir: Path, output_dir: Path) -> 
             n_neighbors=cfg["umap_params"]["n_neighbors"],
             min_dist=cfg["umap_params"]["min_dist"],
             metric=cfg["umap_params"]["metric"],
+            init=init,
             random_state=None,
         )
         Z_act = model.transform(X_act)
