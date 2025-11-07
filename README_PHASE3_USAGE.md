@@ -22,15 +22,17 @@
 
 ### Step 1: Generate Phase 3 Configs
 
+**CRITICAL**: Requires Phase 1 and Phase 2 results. No hardcoded defaults.
+
 ```bash
-# Option A: With Phase 1/2 results
+# Default: reads from reporting/phase1_post_analysis/ and reporting/phase2_post_analysis/
 python scripts/generate_molfuse_phase3_configs_v4.py \
-    --phase1_best configs/phase1_best_configs.json \
-    --phase2_best_cutoffs reporting/phase2_post_analysis/phase2_best_cutoffs.json \
     --output_dir configs/molfuse_phase3_grid
 
-# Option B: With defaults (if Phase 1/2 results unavailable)
+# Custom paths (if results are in different locations):
 python scripts/generate_molfuse_phase3_configs_v4.py \
+    --phase1_grouped reporting/phase1_post_analysis/phase1_summary_grouped.csv \
+    --phase2_best_cutoffs reporting/phase2_post_analysis/phase2_best_cutoffs.json \
     --output_dir configs/molfuse_phase3_grid
 
 # Custom MF sizes and replicates
@@ -40,7 +42,28 @@ python scripts/generate_molfuse_phase3_configs_v4.py \
     --output_dir configs/molfuse_phase3_grid
 ```
 
-**Output**: **120 configs** (4 methods × 6 MF sizes × 5 replicates)
+**What it does**:
+1. Reads Phase 1 best hyperparameters (dim, n_neighbors, min_dist) from `phase1_summary_grouped.csv`
+2. Reads Phase 2 optimal cutoffs from `phase2_best_cutoffs.json`
+3. Generates **120 configs** (4 methods × 6 MF sizes × 5 replicates)
+4. Each config uses **actual experimental results**, not assumptions
+
+**Example Output**:
+```
+Phase 1 Best Configurations:
+  pca_features: pca/features (dim=20)
+  pca_fingerprints: pca/fingerprints (dim=20)
+  umap_features: umap/features (dim=2) (n_neighbors=10, min_dist=0.01)
+  umap_fingerprints: umap/fingerprints (dim=20) (n_neighbors=10, min_dist=0.0)
+
+Phase 2 Optimal Cutoffs:
+  pca_features: 1000 nM (EF@1% = 25.07)
+  pca_fingerprints: 100 nM (EF@1% = 16.57)
+  umap_features: 100 nM (EF@1% = 42.96)
+  umap_fingerprints: 100 nM (EF@1% = 45.08)
+
+✓ Generated 120 Phase 3 configs
+```
 
 ### Step 2: Submit to HPC (Parallel Execution)
 

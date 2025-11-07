@@ -2,19 +2,25 @@
 """
 Generate Phase 3 Configuration Grid: MF Cloud Ablation Study
 
-Generates configs for 4 methods × 6 MF sizes = 24 runs
+Generates configs for 4 methods × 6 MF sizes × 5 replicates = 120 runs
 
 Strategy:
-1. Read Phase 1 best hyperparameters (from Phase 1 results or manual specification)
-2. Read Phase 2 optimal cutoffs (method-specific: PCA cutoff, UMAP cutoff)
+1. Read Phase 1 best hyperparameters from phase1_summary_grouped.csv
+2. Read Phase 2 optimal cutoffs from phase2_best_cutoffs.json
 3. Generate configs for MF sizes: [10, 100, 1000, 10000, 100000, "full"]
-4. Each config includes: method, representation, dim, UMAP params, MF size, cutoff, seed
+4. Each config includes: method, representation, dim, UMAP params, MF size, cutoff, replicate, seed
 
-Output: configs/molfuse_phase3_grid/<method>_<repr>_mf<size>.json
+Output: configs/molfuse_phase3_grid/<method>_<repr>_dim<dim>_mf<size>_rep<N>.json
 
 Usage:
+    # Default: uses reporting/phase1_post_analysis/phase1_summary_grouped.csv
+    #          and reporting/phase2_post_analysis/phase2_best_cutoffs.json
     python scripts/generate_molfuse_phase3_configs_v4.py \
-        --phase1_best configs/phase1_best_configs.json \
+        --output_dir configs/molfuse_phase3_grid
+    
+    # Custom paths:
+    python scripts/generate_molfuse_phase3_configs_v4.py \
+        --phase1_grouped reporting/phase1_post_analysis/phase1_summary_grouped.csv \
         --phase2_best_cutoffs reporting/phase2_post_analysis/phase2_best_cutoffs.json \
         --output_dir configs/molfuse_phase3_grid
 """
@@ -23,78 +29,109 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
-
-
-# ============================================================================
-# Default Best Configurations (if files not provided)
-# ============================================================================
-
-DEFAULT_PHASE1_BEST = {
-    "pca_features": {
-        "method": "pca",
-        "representation": "features",
-        "dim": 20,
-        "umap_params": {"n_neighbors": 50, "min_dist": 0.01},  # Unused for PCA
-    },
-    "pca_fingerprints": {
-        "method": "pca",
-        "representation": "fingerprints",
-        "dim": 20,
-        "umap_params": {"n_neighbors": 50, "min_dist": 0.01},
-    },
-    "umap_features": {
-        "method": "umap",
-        "representation": "features",
-        "dim": 20,
-        "umap_params": {"n_neighbors": 50, "min_dist": 0.01},
-    },
-    "umap_fingerprints": {
-        "method": "umap",
-        "representation": "fingerprints",
-        "dim": 20,
-        "umap_params": {"n_neighbors": 50, "min_dist": 0.01},
-    },
-}
-
-DEFAULT_PHASE2_CUTOFFS = {
-    "pca": 100000,      # nM (permissive default)
-    "umap": 100000,     # nM (permissive default)
-}
+from typing import Dict, List, Optional
 
 
 # ============================================================================
 # Config Generation
 # ============================================================================
 
-def load_phase1_best(path: Path | None) -> Dict:
-    """Load Phase 1 best configurations from JSON."""
-    if path is None or not path.exists():
-        print(f"WARNING: Phase 1 best configs not found, using defaults")
-        return DEFAULT_PHASE1_BEST
+def load_phase1_best(json_path: Optional[Path], phase1_grouped_csv: Optional[Path] = None) -> Dict[str, dict]:
+    """
+    Load Phase 1 best hyperparameters (method, representation, dim, umap params).
     
-    with path.open("r") as f:
+    Strategy:
+    1. If json_path provided and exists: load directly
+    2. Else if phase1_grouped_csv provided: extract best config per method×representation
+    3. Else: FAIL (no assumptions)
+    
+    Args:
+        json_path: Path to phase1_best_configs.json (keys: "features__pca__dim20", etc.)
+        phase1_grouped_csv: Path to phase1_summary_grouped.csv (fallback)
+    
+    Returns:
+        Dict mapping model_key (e.g., "pca_features") to config with dim, n_neighbors, min_dist
+    """
+    import pandas as pd
+    
+    # Strategy 1: Direct load from JSON
+    if json_path and json_path.exists():
+        with json_path.open("r") as f:
+            phase1_raw = json.load(f)
+        
+        # Parse to identify best dimension per method×representation
+        # Keys are like "features__pca__dim20"
+        # We need to find best EF@1% per method×representation, but JSON only has hyperparams
+        # Solution: Read the grouped CSV to get EF@1% values
+        if not phase1_grouped_csv or not phase1_grouped_csv.exists():
+            raise FileNotFoundError(
+                f"phase1_best_configs.json exists but phase1_summary_grouped.csv is required to identify best dimensions.\n"
+                f"Expected: {phase1_grouped_csv}"
+            )
+    
+    # Strategy 2: Extract from grouped CSV
+    if not phase1_grouped_csv or not phase1_grouped_csv.exists():
+        raise FileNotFoundError(
+            f"Phase 1 results not found. Provide either:\n"
+            f"  --phase1_best (phase1_best_configs.json)\n"
+            f"  --phase1_grouped (phase1_summary_grouped.csv)"
+        )
+    
+    # Load grouped results and identify best per method×representation
+    df = pd.read_csv(phase1_grouped_csv)
+    best_configs = {}
+    
+    for (method, rep), grp in df.groupby(['method', 'representation']):
+        # Find best by EF@1%
+        best_row = grp.sort_values('ef1_mean', ascending=False).iloc[0]
+        dim = int(best_row['dim'])
+        
+        # Build model_key matching Phase 2 format: "{method}_{representation}"
+        model_key = f"{method}_{rep}"
+        
+        # Extract hyperparameters
+        config = {
+            "method": method,
+            "representation": rep,
+            "dim": dim,
+        }
+        
+        # UMAP-specific params
+        if method == "umap":
+            config["umap_params"] = {
+                "n_neighbors": int(best_row['umap_n_neighbors']) if pd.notna(best_row['umap_n_neighbors']) else 15,
+                "min_dist": float(best_row['umap_min_dist']) if pd.notna(best_row['umap_min_dist']) else 0.1,
+                "metric": str(best_row['umap_metric']) if pd.notna(best_row['umap_metric']) else "euclidean"
+            }
+        else:
+            config["umap_params"] = None
+        
+        best_configs[model_key] = config
+    
+    return best_configs
+
+
+def load_phase2_cutoffs(json_path: Optional[Path]) -> Dict[str, dict]:
+    """
+    Load Phase 2 best affinity cutoffs per model_key.
+    
+    Args:
+        json_path: Path to phase2_best_cutoffs.json
+    
+    Returns:
+        Dict mapping model_key to {cutoff_nM, ef1, ef5, ...}
+    
+    Raises:
+        FileNotFoundError if json_path not provided or doesn't exist
+    """
+    if not json_path or not json_path.exists():
+        raise FileNotFoundError(
+            f"Phase 2 cutoffs required: {json_path}\n"
+            f"Run scripts/phase2_post_analysis.py to generate phase2_best_cutoffs.json"
+        )
+    
+    with json_path.open("r") as f:
         return json.load(f)
-
-
-def load_phase2_cutoffs(path: Path | None) -> Dict:
-    """Load Phase 2 best cutoffs from JSON."""
-    if path is None or not path.exists():
-        print(f"WARNING: Phase 2 best cutoffs not found, using defaults")
-        return DEFAULT_PHASE2_CUTOFFS
-    
-    with path.open("r") as f:
-        data = json.load(f)
-    
-    # Convert from model_key → cutoff to method → cutoff
-    cutoffs = {}
-    for model_key, info in data.items():
-        if "pca" in model_key.lower():
-            cutoffs["pca"] = info["cutoff_nM"]
-        elif "umap" in model_key.lower():
-            cutoffs["umap"] = info["cutoff_nM"]
-    
-    return cutoffs if cutoffs else DEFAULT_PHASE2_CUTOFFS
 
 
 def generate_phase3_configs(
@@ -141,10 +178,12 @@ def generate_phase3_configs(
         method = best_config["method"]
         representation = best_config["representation"]
         dim = best_config["dim"]
-        umap_params = best_config.get("umap_params", {"n_neighbors": 50, "min_dist": 0.01})
+        umap_params = best_config.get("umap_params")
         
-        # Get method-specific cutoff
-        cutoff_nM = phase2_cutoffs.get(method, 100000)
+        # Get method-specific cutoff (from Phase 2 results)
+        # phase2_cutoffs has keys like "pca_features", values like {"cutoff_nM": 1000, "ef1": 25.07, ...}
+        cutoff_data = phase2_cutoffs.get(model_key, {"cutoff_nM": 100000})
+        cutoff_nM = cutoff_data["cutoff_nM"]
         
         for mf_size in mf_sizes:
             for replicate in replicates:
@@ -184,9 +223,11 @@ def generate_phase3_configs(
 def main():
     parser = argparse.ArgumentParser(description="Generate Phase 3 configuration grid")
     parser.add_argument("--phase1_best", type=str, default=None,
-                       help="Path to Phase 1 best configs JSON (optional)")
-    parser.add_argument("--phase2_best_cutoffs", type=str, default=None,
-                       help="Path to Phase 2 best cutoffs JSON (optional)")
+                       help="Path to Phase 1 best configs JSON (optional; will use phase1_grouped if not provided)")
+    parser.add_argument("--phase1_grouped", type=str, default="reporting/phase1_post_analysis/phase1_summary_grouped.csv",
+                       help="Path to Phase 1 grouped summary CSV (for extracting best hyperparameters)")
+    parser.add_argument("--phase2_best_cutoffs", type=str, default="reporting/phase2_post_analysis/phase2_best_cutoffs.json",
+                       help="Path to Phase 2 best cutoffs JSON (REQUIRED)")
     parser.add_argument("--output_dir", type=str, default="configs/molfuse_phase3_grid",
                        help="Output directory for configs")
     parser.add_argument("--target", type=str, default="TyrosineProteinKinaseABL1_P00519",
@@ -198,8 +239,9 @@ def main():
     args = parser.parse_args()
     
     # Parse inputs
-    phase1_path = Path(args.phase1_best) if args.phase1_best else None
-    phase2_path = Path(args.phase2_best_cutoffs) if args.phase2_best_cutoffs else None
+    phase1_json_path = Path(args.phase1_best) if args.phase1_best else None
+    phase1_grouped_path = Path(args.phase1_grouped)
+    phase2_path = Path(args.phase2_best_cutoffs)
     output_dir = Path(args.output_dir)
     
     # Parse MF sizes
@@ -215,7 +257,7 @@ def main():
     replicates = [int(r.strip()) for r in args.replicates.split(",")]
     
     # Load Phase 1 best and Phase 2 cutoffs
-    phase1_best = load_phase1_best(phase1_path)
+    phase1_best = load_phase1_best(phase1_json_path, phase1_grouped_path)
     phase2_cutoffs = load_phase2_cutoffs(phase2_path)
     
     print("="*80)
@@ -229,12 +271,15 @@ def main():
     
     print("Phase 1 Best Configurations:")
     for model_key, cfg in phase1_best.items():
-        print(f"  {model_key}: {cfg['method']}/{cfg['representation']} (dim={cfg['dim']})")
+        umap_str = ""
+        if cfg.get("umap_params"):
+            umap_str = f" (n_neighbors={cfg['umap_params']['n_neighbors']}, min_dist={cfg['umap_params']['min_dist']})"
+        print(f"  {model_key}: {cfg['method']}/{cfg['representation']} (dim={cfg['dim']}){umap_str}")
     print()
     
     print("Phase 2 Optimal Cutoffs:")
-    for method, cutoff in phase2_cutoffs.items():
-        print(f"  {method}: {cutoff} nM")
+    for model_key, cutoff_data in phase2_cutoffs.items():
+        print(f"  {model_key}: {cutoff_data['cutoff_nM']} nM (EF@1% = {cutoff_data['ef1']:.2f})")
     print()
     
     # Generate configs
