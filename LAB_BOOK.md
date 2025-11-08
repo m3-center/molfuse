@@ -1,3 +1,101 @@
+### November 8, 2025: Phase 4 cross-target generalization — complete implementation
+
+- Changes Made (Code)
+  - Created `molfuse/cli/phase4.py` (~650 lines): Complete Phase 4 CLI pipeline for cross-target generalization study
+  - Created `scripts/generate_molfuse_phase4_configs_v4.py` (~180 lines): Config generator with actual UniProt accessions
+  - Created `hpc/molfuse_phase4_cpu.sh`: Slurm script for Phase 4 single-run execution
+  - Created `hpc/submit_molfuse_phase4.sh` (~140 lines): Batch submission wrapper with idempotent skip
+  - Created `scripts/analyze_kw_targets.py` (~200 lines): Analysis tool to identify unique targets per KW category
+  - Git SHA: (pending commit)
+
+- Research Question
+  - **RQ**: Does natural MF cloud size predict screening performance across different target proteins?
+  - **H1**: Larger natural MF clouds improve EF@1% due to better chemical diversity coverage
+  - **H2**: UMAP/features performance remains robust across targets (based on Phase 3 findings)
+  - **Design**: Evaluate UMAP/features on 8 target proteins spanning ~4 orders of magnitude in MF cloud size (43 to 425K compounds)
+
+- Experimental Design
+  - **Method**: UMAP with features only (best from Phase 3)
+  - **Hyperparameters**: dim=10, n_neighbors=5, min_dist=0.0 (from Phase 1 best configs)
+  - **Affinity cutoff**: 100,000 nM (from Phase 2)
+  - **Targets**: 8 proteins from diverse KW categories (Antioxidant, Antimicrobial, Motor protein, Cytokine, Heparin-binding, Lyase, Oxidoreductase, Transferase)
+  - **Replicates**: 5 per target (seeds: 42, 123, 456, 789, 1011)
+  - **Total runs**: 40 (8 targets × 5 replicates)
+
+- Target Selection Strategy
+  - Used `scripts/analyze_kw_targets.py` to analyze all KW category CSVs on HPC
+  - Selected top target by compound count per category (most data = most reliable evaluation)
+  - Exception: P00519 (ABL1) kept for Transferase to maintain baseline continuity with Phase 1-3
+  - Methodology: Extract unique targets via 'accession' column, count compounds per target, rank descending
+  - HPC execution: User ran analysis script, provided results showing top targets for each KW category
+
+- Final Target List (with Natural MF Cloud Sizes)
+  1. **KW-0049_Antioxidant**: P00441 (SOD1, 39 actives, **43 MF**)
+  2. **KW-0929_Antimicrobial**: P14555 (PLA2G2A, 582 actives, **287 MF**)
+  3. **KW-0505_Motor_protein**: P52732 (KIF11, 1,158 actives, **1,286 MF**)
+  4. **KW-0202_Cytokine**: P43490 (NAMPT, 2,904 actives, **2,907 MF**)
+  5. **KW-0358_Heparin-binding**: P11362 (FGFR1, 4,150 actives, **7,614 MF**)
+  6. **KW-0456_Lyase**: P00918 (CA2, 9,685 actives, **37,685 MF**)
+  7. **KW-0560_Oxidoreductase**: P08684 (CYP3A4, 6,151 actives, **94,617 MF**)
+  8. **KW-0808_Transferase**: P00519 (ABL1, 5,505 actives, **425,289 MF**)
+  - **MF cloud size calculation**: Total KW category compounds - Target actives
+  - **Range**: 43 to 425,289 compounds (~4 orders of magnitude)
+
+- Key Differences from Phase 3
+  - Phase 3: Single target (Transferase/ABL1), varied MF size via artificial subsampling
+  - Phase 4: Multiple targets (8 proteins), full natural MF cloud per target (NO subsampling)
+  - Phase 3 question: "What happens when we reduce MF cloud size?"
+  - Phase 4 question: "Does natural MF cloud size predict performance across real targets?"
+
+- Implementation Details
+  - `molfuse/cli/phase4.py`:
+    - Identical structure to Phase 1/3 with target-specific handling
+    - Loads full MF cloud for each target's KW category
+    - Splits actives by target accession (target-specific held-out set)
+    - Applies affinity cutoff to MF (NO subsampling unlike Phase 3)
+    - Saves `phase4_summary.json` with target_kw metadata for cross-target analysis
+  - `scripts/generate_molfuse_phase4_configs_v4.py`:
+    - Version 1: All placeholder "ABL1_P00519" accessions
+    - Version 2: Replaced KW-0339_Growth_factor with KW-0505_Motor_protein
+    - Version 3 (FINAL): Real UniProt accessions from HPC analysis results
+    - Config structure includes: target_kw, target_short, mf_size_natural
+  - `hpc/molfuse_phase4_cpu.sh`:
+    - Resources: 64 CPUs, 350GB RAM, 48-hour time limit
+    - Calls: `python -m molfuse.cli.phase4 --config $CONFIG --workspace $WORKSPACE`
+  - `hpc/submit_molfuse_phase4.sh`:
+    - Idempotent skip logic: checks `phase4/cross_target/{run_name}/logs/phase4_summary.json`
+    - Dry-run mode support for validation
+
+- Target Selection Process
+  - Initial approach: Placeholder accessions for all targets
+  - Refinement 1: Replaced KW-0339_Growth_factor (1,451 compounds) with KW-0505_Motor_protein (2,445 compounds) for better 10³ range coverage
+  - Refinement 2: Created analysis script to identify actual top targets per category
+  - User execution: Ran `analyze_kw_targets.py` on HPC where data resides
+  - Results interpretation: Top targets had 47-67% of category compounds (except Oxidoreductase at 6.1% and Transferase at 3.3% due to high target diversity)
+  - Final decision: Use top targets except Transferase (keep P00519 for baseline continuity)
+
+- Expected Outcomes
+  - **Scenario A (Strong Correlation)**: MF size predicts performance (R² > 0.7) → MF size is primary determinant
+  - **Scenario B (Weak Correlation)**: MF size poorly predicts performance (R² < 0.3) → Target-specific features matter more
+  - **Scenario C (Threshold Effect)**: Performance stable above threshold, degrades below → Binary recommendation possible
+  - Research value: Determines minimum viable MF size for reliable virtual screening on novel targets
+
+- Artifacts Generated
+  - `molfuse/cli/phase4.py` (Phase 4 CLI pipeline, ~650 lines)
+  - `scripts/generate_molfuse_phase4_configs_v4.py` (config generator, ~180 lines, 40 configs)
+  - `hpc/molfuse_phase4_cpu.sh` (Slurm submission script)
+  - `hpc/submit_molfuse_phase4.sh` (batch wrapper, ~140 lines)
+  - `scripts/analyze_kw_targets.py` (target analysis tool, ~200 lines)
+  - `configs/molfuse_phase4_grid/` (40 JSON configs with real accessions, to be generated)
+
+- Next Steps
+  - Generate 40 configs: `python scripts/generate_molfuse_phase4_configs_v4.py`
+  - Verify config correctness (accessions, MF paths, hyperparameters)
+  - Submit to HPC: `bash hpc/submit_molfuse_phase4.sh configs/molfuse_phase4_grid experiment_workspace_v4`
+  - Monitor progress: 40 runs × ~1-2 hours each
+  - Create Phase 4 post-analysis script for cross-target comparison plots
+  - Generate documentation: `README_PHASE4_USAGE.md`
+
 ### January 29, 2025: Phase 3 config generator fix — no more assumptions
 
 - Changes Made (Code)

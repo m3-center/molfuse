@@ -38,6 +38,28 @@ Non-feature metadata columns (e.g., SMILES, accession, IDs) are excluded from mo
   - H2: The optimal neighborhood size shifts to medium/large values (50–500) after deduplication; min_dist has a weak effect.
 - RQ3: To what extent do results generalize across proteins sharing or not sharing the same MF?
   - H3: Same-MF transfer is stronger than cross-MF; dimensionality choice remains target- and MF-dependent.
+- RQ4: Does natural MF cloud size predict screening performance across different target proteins?
+  - H4: Larger natural MF clouds improve EF@1% due to better chemical diversity coverage; method robustness varies with MF size.
+
+## Phase Sequence and Research Questions
+
+**Phase 1 (Hyperparameter Optimization)**: What are optimal UMAP hyperparameters and dimensionality for features vs fingerprints?
+- Status: ✅ Complete (v3) - Best configs identified; rerun with median deduplication planned (v4)
+
+**Phase 2 (Affinity Cutoff Sensitivity)**: Can we improve EF@1% by scoring against high-potency-only MF ligands?
+- Design: Re-scoring only (NO retraining); reuse Phase 1 embeddings; filter MF by cutoff [100, 1K, 10K, 100K] nM
+- Status: ✅ Complete (v4) - Implementation and HPC scripts ready
+
+**Phase 3 (MF Cloud Ablation)**: What happens when MF cloud size decreases (artificial subsampling)?
+- Design: FULL RETRAINING for each MF size [0, 1K, 10K, 50K, 100K, full]
+- Hypothesis: Performance degrades with smaller MF; possible UMAP/PCA crossover point
+- Status: 📋 Planned - Awaiting Phase 1 rerun completion
+
+**Phase 4 (Cross-Target Generalization)**: Does natural MF cloud size predict performance across real targets?
+- Design: 8 target proteins with natural MF sizes (43 to 425K compounds, ~4 orders of magnitude)
+- Targets: Antioxidant (SOD1), Antimicrobial (PLA2G2A), Motor protein (KIF11), Cytokine (NAMPT), Heparin-binding (FGFR1), Lyase (CA2), Oxidoreductase (CYP3A4), Transferase (ABL1)
+- Method: UMAP/features only (dim=10, n_neighbors=5, min_dist=0.0)
+- Status: ✅ Complete implementation (Nov 8, 2025) - 40 configs generated, HPC scripts ready
 
 ## Critical Observations: UMAP Dimensionality Effects and Neighborhood Size
 

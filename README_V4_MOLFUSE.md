@@ -82,6 +82,52 @@ Notes:
 - `workspace/phase2/cutoff_sweep/<phase1_run_name>/cutoff_<X>nM/ranked_scores.csv`
 - Post-analysis: cutoff curves, heatmaps, quality-quantity plots, best cutoffs JSON
 
+## Phase 3: MF Cloud Ablation
+
+**Research Question**: What happens to similarity space when MF cloud size decreases? Does performance degrade?
+
+**Design**: FULL RETRAINING (unlike Phase 2)
+- Subsamples MF cloud to sizes [0, 1K, 10K, 50K, 100K, full]
+- Retrains scaler + DR model for each MF size
+- Uses Phase 1 best hyperparameters + Phase 2 optimal cutoff
+- Projects actives with each retrained model
+
+**Key Difference from Phase 2**: Model retraining required; tests how training set size affects model quality.
+
+**Expected Outcome**: Performance degradation with smaller MF clouds; possible UMAP/PCA crossover point.
+
+## Phase 4: Cross-Target Generalization
+
+**Research Question**: Does natural MF cloud size predict screening performance across different target proteins?
+
+**Design**: Evaluate across 8 diverse targets (NO MF subsampling)
+- Uses Phase 1 best method (UMAP/features, dim=10, n_neighbors=5, min_dist=0.0)
+- Uses Phase 2 optimal cutoff (100,000 nM)
+- Each target has natural MF cloud size (full KW category - target actives)
+- 5 replicates per target (seeds: 42, 123, 456, 789, 1011)
+
+**Targets** (spanning ~4 orders of magnitude in MF cloud size):
+1. **KW-0049_Antioxidant**: P00441 (SOD1, 39 actives, 43 MF)
+2. **KW-0929_Antimicrobial**: P14555 (PLA2G2A, 582 actives, 287 MF)
+3. **KW-0505_Motor_protein**: P52732 (KIF11, 1,158 actives, 1,286 MF)
+4. **KW-0202_Cytokine**: P43490 (NAMPT, 2,904 actives, 2,907 MF)
+5. **KW-0358_Heparin-binding**: P11362 (FGFR1, 4,150 actives, 7,614 MF)
+6. **KW-0456_Lyase**: P00918 (CA2, 9,685 actives, 37,685 MF)
+7. **KW-0560_Oxidoreductase**: P08684 (CYP3A4, 6,151 actives, 94,617 MF)
+8. **KW-0808_Transferase**: P00519 (ABL1, 5,505 actives, 425,289 MF)
+
+**Key Difference from Phase 3**: Multiple targets with natural MF sizes (not artificial ablation).
+
+**Workflow**:
+1. Generate configs: `python scripts/generate_molfuse_phase4_configs_v4.py`
+2. Submit to HPC: `bash hpc/submit_molfuse_phase4.sh configs/molfuse_phase4_grid experiment_workspace_v4`
+3. Analyze: `python scripts/phase4_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase4_cross_target`
+
+**Expected Outputs**:
+- `workspace/phase4/cross_target/<run_name>/logs/phase4_summary.json`
+- `workspace/phase4/cross_target/<run_name>/metrics/metrics.json`
+- Post-analysis: MF size vs EF@1% scatter, per-target performance bars, correlation analysis
+
 ## HPC usage (SLURM)
 
 ### Phase 1
@@ -120,6 +166,25 @@ Notes:
 3) Post-analysis (after Phase 2 completes):
 
   python scripts/phase2_post_analysis.py --workspace_dir experiment_workspace_v4 --phase2_run_name cutoff_sweep --output_dir reporting/phase2_post_analysis
+
+### Phase 4
+
+1) Generate Phase 4 configs (40 total: 8 targets × 5 replicates):
+
+  python scripts/generate_molfuse_phase4_configs_v4.py
+
+  Outputs to `configs/molfuse_phase4_grid/`.
+
+2) Submit Phase 4 jobs (after Phase 1-2 complete):
+
+  bash hpc/submit_molfuse_phase4.sh configs/molfuse_phase4_grid experiment_workspace_v4 ummbas_screening
+
+  Internally runs `sbatch hpc/molfuse_phase4_cpu.sh <config> <workspace> <conda_env>`.
+  Idempotent: skips if `phase4_summary.json` exists.
+
+3) Post-analysis (after Phase 4 completes):
+
+  python scripts/phase4_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase4_cross_target
 
 Notes on fingerprints:
 - Fingerprint CSV paths in the generator are derived by replacing `extracted_features.csv` with `extracted_fingerprints.csv`. Adjust the pattern if your filenames differ.

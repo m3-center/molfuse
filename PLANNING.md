@@ -220,6 +220,22 @@ Notes:
 - [ ] Create HPC scripts for Phase 3
 - [ ] **Critical validation**: At MF=0, does UMAP+features performance pattern reverse (higher dim = better)?
 
+### 🧪 Phase 4 (Cross-Target Generalization - FULL NATURAL MF CLOUDS)
+- [x] **Research Question**: Does natural MF cloud size predict screening performance across different target proteins?
+- [x] **Hypothesis**: Larger natural MF clouds improve EF@1% due to better chemical diversity coverage; UMAP/features remains robust
+- [x] **Design**: Evaluate UMAP/features on 8 targets spanning ~4 orders of magnitude in MF cloud size (43 to 425K compounds)
+- [x] Use Phase 1 best hyperparameters (dim=10, n_neighbors=5, min_dist=0.0) + Phase 2 optimal cutoff (100K nM)
+- [x] Select 8 target proteins from diverse KW categories (Antioxidant, Antimicrobial, Motor protein, Cytokine, Heparin-binding, Lyase, Oxidoreductase, Transferase)
+- [x] Implement Phase 4 CLI (`molfuse/cli/phase4.py`) - identical to Phase 1 structure but target-specific, NO MF subsampling
+- [x] Implement config generator (`scripts/generate_molfuse_phase4_configs_v4.py`) - 40 configs (8 targets × 5 replicates)
+- [x] Implement target analysis script (`scripts/analyze_kw_targets.py`) - identify unique targets per KW category
+- [x] Create HPC scripts (`hpc/molfuse_phase4_cpu.sh`, `hpc/submit_molfuse_phase4.sh`)
+- [x] Run target analysis on HPC and update config generator with real UniProt accessions
+- [ ] Generate 40 configs: `python scripts/generate_molfuse_phase4_configs_v4.py`
+- [ ] Submit Phase 4 jobs: `bash hpc/submit_molfuse_phase4.sh configs/molfuse_phase4_grid experiment_workspace_v4`
+- [ ] Implement Phase 4 post-analysis (`scripts/phase4_post_analysis.py`) - cross-target comparison, MF size correlation plots
+- [ ] Create Phase 4 documentation (`README_PHASE4_USAGE.md`)
+
 ### 📊 Analyses
 - [ ] Port potency-stratified analysis (Phase 1) to molfuse/analysis/phase1_potency.py
 - [ ] Port cutoff sensitivity analysis (Phase 2) to molfuse/analysis/phase2_cutoffs.py
