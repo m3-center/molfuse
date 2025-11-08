@@ -89,9 +89,9 @@ def generate_phase4_configs(output_dir: Path) -> List[Path]:
             mf_features_csv = BASE_DATA_DIR / f"{target_kw}_affinity_extracted_features.csv"
             mf_fingerprints_csv = BASE_DATA_DIR / f"{target_kw}_affinity_extracted_fingerprints_ECFP4.csv"
             
-            # ZINC datasets (shared across all targets)
-            zinc_features_csv = BASE_DATA_DIR / "zinc_subset_features.csv"
-            zinc_fingerprints_csv = BASE_DATA_DIR / "zinc_subset_fingerprints_ECFP4.csv"
+            # ZINC datasets (shared across all targets) - in zinc/ subdirectory
+            zinc_features_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_features.csv"
+            zinc_fingerprints_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
             
             config = {
                 "run_name": run_name,
