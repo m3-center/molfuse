@@ -6,14 +6,14 @@ Creates configs for 8 target proteins × 5 replicates = 40 runs.
 Uses UMAP/features (best method from Phase 3) with full MF cloud per target.
 
 Target Selection (spanning 3 orders of magnitude):
-    - KW-0049_Antioxidant: 83 compounds
-    - KW-0929_Antimicrobial: 870 compounds
-    - KW-0339_Growth_factor: 1,451 compounds
-    - KW-0202_Cytokine: 5,812 compounds
-    - KW-0358_Heparin-binding: 11,765 compounds
-    - KW-0456_Lyase: 47,371 compounds
-    - KW-0560_Oxidoreductase: 100,769 compounds
-    - KW-0808_Transferase: 430,795 compounds (baseline)
+    - KW-0049_Antioxidant: P00441 (SOD1, 39 compounds)
+    - KW-0929_Antimicrobial: P14555 (PLA2G2A, 582 compounds)
+    - KW-0505_Motor_protein: P52732 (KIF11, 1,158 compounds)
+    - KW-0202_Cytokine: P43490 (NAMPT, 2,904 compounds)
+    - KW-0358_Heparin-binding: P11362 (FGFR1, 4,150 compounds)
+    - KW-0456_Lyase: P00918 (CA2, 9,685 compounds)
+    - KW-0560_Oxidoreductase: P08684 (CYP3A4, 6,151 compounds)
+    - KW-0808_Transferase: P00519 (ABL1, 5,505 compounds - baseline)
 
 Usage:
     python scripts/generate_molfuse_phase4_configs_v4.py
@@ -30,21 +30,17 @@ from typing import Dict, List, Tuple
 # ============================================================================
 
 # Targets with natural MF cloud sizes (from wc -l output)
+# Selected based on top compound count per KW category (from analyze_kw_targets.py)
 TARGETS: List[Tuple[str, str, int]] = [
-    ("KW-0049_Antioxidant", "ABL1_P00519", 83),  # Example accession, will need actual mapping
-    ("KW-0929_Antimicrobial", "ABL1_P00519", 870),
-    ("KW-0505_Motor_protein", "ABL1_P00519", 2445),
-    ("KW-0202_Cytokine", "ABL1_P00519", 5812),
-    ("KW-0358_Heparin-binding", "ABL1_P00519", 11765),
-    ("KW-0456_Lyase", "ABL1_P00519", 47371),
-    ("KW-0560_Oxidoreductase", "ABL1_P00519", 100769),
-    ("KW-0808_Transferase", "ABL1_P00519", 430795),  # baseline
+    ("KW-0049_Antioxidant", "P00441", 39),        # SOD1 - Superoxide dismutase [Cu-Zn]
+    ("KW-0929_Antimicrobial", "P14555", 582),     # PLA2G2A - Phospholipase A2
+    ("KW-0505_Motor_protein", "P52732", 1158),    # KIF11 - Kinesin-like protein KIF11
+    ("KW-0202_Cytokine", "P43490", 2904),         # NAMPT - Nicotinamide phosphoribosyltransferase
+    ("KW-0358_Heparin-binding", "P11362", 4150),  # FGFR1 - Fibroblast growth factor receptor 1
+    ("KW-0456_Lyase", "P00918", 9685),            # CA2 - Carbonic anhydrase 2
+    ("KW-0560_Oxidoreductase", "P08684", 6151),   # CYP3A4 - Cytochrome P450 3A4
+    ("KW-0808_Transferase", "P00519", 5505),      # ABL1 - Tyrosine-protein kinase ABL1 (baseline)
 ]
-
-# NOTE: The accessions above are placeholders. In reality, you would need to:
-# 1. Select specific proteins from each KW category
-# 2. Map to actual UniProt accessions
-# For now, we'll use target_kw as the identifier
 
 N_REPLICATES = 5
 RANDOM_SEEDS = [42, 123, 456, 789, 1011]
