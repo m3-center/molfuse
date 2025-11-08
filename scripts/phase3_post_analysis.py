@@ -132,12 +132,47 @@ def collect_phase3_results(
     logger.info(f"  Methods: {df['method'].unique().tolist()}")
     logger.info(f"  Representations: {df['representation'].unique().tolist()}")
     logger.info(f"  MF sizes: {sorted(df['mf_size_actual'].unique().tolist())}")
-    logger.info(f"  Replicates per condition: {df.groupby(['method', 'representation', 'mf_size_actual']).size().unique().tolist()}")
     
     # Add mf_size_target_numeric for consistent grouping
     df["mf_size_target_numeric"] = df["mf_size_target"].apply(
         lambda x: 999999 if str(x).lower() == "full" else int(x)
     )
+    
+    # DEBUGGING: Show detailed replicate counts per condition
+    logger.info("\n" + "="*80)
+    logger.info("DEBUGGING: Replicate counts per condition")
+    logger.info("="*80)
+    
+    condition_counts = df.groupby(['method', 'representation', 'mf_size_target']).size().reset_index(name='n_replicates')
+    condition_counts = condition_counts.sort_values(['method', 'representation', 'mf_size_target'])
+    
+    logger.info("\nExpected: 5 replicates per condition (4 methods × 6 MF sizes = 24 conditions)")
+    logger.info(f"Actual: {len(condition_counts)} conditions found\n")
+    
+    for _, row in condition_counts.iterrows():
+        status = "✓ OK" if row['n_replicates'] == 5 else "✗ IRREGULAR"
+        logger.info(f"  {status:12s} | {row['method']:4s} / {row['representation']:12s} | MF={str(row['mf_size_target']):>6s} | n={row['n_replicates']}")
+    
+    # Summary of irregular conditions
+    irregular = condition_counts[condition_counts['n_replicates'] != 5]
+    if len(irregular) > 0:
+        logger.warning(f"\n⚠️  Found {len(irregular)} conditions with irregular replicate counts:")
+        for _, row in irregular.iterrows():
+            logger.warning(f"    {row['method']}/{row['representation']}/MF={row['mf_size_target']}: {row['n_replicates']} replicates (expected 5)")
+    else:
+        logger.info("\n✓ All conditions have exactly 5 replicates")
+    
+    # Count per method-representation combo
+    logger.info("\n" + "-"*80)
+    logger.info("Runs per method-representation combo:")
+    logger.info("-"*80)
+    method_rep_counts = df.groupby(['method', 'representation']).size().reset_index(name='n_runs')
+    for _, row in method_rep_counts.iterrows():
+        expected = 30  # 6 MF sizes × 5 replicates
+        status = "✓" if row['n_runs'] == expected else "✗"
+        logger.info(f"  {status} {row['method']:4s} / {row['representation']:12s}: {row['n_runs']:3d} runs (expected {expected})")
+    
+    logger.info("="*80 + "\n")
     
     return df
 
@@ -520,6 +555,26 @@ def plot_metrics_grid(
         "umap_fingerprints": "#ffbb78",
     }
     
+    # First pass: compute global y-axis ranges for each metric
+    y_limits = {}
+    for col_idx, (mean_col, sem_col, title) in enumerate(metrics):
+        all_values = []
+        for model_key in model_keys:
+            subset = df_agg[df_agg["model_key"] == model_key].copy()
+            y_mean = subset[mean_col].values
+            y_sem = subset[sem_col].values
+            valid_mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
+            if valid_mask.any():
+                all_values.extend(y_mean[valid_mask] + y_sem[valid_mask])
+                all_values.extend(y_mean[valid_mask] - y_sem[valid_mask])
+        
+        if all_values:
+            y_min = max(0, np.min(all_values) * 0.95)
+            y_max = np.max(all_values) * 1.05
+            y_limits[col_idx] = (y_min, y_max)
+        else:
+            y_limits[col_idx] = (0, 1)
+    
     for row_idx, model_key in enumerate(model_keys):
         subset = df_agg[df_agg["model_key"] == model_key].copy()
         subset = subset.sort_values("mf_size_target_numeric")
@@ -540,6 +595,7 @@ def plot_metrics_grid(
             )
             
             ax.set_xscale("log")
+            ax.set_ylim(y_limits[col_idx])
             ax.grid(True, alpha=0.3)
             
             # Titles
