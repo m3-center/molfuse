@@ -91,6 +91,37 @@ def remove_zero_variance_features(df: pd.DataFrame, feature_cols: List[str], var
     return nonzero_cols
 
 
+def remove_rows_with_infinity(df: pd.DataFrame, feature_cols: List[str]) -> pd.DataFrame:
+    """
+    Remove rows containing infinity values in any feature column.
+    
+    This prevents errors during scikit-learn operations (imputation, scaling, fitting)
+    which require finite values. Infinity typically arises from descriptor calculation
+    errors (e.g., log(0), 1/0) and affects a small fraction of molecules.
+    
+    Args:
+        df: DataFrame to filter
+        feature_cols: List of feature column names to check for infinity
+        
+    Returns:
+        DataFrame with rows containing infinity removed
+    """
+    # Convert to numpy for efficient infinity check
+    X = df[feature_cols].to_numpy(dtype=float, copy=False)
+    
+    # Check for inf/-inf (NaN is OK, handled by imputer)
+    inf_mask = np.isinf(X)
+    rows_with_inf = inf_mask.any(axis=1)
+    
+    n_removed = rows_with_inf.sum()
+    if n_removed > 0:
+        # Return filtered DataFrame
+        df_clean = df[~rows_with_inf].copy()
+        return df_clean
+    
+    return df
+
+
 def fit_scaler_on_mf_zinc(
     df_mf: pd.DataFrame, 
     df_zinc: pd.DataFrame, 

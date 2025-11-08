@@ -36,6 +36,7 @@ import pandas as pd
 from molfuse.data.prep import (
     select_feature_columns,
     remove_zero_variance_features,
+    remove_rows_with_infinity,
     fit_scaler_on_mf_zinc,
 )
 from molfuse.dr.pca import fit_pca
@@ -334,6 +335,25 @@ def run_phase4(config_path: Path, workspace_dir: Path) -> None:
         common_feats = remove_zero_variance_features(df_train_check, common_feats)
         del df_train_check
         logger.info(f"Features after zero-variance removal: {len(common_feats)}")
+        
+        # Remove rows with infinity (prevents scikit-learn errors)
+        n_act_before = len(df_act)
+        df_act = remove_rows_with_infinity(df_act, [c for c in common_feats if c in df_act.columns])
+        n_act_removed = n_act_before - len(df_act)
+        if n_act_removed > 0:
+            logger.info(f"Actives: removed {n_act_removed} rows with infinity ({len(df_act):,} remain)")
+        
+        n_mf_before = len(df_mf)
+        df_mf = remove_rows_with_infinity(df_mf, common_feats)
+        n_mf_removed = n_mf_before - len(df_mf)
+        if n_mf_removed > 0:
+            logger.info(f"MF: removed {n_mf_removed} rows with infinity ({len(df_mf):,} remain)")
+        
+        n_zinc_before = len(df_zinc)
+        df_zinc = remove_rows_with_infinity(df_zinc, common_feats)
+        n_zinc_removed = n_zinc_before - len(df_zinc)
+        if n_zinc_removed > 0:
+            logger.info(f"ZINC: removed {n_zinc_removed} rows with infinity ({len(df_zinc):,} remain)")
         
         # Fit imputer and scaler on MF + ZINC
         imputer, scaler = fit_scaler_on_mf_zinc(df_mf, df_zinc, common_feats)
