@@ -248,6 +248,11 @@ def add_tier_metrics_to_cutoff(
     ef1_medium, n_medium = compute_ef_at_percent(ranked_df, "Medium", 0.01)
     ef1_weak, n_weak = compute_ef_at_percent(ranked_df, "Weak", 0.01)
     
+    # Compute tier-specific BEDROC and IEF (overall only, not per-tier)
+    # Note: Computing BEDROC per tier would require filtering which changes the denominator
+    # So we compute overall BEDROC/IEF here (already done by compute_bedroc_ief_from_ranked_scores)
+    # but keep this function focused on tier-specific EF metrics
+    
     return {
         "ef1_high": ef1_high,
         "ef1_medium": ef1_medium,
@@ -673,6 +678,109 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     print(f"Saved tier metrics (best configs): {output_dir / 'phase2_tier_metrics_best_configs.csv'}")
 
 
+def plot_cutoff_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
+    """
+    Plot BEDROC and IEF vs affinity cutoff for best configs per method.
+    
+    Shows how different cutoffs affect BEDROC and IEF metrics (overall actives only,
+    not tier-specific since BEDROC/IEF per tier would require filtering which changes denominator).
+    
+    Args:
+        df: Aggregated Phase 2 metrics (must include bedroc_20, bedroc_160, ief_20, ief_160)
+        output_dir: Output directory for plots
+    """
+    # Check if BEDROC/IEF metrics are available
+    if "bedroc_20" not in df.columns or df["bedroc_20"].isna().all():
+        print("WARNING: No BEDROC/IEF metrics found. Skipping BEDROC/IEF cutoff sensitivity plot.")
+        return
+    
+    # Filter to best configs per method
+    df_best = get_best_configs_per_method(df)
+    
+    if df_best.empty:
+        print("WARNING: No best configs identified. Skipping BEDROC/IEF plot.")
+        return
+    
+    print(f"\nBest configurations per method × representation (for BEDROC/IEF plot):")
+    for model_key in sorted(df_best["model_key"].unique()):
+        method = df_best[df_best["model_key"] == model_key]["method"].iloc[0]
+        rep = df_best[df_best["model_key"] == model_key]["representation"].iloc[0]
+        print(f"  {method}/{rep}: {model_key}")
+    
+    # Sort by cutoff for proper line plotting
+    df_best = df_best.sort_values(by=["model_key", "cutoff_nM"]).reset_index(drop=True)
+    
+    # Create plots for BEDROC(α=20), BEDROC(α=160), IEF(α=20), IEF(α=160)
+    metrics = [
+        ("bedroc_20", "BEDROC (α=20)"),
+        ("bedroc_160", "BEDROC (α=160)"),
+        ("ief_20", "IEF (α=20)"),
+        ("ief_160", "IEF (α=160)"),
+    ]
+    
+    for metric_col, metric_title in metrics:
+        if metric_col not in df_best.columns:
+            print(f"WARNING: {metric_col} not in dataframe. Skipping {metric_title} plot.")
+            continue
+        
+        # Create multi-panel plot (2×2 grid for 4 model_keys)
+        n_models = df_best["model_key"].nunique()
+        
+        if n_models <= 2:
+            fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5), sharey=True, squeeze=False)
+            axes = axes.flatten()
+        else:
+            ncols = 2
+            nrows = int(np.ceil(n_models / ncols))
+            fig, axes = plt.subplots(nrows, ncols, figsize=(12, 5 * nrows), sharey=True, squeeze=False)
+            axes = axes.flatten()
+        
+        for idx, model_key in enumerate(sorted(df_best["model_key"].unique())):
+            ax = axes[idx]
+            subset = df_best[df_best["model_key"] == model_key].copy()
+            
+            # Plot metric vs cutoff
+            x = subset["cutoff_nM"].values
+            y = subset[metric_col].values
+            
+            mask = ~np.isnan(y)
+            if mask.any():
+                ax.plot(x[mask], y[mask], marker="o", color="#1976D2",
+                       linewidth=2.5, markersize=8, alpha=0.9)
+            
+            # Formatting
+            ax.set_xscale("log")
+            ax.set_xlabel("Affinity Cutoff (nM)", fontsize=11, fontweight="bold")
+            if idx == 0:
+                ax.set_ylabel(metric_title, fontsize=11, fontweight="bold")
+            
+            # Extract method and representation for title
+            method = subset["method"].iloc[0]
+            rep = subset["representation"].iloc[0]
+            dim = subset["dim"].iloc[0]
+            
+            ax.set_title(f"{method.upper()} ({rep}, dim={dim})", fontsize=11, fontweight="bold")
+            ax.grid(True, alpha=0.3)
+            
+            # Add vertical line at optimal cutoff (based on metric value)
+            if mask.any():
+                best_idx = subset.loc[mask, metric_col].idxmax()
+                best_cutoff = subset.loc[best_idx, "cutoff_nM"]
+                ax.axvline(best_cutoff, color="gray", linestyle="--", linewidth=1.5, alpha=0.6)
+        
+        # Hide unused axes
+        for idx in range(n_models, len(axes)):
+            axes[idx].axis("off")
+        
+        plt.suptitle(f"Cutoff Sensitivity: {metric_title} (Best Configs)", 
+                    fontsize=14, fontweight="bold", y=1.02)
+        plt.tight_layout()
+        
+        filename = f"cutoff_{metric_col}_sensitivity_best_configs"
+        save_figure(fig, output_dir, filename)
+        print(f"Saved {filename}.png/pdf")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -750,6 +858,9 @@ def main() -> None:
 
     # Tier-wise cutoff sensitivity (best configs only)
     plot_cutoff_tier_sensitivity(df, output_dir)
+
+    # BEDROC and IEF cutoff sensitivity (best configs only)
+    plot_cutoff_bedroc_ief_sensitivity(df, output_dir)
 
     # Identify best cutoffs
     identify_best_cutoffs(df, output_dir)
