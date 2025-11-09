@@ -49,6 +49,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Add molfuse metrics
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from molfuse.metrics.metrics import bedroc, ief
+
 # Global cache for MF data (avoid reloading same file multiple times)
 _MF_CACHE: Dict[str, pd.DataFrame] = {}
 
@@ -481,6 +486,17 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     ef1_medium = compute_ef_at_percent(ranked_df, tier="Medium", top_pct=0.01)
     ef1_weak = compute_ef_at_percent(ranked_df, tier="Weak", top_pct=0.01)
     
+    # Compute BEDROC and IEF for overall (tier=None) only
+    # (Computing tier-specific BEDROC requires filtering which changes the denominator)
+    import numpy as np
+    labels = np.asarray(ranked_df["label"].values, dtype=int)
+    scores = np.asarray(ranked_df["score"].values, dtype=float)
+    
+    bedroc_20 = bedroc(labels, scores, alpha=20.0)
+    bedroc_160 = bedroc(labels, scores, alpha=160.9)
+    ief_20 = ief(labels, scores, alpha=20.0)
+    ief_160 = ief(labels, scores, alpha=160.9)
+    
     # Format EF values for logging
     ef1_all_str = f"{ef1_all:.2f}" if ef1_all is not None else "N/A"
     ef1_high_str = f"{ef1_high:.2f}" if ef1_high is not None else "N/A"
@@ -488,6 +504,8 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     ef1_weak_str = f"{ef1_weak:.2f}" if ef1_weak is not None else "N/A"
     
     logger.info(f"  EF@1%: All={ef1_all_str}, High={ef1_high_str}, Medium={ef1_medium_str}, Weak={ef1_weak_str}")
+    logger.info(f"  BEDROC(α=20)={bedroc_20:.3f}, BEDROC(α=160)={bedroc_160:.3f}")
+    logger.info(f"  IEF(α=20)={ief_20:.3f}, IEF(α=160)={ief_160:.3f}")
     
     # Extract config
     run_config = extract_run_config(summary_json, metrics_json)
@@ -501,6 +519,10 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
         "EF1_high": ef1_high,
         "EF1_medium": ef1_medium,
         "EF1_weak": ef1_weak,
+        "BEDROC_20": bedroc_20,
+        "BEDROC_160": bedroc_160,
+        "IEF_20": ief_20,
+        "IEF_160": ief_160,
         "N_total": N_total,
         "N_zinc": N_zinc,
         "N_actives": N_actives,
@@ -524,7 +546,7 @@ def aggregate_by_config(df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate runs by configuration (representation, method, dim, UMAP params).
     
-    Returns grouped DataFrame with mean ± std for each tier's EF@1%.
+    Returns grouped DataFrame with mean ± std for each tier's EF@1%, BEDROC, and IEF.
     """
     # Group keys
     group_keys = ["representation", "method", "dim", "umap_n_neighbors", "umap_min_dist"]
@@ -539,6 +561,14 @@ def aggregate_by_config(df: pd.DataFrame) -> pd.DataFrame:
         EF1_medium_std=("EF1_medium", "std"),
         EF1_weak_mean=("EF1_weak", "mean"),
         EF1_weak_std=("EF1_weak", "std"),
+        BEDROC_20_mean=("BEDROC_20", "mean"),
+        BEDROC_20_std=("BEDROC_20", "std"),
+        BEDROC_160_mean=("BEDROC_160", "mean"),
+        BEDROC_160_std=("BEDROC_160", "std"),
+        IEF_20_mean=("IEF_20", "mean"),
+        IEF_20_std=("IEF_20", "std"),
+        IEF_160_mean=("IEF_160", "mean"),
+        IEF_160_std=("IEF_160", "std"),
         n_runs=("run_name", "count"),
     ).reset_index()
     
@@ -850,6 +880,91 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
         logger.info(f"Saved: {filename}.png")
 
 
+def plot_bedroc_ief_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: logging.Logger) -> None:
+    """
+    Create BEDROC and IEF comparison plots for Phase 1.
+    
+    Creates bar charts showing BEDROC(α=20) and BEDROC(α=160.9) and IEF for 
+    best-performing configurations across methods and representations.
+    """
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger.info("Generating BEDROC and IEF comparison plots...")
+    
+    # For each combination of representation and method, find best config by BEDROC_20
+    metrics_list = ["BEDROC_20", "BEDROC_160", "IEF_20", "IEF_160"]
+    
+    for metric in metrics_list:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()
+        
+        configs = [
+            {"method": "umap", "representation": "features", "label": "UMAP + Features"},
+            {"method": "umap", "representation": "fingerprints", "label": "UMAP + Fingerprints"},
+            {"method": "pca", "representation": "features", "label": "PCA + Features"},
+            {"method": "pca", "representation": "fingerprints", "label": "PCA + Fingerprints"},
+        ]
+        
+        y_max = 0.0
+        
+        for ax_idx, config in enumerate(configs):
+            method = config["method"]
+            rep = config["representation"]
+            label = config["label"]
+            
+            # Filter for this method + representation
+            subset = df_grouped[
+                (df_grouped["method"] == method) &
+                (df_grouped["representation"] == rep)
+            ]
+            
+            if subset.empty:
+                axes[ax_idx].text(0.5, 0.5, "No data", ha="center", va="center", transform=axes[ax_idx].transAxes)
+                continue
+            
+            # Find best config by mean metric
+            mean_col = f"{metric}_mean"
+            std_col = f"{metric}_std"
+            
+            best_idx = subset[mean_col].idxmax()
+            best_row = subset.loc[best_idx]
+            
+            # Extract values
+            mean_val = best_row[mean_col]
+            std_val = best_row.get(std_col, 0.0)
+            dim = best_row.get("dim", "?")
+            
+            # Track max for shared y-axis
+            y_max = max(y_max, mean_val + std_val)
+            
+            # Plot single bar
+            x_pos = [0]
+            axes[ax_idx].bar(x_pos, [mean_val], yerr=[std_val], 
+                            capsize=5, color="steelblue", alpha=0.8, width=0.5)
+            
+            axes[ax_idx].set_xticks([0])
+            axes[ax_idx].set_xticklabels([label], fontsize=10)
+            axes[ax_idx].set_ylabel(metric.replace("_", " (α=") + ")" if "_" in metric else metric, fontsize=11, fontweight="bold")
+            axes[ax_idx].set_title(f"{label} (dim={dim})", fontsize=11, fontweight="bold")
+            axes[ax_idx].grid(True, alpha=0.3, axis="y")
+        
+        # Set shared y-axis
+        for ax in axes:
+            ax.set_ylim(0, y_max * 1.1)
+        
+        fig.suptitle(f"Phase 1: {metric.replace('_', ' (α=')+')' if '_' in metric else metric} Across Methods", fontsize=14, fontweight="bold")
+        fig.tight_layout(rect=[0, 0, 1, 0.97])
+        
+        # Save
+        filename = f"phase1_{metric.lower()}_comparison"
+        fig.savefig(plots_dir / f"{filename}.png", dpi=300, bbox_inches="tight")
+        fig.savefig(plots_dir / f"{filename}.pdf", bbox_inches="tight")
+        plt.close(fig)
+        
+        logger.info(f"Saved: {filename}.png")
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -913,6 +1028,10 @@ Example:
         # Create plots
         logger.info("Regenerating plots with shared y-axis...")
         plot_tier_comparison(df_grouped, output_dir, logger)
+        
+        # Create BEDROC/IEF comparison plots
+        logger.info("Regenerating BEDROC and IEF comparison plots...")
+        plot_bedroc_ief_comparison(df_grouped, output_dir, logger)
         
         # Create Figure 1 for manuscript
         logger.info("Creating Figure 1 for manuscript...")
@@ -993,6 +1112,10 @@ Example:
     # Create plots
     logger.info("Creating tier comparison plots...")
     plot_tier_comparison(df_grouped, output_dir, logger)
+    
+    # Create BEDROC/IEF comparison plots
+    logger.info("Creating BEDROC and IEF comparison plots...")
+    plot_bedroc_ief_comparison(df_grouped, output_dir, logger)
     
     # Create Figure 1 for manuscript
     logger.info("Creating Figure 1 for manuscript...")

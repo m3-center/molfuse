@@ -38,6 +38,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
 
+# Import BEDROC and IEF metrics
+from molfuse.metrics.metrics import bedroc, ief
+
 # Publication-quality style
 matplotlib.rcParams.update({
     "figure.dpi": 120,
@@ -63,6 +66,39 @@ except ImportError:
 # ============================================================================
 # Data Aggregation
 # ============================================================================
+
+def compute_bedroc_ief_from_artifacts_dir(artifacts_dir: Path) -> Dict[str, float]:
+    """
+    Compute BEDROC and IEF metrics from ranked_scores.csv retrospectively.
+    
+    Returns dict with keys: bedroc_20, bedroc_160, ief_20, ief_160
+    """
+    ranked_path = artifacts_dir / "ranked_scores.csv"
+    if not ranked_path.exists():
+        return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+    
+    try:
+        df = pd.read_csv(ranked_path)
+        if "score" not in df.columns or "label" not in df.columns:
+            return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+        
+        labels = np.asarray(df["label"].values, dtype=int)
+        scores = np.asarray(df["score"].values, dtype=float)
+        
+        bedroc_20 = bedroc(labels, scores, alpha=20.0)
+        bedroc_160 = bedroc(labels, scores, alpha=160.9)
+        ief_20 = ief(labels, scores, alpha=20.0)
+        ief_160 = ief(labels, scores, alpha=160.9)
+        
+        return {
+            "bedroc_20": bedroc_20,
+            "bedroc_160": bedroc_160,
+            "ief_20": ief_20,
+            "ief_160": ief_160,
+        }
+    except Exception:
+        return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+
 
 def collect_phase3_results(
     workspace_dir: Path,
@@ -122,6 +158,15 @@ def collect_phase3_results(
                 "spearman_rho": data.get("spearman_rho"),
                 "elapsed_time_s": data.get("elapsed_time_s"),
             }
+            
+            # Compute BEDROC and IEF retrospectively from ranked_scores.csv
+            artifacts_dir = summary_path.parent / "artifacts"
+            if artifacts_dir.exists():
+                bedroc_ief_metrics = compute_bedroc_ief_from_artifacts_dir(artifacts_dir)
+                record.update(bedroc_ief_metrics)
+            else:
+                record.update({"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan})
+            
             records.append(record)
         except Exception as e:
             logger.warning(f"Failed to parse {summary_path}: {e}")
@@ -200,6 +245,10 @@ def aggregate_by_condition(df: pd.DataFrame, logger: logging.Logger) -> pd.DataF
         "ef_1%": ["mean", "sem", "std", "count"],
         "ef_5%": ["mean", "sem", "std"],
         "ef_10%": ["mean", "sem", "std"],
+        "bedroc_20": ["mean", "sem", "std"],
+        "bedroc_160": ["mean", "sem", "std"],
+        "ief_20": ["mean", "sem", "std"],
+        "ief_160": ["mean", "sem", "std"],
         "roc_auc": ["mean", "sem", "std"],
         "pr_auc": ["mean", "sem", "std"],
         "n_actives": "first",
@@ -540,6 +589,10 @@ def plot_metrics_grid(
     model_keys = sorted(df_agg["model_key"].unique())
     
     metrics = [("ef_1%_mean", "ef_1%_sem", "EF@1%"),
+               ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)"),
+               ("bedroc_160_mean", "bedroc_160_sem", "BEDROC (α=160)"),
+               ("ief_20_mean", "ief_20_sem", "IEF (α=20)"),
+               ("ief_160_mean", "ief_160_sem", "IEF (α=160)"),
                ("roc_auc_mean", "roc_auc_sem", "ROC-AUC"),
                ("pr_auc_mean", "pr_auc_sem", "PR-AUC")]
     

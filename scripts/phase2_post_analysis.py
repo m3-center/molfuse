@@ -27,6 +27,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Import BEDROC and IEF metrics
+from molfuse.metrics.metrics import bedroc, ief
+
 # Publication-quality style
 matplotlib.rcParams.update({
     "figure.dpi": 120,
@@ -265,6 +268,40 @@ def save_figure(fig: plt.Figure, output_dir: Path, basename: str) -> None:
     plt.close(fig)
 
 
+def compute_bedroc_ief_from_ranked_scores(cutoff_dir: Path) -> Dict[str, float]:
+    """
+    Compute BEDROC and IEF metrics from ranked_scores.csv retrospectively.
+    
+    Returns dict with keys: bedroc_20, bedroc_160, ief_20, ief_160
+    """
+    ranked_path = cutoff_dir / "ranked_scores.csv"
+    if not ranked_path.exists():
+        return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+    
+    try:
+        df = pd.read_csv(ranked_path)
+        if "score" not in df.columns or "label" not in df.columns:
+            return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+        
+        labels = np.asarray(df["label"].values, dtype=int)
+        scores = np.asarray(df["score"].values, dtype=float)
+        
+        bedroc_20 = bedroc(labels, scores, alpha=20.0)
+        bedroc_160 = bedroc(labels, scores, alpha=160.9)
+        ief_20 = ief(labels, scores, alpha=20.0)
+        ief_160 = ief(labels, scores, alpha=160.9)
+        
+        return {
+            "bedroc_20": bedroc_20,
+            "bedroc_160": bedroc_160,
+            "ief_20": ief_20,
+            "ief_160": ief_160,
+        }
+    except Exception as e:
+        print(f"Error computing BEDROC/IEF for {cutoff_dir.name}: {e}")
+        return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+
+
 def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_tiers: bool = True) -> pd.DataFrame:
     """
     Aggregate Phase 2 metrics across models and cutoffs.
@@ -313,6 +350,10 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
                 "n_mf": metrics.get("n_mf_for_scoring", 0),
                 "phase1_run": metrics.get("phase1_run", "unknown"),
             }
+            
+            # Compute BEDROC and IEF retrospectively from ranked_scores.csv
+            bedroc_ief_metrics = compute_bedroc_ief_from_ranked_scores(cutoff_dir)
+            row.update(bedroc_ief_metrics)
             
             # Compute tier-stratified metrics if requested
             if compute_tiers:
@@ -680,14 +721,22 @@ def main() -> None:
     # Generate plots
     print("Generating plots...")
 
-    # Cutoff curves
+    # Cutoff curves for EF
     plot_cutoff_curves(df, "ef1", output_dir, "cutoff_curves_ef1")
     plot_cutoff_curves(df, "ef5", output_dir, "cutoff_curves_ef5")
     plot_cutoff_curves(df, "ef10", output_dir, "cutoff_curves_ef10")
+    
+    # Cutoff curves for BEDROC and IEF
+    plot_cutoff_curves(df, "bedroc_20", output_dir, "cutoff_curves_bedroc_20")
+    plot_cutoff_curves(df, "bedroc_160", output_dir, "cutoff_curves_bedroc_160")
+    plot_cutoff_curves(df, "ief_20", output_dir, "cutoff_curves_ief_20")
+    plot_cutoff_curves(df, "ief_160", output_dir, "cutoff_curves_ief_160")
 
     # Heatmaps
     plot_cutoff_heatmap(df, "ef1", output_dir, "cutoff_heatmap_ef1")
     plot_cutoff_heatmap(df, "roc_auc", output_dir, "cutoff_heatmap_roc_auc")
+    plot_cutoff_heatmap(df, "bedroc_20", output_dir, "cutoff_heatmap_bedroc_20")
+    plot_cutoff_heatmap(df, "bedroc_160", output_dir, "cutoff_heatmap_bedroc_160")
 
     # Quality-quantity
     plot_quality_quantity(df, output_dir)
