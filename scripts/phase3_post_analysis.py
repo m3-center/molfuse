@@ -167,7 +167,10 @@ def collect_phase3_results(
             }
             
             # Compute BEDROC and IEF retrospectively from ranked_scores.csv
-            artifacts_dir = summary_path.parent / "artifacts"
+            # summary_path is: workspace/phase3/mf_ablation/run_name/logs/phase3_summary.json
+            # artifacts_dir is: workspace/phase3/mf_ablation/run_name/artifacts/
+            run_dir = summary_path.parent.parent  # Go up from logs/ to run_name/
+            artifacts_dir = run_dir / "artifacts"
             if artifacts_dir.exists():
                 bedroc_ief_metrics = compute_bedroc_ief_from_artifacts_dir(artifacts_dir)
                 record.update(bedroc_ief_metrics)
