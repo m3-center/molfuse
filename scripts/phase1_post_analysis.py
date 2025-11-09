@@ -36,6 +36,11 @@ import pandas as pd
 from scipy.stats import gaussian_kde
 from scipy.spatial.distance import cdist
 
+# Add molfuse metrics
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from molfuse.metrics.metrics import bedroc, ief
+
 # Matplotlib is standard; seaborn is optional (fallback to plain matplotlib if missing)
 import matplotlib
 matplotlib.use("Agg")
@@ -132,7 +137,47 @@ def _extract_method_dim_target(metrics: dict) -> Tuple[str, int, str, float]:
     return method, dim, target, cutoff
 
 
-def scan_runs(workspace_dir: Path, phase: str = "phase1") -> pd.DataFrame:
+def _compute_bedroc_ief_from_ranked_scores(ranked_scores_path: Path, alpha_vals: List[float]) -> Dict[str, float]:
+    """
+    Retrospectively compute BEDROC and IEF from ranked_scores.csv.
+    
+    Args:
+        ranked_scores_path: Path to artifacts/ranked_scores.csv
+        alpha_vals: List of alpha values to compute (e.g., [20.0, 160.9])
+    
+    Returns:
+        Dict with keys like 'bedroc_20', 'bedroc_160', 'ief_20', 'ief_160'
+    """
+    if not ranked_scores_path.exists():
+        return {}
+    
+    try:
+        df_scores = pd.read_csv(ranked_scores_path)
+        if 'score' not in df_scores.columns or 'label' not in df_scores.columns:
+            return {}
+        
+        labels = df_scores['label'].to_numpy()
+        scores = df_scores['score'].to_numpy()
+        
+        result = {}
+        for alpha in alpha_vals:
+            bedroc_val = bedroc(labels, scores, alpha=alpha)
+            ief_val = ief(labels, scores, alpha=alpha)
+            
+            # Format alpha for key (remove .0 if integer)
+            alpha_key = f"{int(alpha)}" if alpha == int(alpha) else f"{alpha:.1f}".replace('.', '_')
+            result[f'bedroc_{alpha_key}'] = bedroc_val
+            result[f'ief_{alpha_key}'] = ief_val
+        
+        return result
+    except Exception:
+        return {}
+
+
+def scan_runs(workspace_dir: Path, phase: str = "phase1", alpha_vals: Optional[List[float]] = None) -> pd.DataFrame:
+    if alpha_vals is None:
+        alpha_vals = [20.0, 160.9]  # Default: standard and aggressive early recognition
+    
     rows: List[Dict] = []
     phase_dir = workspace_dir / phase
     if not phase_dir.exists():
@@ -172,6 +217,10 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1") -> pd.DataFrame:
                 except Exception:
                     replicate = None
 
+        # Compute BEDROC/IEF retrospectively from ranked_scores.csv
+        ranked_scores_path = run_dir / "artifacts" / "ranked_scores.csv"
+        bedroc_ief_metrics = _compute_bedroc_ief_from_ranked_scores(ranked_scores_path, alpha_vals)
+
         row = {
             "run_name": run_dir.name,
             "representation": rep,
@@ -195,15 +244,23 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1") -> pd.DataFrame:
             "n_zinc_eval": metrics.get("n_zinc_eval", np.nan),
             "n_mf_for_scoring": metrics.get("n_mf_for_scoring", np.nan),
         }
+        # Add BEDROC/IEF metrics
+        row.update(bedroc_ief_metrics)
+        
         rows.append(row)
 
     if not rows:
-        return pd.DataFrame(columns=[
+        base_cols = [
             "run_name","representation","method","dim","target","affinity_cutoff_nM",
             "umap_n_neighbors","umap_min_dist","umap_metric","replicate",
             "ef_1%","ef_5%","ef_10%","roc_auc","pr_auc","spearman_rho","spearman_p",
             "n_actives","n_zinc_eval","n_mf_for_scoring"
-        ])
+        ]
+        # Add BEDROC/IEF columns
+        for alpha in alpha_vals:
+            alpha_key = f"{int(alpha)}" if alpha == int(alpha) else f"{alpha:.1f}".replace('.', '_')
+            base_cols.extend([f'bedroc_{alpha_key}', f'ief_{alpha_key}'])
+        return pd.DataFrame(columns=base_cols)
 
     return pd.DataFrame(rows)
 
@@ -211,17 +268,39 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1") -> pd.DataFrame:
 def group_and_best(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, dict]]:
     # Group by knobs that define a config; treat replicate as a replicate
     group_keys = ["representation", "method", "dim", "umap_n_neighbors", "umap_min_dist", "umap_metric"]
+    
+    # Build aggregation dict dynamically to include all BEDROC/IEF columns
+    agg_dict = {
+        "ef_1%": ["mean", "std"],
+        "ef_5%": ["mean", "std"],
+        "ef_10%": ["mean", "std"],
+        "roc_auc": ["mean", "std"],
+        "pr_auc": ["mean", "std"],
+        "run_name": "count",
+    }
+    
+    # Add BEDROC/IEF columns if they exist
+    for col in df.columns:
+        if col.startswith("bedroc_") or col.startswith("ief_"):
+            agg_dict[col] = ["mean", "std"]
+    
     # Important: include rows with NaNs in UMAP-only keys (so PCA isn't dropped)
-    g = (
-        df.groupby(group_keys, dropna=False)
-        .agg(
-            ef1_mean=("ef_1%", "mean"), ef1_std=("ef_1%", "std"),
-            ef5_mean=("ef_5%", "mean"), ef10_mean=("ef_10%", "mean"),
-            roc_mean=("roc_auc", "mean"), pr_mean=("pr_auc", "mean"),
-            n_runs=("run_name", "count")
-        )
-        .reset_index()
-    )
+    g = df.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
+    
+    # Flatten MultiIndex columns
+    g.columns = ['_'.join(col).strip('_') if isinstance(col, tuple) else col for col in g.columns]
+    
+    # Rename for backwards compat
+    rename_map = {
+        "ef_1%_mean": "ef1_mean",
+        "ef_1%_std": "ef1_std",
+        "ef_5%_mean": "ef5_mean",
+        "ef_10%_mean": "ef10_mean",
+        "roc_auc_mean": "roc_mean",
+        "pr_auc_mean": "pr_mean",
+        "run_name_count": "n_runs",
+    }
+    g.rename(columns=rename_map, inplace=True)
 
     # Best configs per representation x method x dim (by ef1_mean)
     best: Dict[str, dict] = {}
@@ -400,6 +479,112 @@ def plot_bars_combined(
         plt.close(fig)
         saved.extend([p_png, p_pdf])
 
+    return saved
+
+
+def plot_bedroc_ief_bars(
+    df_g: pd.DataFrame,
+    out_dir: Path,
+    alpha_vals: List[float],
+    sharey: bool,
+    logger: logging.Logger,
+) -> List[Path]:
+    """
+    Create bar plots for BEDROC and IEF metrics across dimensions.
+    
+    Similar to plot_bars_combined but for BEDROC/IEF metrics.
+    """
+    _ensure_dir(out_dir)
+    saved: List[Path] = []
+    
+    dims = sorted(df_g["dim"].dropna().unique().astype(int).tolist())
+    methods = sorted(df_g["method"].dropna().unique().tolist())
+    reps = sorted(df_g["representation"].dropna().unique().tolist())
+    colors = _bar_colors()
+    
+    # Plot for each alpha and each metric type (BEDROC/IEF)
+    for alpha in alpha_vals:
+        alpha_key = f"{int(alpha)}" if alpha == int(alpha) else f"{alpha:.1f}".replace('.', '_')
+        
+        for metric_type in ["bedroc", "ief"]:
+            mean_col = f"{metric_type}_{alpha_key}_mean"
+            std_col = f"{metric_type}_{alpha_key}_std"
+            
+            # Check if columns exist
+            if mean_col not in df_g.columns:
+                continue
+            
+            if sharey:
+                y0, y1 = _compute_global_ylim(df_g, mean_col, std_col)
+                logger.info(f"Bars[{metric_type}(α={alpha})] global ylim: ({y0:.3f}, {y1:.3f})")
+            else:
+                y0 = y1 = None  # type: ignore
+            
+            ncols = max(1, len(dims))
+            fig, axes = plt.subplots(1, ncols, figsize=(4.5*ncols, 4), sharey=sharey)
+            if ncols == 1:
+                axes = [axes]  # type: ignore
+            
+            for ax, d in zip(axes, dims):
+                sub = df_g[df_g["dim"] == d]
+                x = np.arange(len(methods), dtype=float)
+                total_width = 0.8
+                bw = total_width / max(1, len(reps))
+                offset0 = - (len(reps)-1) / 2 * bw
+                
+                for i, r in enumerate(reps):
+                    y = []
+                    yerr = []
+                    for m in methods:
+                        row = sub[(sub["method"]==m) & (sub["representation"]==r)]
+                        if row.empty or mean_col not in row.columns:
+                            y.append(np.nan)
+                            yerr.append(0.0)
+                        else:
+                            y_val = float(row.iloc[0][mean_col])
+                            yerr_val = float(row.iloc[0][std_col]) if std_col in row.columns else 0.0
+                            y.append(y_val)
+                            yerr.append(yerr_val)
+                    
+                    xpos = x + offset0 + i*bw
+                    bar_colors_list = [colors.get(r, None) for _ in methods]
+                    bars = ax.bar(xpos, y, width=bw, label=r, color=bar_colors_list, yerr=yerr, capsize=3)
+                    
+                    # Numeric labels
+                    for b, val in zip(bars, y):
+                        if np.isfinite(val):
+                            y_upper = (y1 if sharey and y1 is not None else max(1.0, b.get_height()))
+                            ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.02*float(y_upper),
+                                    f"{val:.3f}", ha="center", va="bottom", fontsize=8)
+                
+                ax.set_xticks(x)
+                ax.set_xticklabels([m.upper() if m == "pca" else m.capitalize() for m in methods])
+                ax.set_xlabel("Method")
+                if sharey:
+                    ax.set_ylim(y0, y1)
+                ax.set_title(f"dim={d}")
+            
+            # Y-axis label
+            metric_label = f"{metric_type.upper()}(α={alpha})" if metric_type == "bedroc" else f"IEF(α={alpha})"
+            axes[0].set_ylabel(metric_label)
+            
+            # Legend
+            handles, labels_leg = axes[-1].get_legend_handles_labels()
+            if handles:
+                fig.legend(handles, labels_leg, title="Representation", loc="center left", 
+                          bbox_to_anchor=(1.0, 0.5), frameon=True, fontsize=10)
+            
+            fig.suptitle(f"{metric_label} (mean ± sd)", fontsize=14, fontweight='bold')
+            fig.tight_layout(rect=(0, 0, 0.88, 0.96))
+            
+            p_png = out_dir / f"bars_{metric_type}_alpha{alpha_key}_combined.png"
+            p_pdf = out_dir / f"bars_{metric_type}_alpha{alpha_key}_combined.pdf"
+            fig.savefig(p_png, bbox_inches='tight', dpi=300)
+            fig.savefig(p_pdf, bbox_inches='tight')
+            plt.close(fig)
+            saved.extend([p_png, p_pdf])
+            logger.info(f"Saved {metric_label} bars: {p_png}")
+    
     return saved
 
 
@@ -1714,6 +1899,12 @@ def main():
 
     saved_bars = plot_bars_combined(df_grouped, plot_dir, metrics, getattr(args, "sharey", True), logger)
     manifest["bars"] = [str(p) for p in saved_bars]
+    
+    # BEDROC/IEF bar plots
+    alpha_vals = [20.0, 160.9]  # Standard and aggressive early recognition
+    saved_bedroc_ief = plot_bedroc_ief_bars(df_grouped, plot_dir, alpha_vals, getattr(args, "sharey", True), logger)
+    manifest["bedroc_ief_bars"] = [str(p) for p in saved_bedroc_ief]
+    
     plot_umap_heatmaps(df_grouped, plot_dir)
     manifest.setdefault("heatmaps", []).extend([str(plot_dir/"umap_heatmap_grid.png"), str(plot_dir/"umap_heatmap_grid.pdf")])
     plot_seed_variability(df_runs, plot_dir)
