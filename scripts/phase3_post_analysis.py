@@ -103,7 +103,8 @@ def compute_bedroc_ief_from_artifacts_dir(artifacts_dir: Path) -> Dict[str, floa
             "ief_20": ief_20,
             "ief_160": ief_160,
         }
-    except Exception:
+    except Exception as e:
+        print(f"WARNING: Error computing BEDROC/IEF from {ranked_path}: {e}")
         return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
 
 
