@@ -711,74 +711,93 @@ def plot_cutoff_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> No
     df_best = df_best.sort_values(by=["model_key", "cutoff_nM"]).reset_index(drop=True)
     
     # Create plots for BEDROC(α=20), BEDROC(α=160), IEF(α=20), IEF(α=160)
-    metrics = [
-        ("bedroc_20", "BEDROC (α=20)"),
-        ("bedroc_160", "BEDROC (α=160)"),
-        ("ief_20", "IEF (α=20)"),
-        ("ief_160", "IEF (α=160)"),
+    # Group metrics with same y-axis range
+    metric_groups = [
+        ([("bedroc_20", "BEDROC (α=20)"), ("bedroc_160", "BEDROC (α=160)")], "BEDROC"),
+        ([("ief_20", "IEF (α=20)"), ("ief_160", "IEF (α=160)")], "IEF"),
     ]
     
-    for metric_col, metric_title in metrics:
-        if metric_col not in df_best.columns:
-            print(f"WARNING: {metric_col} not in dataframe. Skipping {metric_title} plot.")
+    for metric_pairs, group_name in metric_groups:
+        # Compute global y-axis range for this group
+        all_values = []
+        for metric_col, _ in metric_pairs:
+            if metric_col in df_best.columns:
+                valid_vals = df_best[metric_col].dropna().values
+                if len(valid_vals) > 0:
+                    all_values.extend(valid_vals)
+        
+        if len(all_values) == 0:
+            print(f"WARNING: No valid {group_name} values. Skipping {group_name} plots.")
             continue
         
-        # Create multi-panel plot (2×2 grid for 4 model_keys)
-        n_models = df_best["model_key"].nunique()
+        y_min = min(all_values)
+        y_max = max(all_values)
+        y_range = y_max - y_min
+        y_limits = (y_min - 0.05 * y_range, y_max + 0.05 * y_range)
         
-        if n_models <= 2:
-            fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5), sharey=True, squeeze=False)
-            axes = axes.flatten()
-        else:
-            ncols = 2
-            nrows = int(np.ceil(n_models / ncols))
-            fig, axes = plt.subplots(nrows, ncols, figsize=(12, 5 * nrows), sharey=True, squeeze=False)
-            axes = axes.flatten()
-        
-        for idx, model_key in enumerate(sorted(df_best["model_key"].unique())):
-            ax = axes[idx]
-            subset = df_best[df_best["model_key"] == model_key].copy()
+        # Create plot for each metric in the group
+        for metric_col, metric_title in metric_pairs:
+            if metric_col not in df_best.columns:
+                print(f"WARNING: {metric_col} not in dataframe. Skipping {metric_title} plot.")
+                continue
             
-            # Plot metric vs cutoff
-            x = subset["cutoff_nM"].values
-            y = subset[metric_col].values
+            # Create multi-panel plot (2×2 grid for 4 model_keys)
+            n_models = df_best["model_key"].nunique()
             
-            mask = ~np.isnan(y)
-            if mask.any():
-                ax.plot(x[mask], y[mask], marker="o", color="#1976D2",
-                       linewidth=2.5, markersize=8, alpha=0.9)
+            if n_models <= 2:
+                fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5), sharey=True, squeeze=False)
+                axes = axes.flatten()
+            else:
+                ncols = 2
+                nrows = int(np.ceil(n_models / ncols))
+                fig, axes = plt.subplots(nrows, ncols, figsize=(12, 5 * nrows), sharey=True, squeeze=False)
+                axes = axes.flatten()
             
-            # Formatting
-            ax.set_xscale("log")
-            ax.set_xlabel("Affinity Cutoff (nM)", fontsize=11, fontweight="bold")
-            if idx == 0:
-                ax.set_ylabel(metric_title, fontsize=11, fontweight="bold")
+            for idx, model_key in enumerate(sorted(df_best["model_key"].unique())):
+                ax = axes[idx]
+                subset = df_best[df_best["model_key"] == model_key].copy()
+                
+                # Plot metric vs cutoff
+                x = subset["cutoff_nM"].values
+                y = subset[metric_col].values
+                
+                mask = ~np.isnan(y)
+                if mask.any():
+                    ax.plot(x[mask], y[mask], marker="o", color="#1976D2",
+                           linewidth=2.5, markersize=8, alpha=0.9)
+                
+                # Formatting
+                ax.set_xscale("log")
+                ax.set_xlabel("Affinity Cutoff (nM)", fontsize=11, fontweight="bold")
+                ax.set_ylim(y_limits)  # Apply consistent y-axis range
+                if idx == 0:
+                    ax.set_ylabel(metric_title, fontsize=11, fontweight="bold")
+                
+                # Extract method and representation for title
+                method = subset["method"].iloc[0]
+                rep = subset["representation"].iloc[0]
+                dim = subset["dim"].iloc[0]
+                
+                ax.set_title(f"{method.upper()} ({rep}, dim={dim})", fontsize=11, fontweight="bold")
+                ax.grid(True, alpha=0.3)
+                
+                # Add vertical line at optimal cutoff (based on metric value)
+                if mask.any():
+                    best_idx = subset.loc[mask, metric_col].idxmax()
+                    best_cutoff = subset.loc[best_idx, "cutoff_nM"]
+                    ax.axvline(best_cutoff, color="gray", linestyle="--", linewidth=1.5, alpha=0.6)
             
-            # Extract method and representation for title
-            method = subset["method"].iloc[0]
-            rep = subset["representation"].iloc[0]
-            dim = subset["dim"].iloc[0]
+            # Hide unused axes
+            for idx in range(n_models, len(axes)):
+                axes[idx].axis("off")
             
-            ax.set_title(f"{method.upper()} ({rep}, dim={dim})", fontsize=11, fontweight="bold")
-            ax.grid(True, alpha=0.3)
+            plt.suptitle(f"Cutoff Sensitivity: {metric_title} (Best Configs)", 
+                        fontsize=14, fontweight="bold", y=1.02)
+            plt.tight_layout()
             
-            # Add vertical line at optimal cutoff (based on metric value)
-            if mask.any():
-                best_idx = subset.loc[mask, metric_col].idxmax()
-                best_cutoff = subset.loc[best_idx, "cutoff_nM"]
-                ax.axvline(best_cutoff, color="gray", linestyle="--", linewidth=1.5, alpha=0.6)
-        
-        # Hide unused axes
-        for idx in range(n_models, len(axes)):
-            axes[idx].axis("off")
-        
-        plt.suptitle(f"Cutoff Sensitivity: {metric_title} (Best Configs)", 
-                    fontsize=14, fontweight="bold", y=1.02)
-        plt.tight_layout()
-        
-        filename = f"cutoff_{metric_col}_sensitivity_best_configs"
-        save_figure(fig, output_dir, filename)
-        print(f"Saved {filename}.png/pdf")
+            filename = f"cutoff_{metric_col}_sensitivity_best_configs"
+            save_figure(fig, output_dir, filename)
+            print(f"Saved {filename}.png/pdf")
 
 
 def main() -> None:

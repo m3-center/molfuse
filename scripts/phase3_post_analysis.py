@@ -586,6 +586,97 @@ def plot_comparison_overlay(
     logger.info(f"Saved: {output_path_png.name}")
 
 
+def plot_bedroc_ief_comparison_overlay(
+    df_agg: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Plot BEDROC and IEF comparison overlays (similar to mf_ablation_comparison).
+    Creates 4 separate plots: BEDROC(α=20), BEDROC(α=160), IEF(α=20), IEF(α=160).
+    """
+    logger.info("Generating BEDROC/IEF comparison overlay plots...")
+    
+    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
+    model_keys = sorted(df_agg["model_key"].unique())
+    
+    colors = {
+        "pca_features": "#1f77b4",
+        "pca_fingerprints": "#aec7e8",
+        "umap_features": "#ff7f0e",
+        "umap_fingerprints": "#ffbb78",
+    }
+    
+    # Group metrics with same y-axis range
+    metric_groups = [
+        ([("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)"),
+          ("bedroc_160_mean", "bedroc_160_sem", "BEDROC (α=160)")], "BEDROC"),
+        ([("ief_20_mean", "ief_20_sem", "IEF (α=20)"),
+          ("ief_160_mean", "ief_160_sem", "IEF (α=160)")], "IEF"),
+    ]
+    
+    for metric_pairs, group_name in metric_groups:
+        # Compute global y-axis range for this group
+        all_values = []
+        for mean_col, sem_col, _ in metric_pairs:
+            if mean_col in df_agg.columns and sem_col in df_agg.columns:
+                y_mean = df_agg[mean_col].dropna().values
+                y_sem = df_agg[sem_col].dropna().values
+                if len(y_mean) > 0 and len(y_sem) > 0:
+                    all_values.extend(y_mean + y_sem)
+                    all_values.extend(y_mean - y_sem)
+        
+        if len(all_values) == 0:
+            logger.warning(f"No valid {group_name} values. Skipping {group_name} comparison plots.")
+            continue
+        
+        y_min = max(0, np.min(all_values) * 0.95)
+        y_max = np.max(all_values) * 1.05
+        
+        # Create plot for each metric in the group
+        for mean_col, sem_col, title in metric_pairs:
+            if mean_col not in df_agg.columns:
+                logger.warning(f"{mean_col} not in dataframe. Skipping {title} plot.")
+                continue
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            for model_key in model_keys:
+                subset = df_agg[df_agg["model_key"] == model_key].copy()
+                subset = subset.sort_values("mf_size_target_numeric")
+                
+                x = subset["mf_size_target_numeric"].values
+                y_mean = subset[mean_col].values
+                y_sem = subset[sem_col].values
+                
+                ax.errorbar(
+                    x, y_mean, yerr=y_sem,
+                    marker="o", markersize=6, linewidth=2,
+                    label=model_key.replace("_", "/"),
+                    color=colors.get(model_key, "#333333"),
+                    capsize=3, capthick=1.2
+                )
+            
+            ax.set_xscale("log")
+            ax.set_ylim(y_min, y_max)  # Apply consistent y-axis range
+            ax.set_xlabel("MF Cloud Size (compounds)", fontweight="bold", fontsize=12)
+            ax.set_ylabel(f"{title} (Mean ± SEM)", fontweight="bold", fontsize=12)
+            ax.set_title(f"MF Cloud Ablation: {title}", fontweight="bold", fontsize=14)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="best", fontsize=10)
+            
+            plt.tight_layout()
+            
+            metric_name = mean_col.replace("_mean", "")
+            output_path_png = output_dir / f"mf_ablation_{metric_name}_comparison.png"
+            output_path_pdf = output_dir / f"mf_ablation_{metric_name}_comparison.pdf"
+            fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
+            fig.savefig(output_path_pdf, bbox_inches="tight")
+            plt.close(fig)
+            
+            logger.info(f"Saved: {output_path_png.name}")
+
+
 def plot_metrics_grid(
     df_agg: pd.DataFrame,
     output_dir: Path,
@@ -1053,6 +1144,140 @@ def plot_stratified_degradation_curves(
     logger.info(f"Saved: {output_path_png.name}")
 
 
+def plot_bedroc_ief_stratified_curves(
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Plot BEDROC and IEF stratified degradation curves (overall actives only).
+    Creates 4 plots: BEDROC(α=20), BEDROC(α=160), IEF(α=20), IEF(α=160).
+    
+    Note: Shows overall metrics only (not tier-specific) since BEDROC/IEF 
+    per tier would require filtering which changes denominator.
+    """
+    logger.info("Generating BEDROC/IEF stratified degradation curves...")
+    
+    # Aggregate stratified data by (method, representation, mf_size_target)
+    df_stratified["mf_size_target_numeric"] = df_stratified["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    
+    group_keys = ["method", "representation", "mf_size_target_numeric"]
+    
+    agg_dict = {
+        "bedroc_20": ["mean", "sem"],
+        "bedroc_160": ["mean", "sem"],
+        "ief_20": ["mean", "sem"],
+        "ief_160": ["mean", "sem"],
+    }
+    
+    df_strat_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
+    
+    # Flatten column names
+    df_strat_agg.columns = [
+        "_".join(col).strip("_") if isinstance(col, tuple) else col
+        for col in df_strat_agg.columns
+    ]
+    
+    # Create model_key
+    df_strat_agg["model_key"] = df_strat_agg.apply(get_model_key, axis=1)
+    model_keys = sorted(df_strat_agg["model_key"].unique())
+    
+    n_models = len(model_keys)
+    if n_models == 0:
+        logger.warning("No models found, skipping BEDROC/IEF stratified curves")
+        return
+    
+    # Layout: 2×2 for 4 models
+    nrows = 2 if n_models > 2 else 1
+    ncols = 2 if n_models > 1 else 1
+    
+    # Group metrics with same y-axis range
+    metric_groups = [
+        ([("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)"),
+          ("bedroc_160_mean", "bedroc_160_sem", "BEDROC (α=160)")], "bedroc", "BEDROC"),
+        ([("ief_20_mean", "ief_20_sem", "IEF (α=20)"),
+          ("ief_160_mean", "ief_160_sem", "IEF (α=160)")], "ief", "IEF"),
+    ]
+    
+    for metric_pairs, file_prefix, group_name in metric_groups:
+        # Compute global y-axis range for this group
+        all_y_values = []
+        for mean_col, sem_col, _ in metric_pairs:
+            if mean_col in df_strat_agg.columns and sem_col in df_strat_agg.columns:
+                for model_key in model_keys:
+                    subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+                    y_mean = subset[mean_col].values
+                    y_sem = subset[sem_col].values
+                    valid_mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
+                    if valid_mask.any():
+                        all_y_values.extend(y_mean[valid_mask] + y_sem[valid_mask])
+                        all_y_values.extend(y_mean[valid_mask] - y_sem[valid_mask])
+        
+        if len(all_y_values) == 0:
+            logger.warning(f"No valid {group_name} values. Skipping {group_name} stratified curves.")
+            continue
+        
+        # Determine global y-axis limits with padding
+        y_min = max(0, np.min(all_y_values) * 0.9)
+        y_max = np.max(all_y_values) * 1.1
+        
+        # Create separate plot for each metric in the group
+        for mean_col, sem_col, title in metric_pairs:
+            if mean_col not in df_strat_agg.columns:
+                logger.warning(f"{mean_col} not in dataframe. Skipping {title} plot.")
+                continue
+            
+            fig, axes = plt.subplots(nrows, ncols, figsize=(14, 12), sharex=True, sharey=True)
+            if n_models == 1:
+                axes = np.array([axes])
+            axes = axes.flatten()
+            
+            for idx, model_key in enumerate(model_keys):
+                ax = axes[idx]
+                subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+                subset = subset.sort_values("mf_size_target_numeric")
+                
+                method = subset["method"].iloc[0]
+                representation = subset["representation"].iloc[0]
+                
+                x = subset["mf_size_target_numeric"].values
+                y_mean = subset[mean_col].values
+                y_sem = subset[sem_col].values
+                
+                mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
+                if mask.any():
+                    ax.errorbar(
+                        x[mask], y_mean[mask], yerr=y_sem[mask],
+                        marker="o", markersize=8, linewidth=2.5,
+                        color="#1976D2", alpha=0.9,
+                        capsize=4, capthick=1.5
+                    )
+                
+                ax.set_xscale("log")
+                ax.set_xlabel("MF Cloud Size (compounds)", fontweight="bold")
+                ax.set_ylabel(f"{title} (Mean ± SEM)", fontweight="bold")
+                ax.set_title(f"{method.upper()} / {representation}", fontweight="bold")
+                ax.set_ylim(y_min, y_max)  # Apply consistent y-axis range
+                ax.grid(True, alpha=0.3)
+            
+            # Hide unused subplots
+            for idx in range(n_models, len(axes)):
+                axes[idx].axis("off")
+            
+            plt.tight_layout()
+            
+            metric_name = mean_col.replace("_mean", "")
+            output_path_png = output_dir / f"mf_ablation_{metric_name}_stratified_curves.png"
+            output_path_pdf = output_dir / f"mf_ablation_{metric_name}_stratified_curves.pdf"
+            fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
+            fig.savefig(output_path_pdf, bbox_inches="tight")
+            plt.close(fig)
+            
+            logger.info(f"Saved: {output_path_png.name}")
+
+
 def plot_tier_enrichment_ratio(
     df_stratified: pd.DataFrame,
     output_dir: Path,
@@ -1384,6 +1609,7 @@ def main():
         # 3. Generate plots
         plot_degradation_curves(df, df_agg, output_dir, logger)
         plot_comparison_overlay(df_agg, output_dir, logger)
+        plot_bedroc_ief_comparison_overlay(df_agg, output_dir, logger)
         plot_metrics_grid(df_agg, output_dir, logger)
         
         # 4. Phase transition analysis
@@ -1432,6 +1658,7 @@ def main():
                 
                 # Generate stratified plots
                 plot_stratified_degradation_curves(df, df_stratified, output_dir, logger)
+                plot_bedroc_ief_stratified_curves(df_stratified, output_dir, logger)
                 plot_tier_enrichment_ratio(df_stratified, output_dir, logger)
             else:
                 logger.warning("No stratified metrics computed (missing artifacts?)")
