@@ -549,6 +549,193 @@ def aggregate_by_config(df: pd.DataFrame) -> pd.DataFrame:
 # VISUALIZATION
 # ============================================================================
 
+def plot_figure1_manuscript(df_grouped: pd.DataFrame, output_dir: Path, logger: logging.Logger) -> None:
+    """
+    Create Figure 1 for manuscript: Phase 1 Stratified Baseline Results.
+    
+    4-panel bar chart layout (2x2 grid):
+    - Row 1: UMAP features (best), UMAP fingerprints (best)
+    - Row 2: PCA features (best), PCA fingerprints (best)
+    
+    Each panel shows EF@1% for High/Medium/Weak potency tiers (3 bars per panel).
+    All panels share the same y-axis range for direct comparability.
+    
+    Publication-quality formatting with ACS JCIM style guidelines.
+    """
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Define the 4 configurations to plot
+    configs = [
+        {
+            "method": "umap",
+            "representation": "features",
+            "label": "UMAP + Mordred Features",
+            "panel": "A",
+            "position": (0, 0),
+        },
+        {
+            "method": "umap",
+            "representation": "fingerprints",
+            "label": "UMAP + ECFP4 Fingerprints",
+            "panel": "B",
+            "position": (0, 1),
+        },
+        {
+            "method": "pca",
+            "representation": "features",
+            "label": "PCA + Mordred Features",
+            "panel": "C",
+            "position": (1, 0),
+        },
+        {
+            "method": "pca",
+            "representation": "fingerprints",
+            "label": "PCA + ECFP4 Fingerprints",
+            "panel": "D",
+            "position": (1, 1),
+        },
+    ]
+    
+    # First pass: find best configs and determine global y-axis range
+    plot_data = []
+    global_max = 0.0
+    
+    for config in configs:
+        method = config["method"]
+        rep = config["representation"]
+        
+        # Filter to this method + representation
+        subset = df_grouped[
+            (df_grouped["method"] == method) &
+            (df_grouped["representation"] == rep)
+        ].copy()
+        
+        if subset.empty:
+            logger.warning(f"No data for {config['label']}")
+            continue
+        
+        # Pick best config by high-potency EF@1%
+        best_row = subset.sort_values("EF1_high_mean", ascending=False).iloc[0]
+        
+        # Extract values
+        dim = int(best_row["dim"])
+        high_mean = float(best_row.get("EF1_high_mean", 0))
+        high_std = float(best_row.get("EF1_high_std", 0))
+        medium_mean = float(best_row.get("EF1_medium_mean", 0))
+        medium_std = float(best_row.get("EF1_medium_std", 0))
+        weak_mean = float(best_row.get("EF1_weak_mean", 0))
+        weak_std = float(best_row.get("EF1_weak_std", 0))
+        
+        # UMAP hyperparameters
+        if method == "umap":
+            nn = best_row.get("umap_n_neighbors")
+            md = best_row.get("umap_min_dist")
+            hp_str = f"dim={dim}, n_neighbors={nn}, min_dist={md}"
+        else:
+            hp_str = f"dim={dim}"
+        
+        # Store plot data
+        plot_data.append({
+            "config": config,
+            "dim": dim,
+            "hp_str": hp_str,
+            "high_mean": high_mean,
+            "high_std": high_std,
+            "medium_mean": medium_mean,
+            "medium_std": medium_std,
+            "weak_mean": weak_mean,
+            "weak_std": weak_std,
+        })
+        
+        # Update global max
+        global_max = max(global_max, 
+                        high_mean + high_std, 
+                        medium_mean + medium_std, 
+                        weak_mean + weak_std)
+    
+    if not plot_data:
+        logger.error("No valid data for Figure 1 manuscript plot")
+        return
+    
+    # Set y-axis range with 10% headroom
+    y_max = global_max * 1.1
+    logger.info(f"Figure 1: Using shared y-axis range [0, {y_max:.1f}] (max={global_max:.1f})")
+    
+    # Create 2x2 subplot figure (publication size: 7" x 6.5")
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9), sharey=True)
+    
+    # Plot each panel
+    for data in plot_data:
+        config = data["config"]
+        row, col = config["position"]
+        ax = axes[row, col]
+        
+        # Prepare bar data
+        tiers = ["High", "Medium", "Weak"]
+        means = [data["high_mean"], data["medium_mean"], data["weak_mean"]]
+        stds = [data["high_std"], data["medium_std"], data["weak_std"]]
+        
+        # Color scheme: High (blue), Medium (orange), Weak (red)
+        colors = ["#1f77b4", "#ff7f0e", "#d62728"]
+        
+        x = np.arange(len(tiers))
+        bars = ax.bar(x, means, yerr=stds, capsize=4, width=0.6, 
+                     color=colors, alpha=0.85, edgecolor="black", linewidth=0.8)
+        
+        # Annotate bars with numeric values
+        for bar, mean_val, std_val in zip(bars, means, stds):
+            if np.isfinite(mean_val):
+                text_y = bar.get_height() + std_val + (y_max * 0.015)
+                ax.text(bar.get_x() + bar.get_width()/2, text_y,
+                       f"{mean_val:.1f}", ha="center", va="bottom", 
+                       fontsize=9, fontweight="bold")
+        
+        # Panel label (A, B, C, D)
+        ax.text(0.02, 0.98, config["panel"], transform=ax.transAxes,
+               fontsize=14, fontweight="bold", verticalalignment="top",
+               bbox=dict(boxstyle="square", facecolor="white", edgecolor="black", linewidth=1.5))
+        
+        # Title with method and hyperparameters
+        ax.set_title(f"{config['label']}\n({data['hp_str']})", 
+                    fontsize=10, fontweight="bold", pad=8)
+        
+        # Axis labels
+        ax.set_xticks(x)
+        ax.set_xticklabels(tiers, fontsize=10)
+        ax.set_xlabel("Potency Tier", fontsize=10, fontweight="bold")
+        
+        # Y-axis label only on left column
+        if col == 0:
+            ax.set_ylabel("EF@1%", fontsize=11, fontweight="bold")
+        
+        # Set shared y-axis range
+        ax.set_ylim(0, y_max)
+        ax.grid(True, alpha=0.3, axis="y", linewidth=0.5)
+    
+    # Overall figure title
+    fig.suptitle("Phase 1: Potency-Stratified Enrichment Baseline", 
+                fontsize=13, fontweight="bold", y=0.995)
+    
+    fig.tight_layout(rect=(0, 0, 1, 0.99))
+    
+    # Save as Figure 1 for manuscript
+    fig.savefig(plots_dir / "figure1_phase1_stratified_baseline.png", dpi=300, bbox_inches="tight")
+    fig.savefig(plots_dir / "figure1_phase1_stratified_baseline.pdf", bbox_inches="tight")
+    plt.close(fig)
+    
+    logger.info("Saved Figure 1: figure1_phase1_stratified_baseline.png/.pdf")
+    logger.info("="*60)
+    logger.info("Figure 1 Details:")
+    for data in plot_data:
+        logger.info(f"  {data['config']['label']}:")
+        logger.info(f"    Hyperparameters: {data['hp_str']}")
+        logger.info(f"    High   EF@1% = {data['high_mean']:.2f} ± {data['high_std']:.2f}")
+        logger.info(f"    Medium EF@1% = {data['medium_mean']:.2f} ± {data['medium_std']:.2f}")
+        logger.info(f"    Weak   EF@1% = {data['weak_mean']:.2f} ± {data['weak_std']:.2f}")
+    logger.info("="*60)
+
+
 def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: logging.Logger) -> None:
     """
     Create simple bar charts comparing EF@1% across tiers.
@@ -727,6 +914,10 @@ Example:
         logger.info("Regenerating plots with shared y-axis...")
         plot_tier_comparison(df_grouped, output_dir, logger)
         
+        # Create Figure 1 for manuscript
+        logger.info("Creating Figure 1 for manuscript...")
+        plot_figure1_manuscript(df_grouped, output_dir, logger)
+        
         logger.info("="*80)
         logger.info("PLOT REGENERATION COMPLETE")
         logger.info("="*80)
@@ -802,6 +993,10 @@ Example:
     # Create plots
     logger.info("Creating tier comparison plots...")
     plot_tier_comparison(df_grouped, output_dir, logger)
+    
+    # Create Figure 1 for manuscript
+    logger.info("Creating Figure 1 for manuscript...")
+    plot_figure1_manuscript(df_grouped, output_dir, logger)
     
     logger.info("="*80)
     logger.info("ANALYSIS COMPLETE")
