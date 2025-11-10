@@ -446,26 +446,6 @@ def plot_cutoff_curves(df: pd.DataFrame, metric_col: str, output_dir: Path, base
     print(f"Saved {basename}.png/pdf")
 
 
-def plot_quality_quantity(df: pd.DataFrame, output_dir: Path) -> None:
-    """
-    Scatter plot: MF cloud size (x) vs EF@1% (y), colored by method/representation.
-    Shows quality-quantity trade-off.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for model_key in df["model_key"].unique():
-        subset = df[df["model_key"] == model_key]
-        ax.scatter(subset["n_mf"], subset["ef1"], label=model_key, s=80, alpha=0.7)
-
-    ax.set_xlabel("MF Cloud Size (compounds)", fontsize=12, fontweight="bold")
-    ax.set_ylabel("EF@1%", fontsize=12, fontweight="bold")
-    ax.set_title("Quality-Quantity Trade-off: MF Size vs EF@1%", fontsize=14, fontweight="bold")
-    ax.legend(title="Model", fontsize=9, title_fontsize=10)
-    ax.grid(True, alpha=0.3)
-
-    save_figure(fig, output_dir, "quality_quantity_ef1")
-    print("Saved quality_quantity_ef1.png/pdf")
-
 
 def identify_best_cutoffs(df: pd.DataFrame, output_dir: Path) -> None:
     """
@@ -569,6 +549,21 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     # Sort by cutoff for proper line plotting
     df_best = df_best.sort_values(by=["model_key", "cutoff_nM"]).reset_index(drop=True)
     
+    # Compute global y-axis range across ALL models and tiers for consistency
+    all_values = []
+    for col in ["ef1", "ef1_high", "ef1_medium", "ef1_weak"]:
+        if col in df_best.columns:
+            valid_vals = df_best[col].dropna().values
+            if len(valid_vals) > 0:
+                all_values.extend(valid_vals)
+    
+    if len(all_values) == 0:
+        print("WARNING: No valid EF@1% values. Skipping plot.")
+        return
+    
+    y_min = max(0, np.min(all_values) * 0.95)
+    y_max = np.max(all_values) * 1.05
+    
     # Create multi-panel plot (2×2 grid for 4 model_keys)
     n_models = df_best["model_key"].nunique()
     
@@ -634,6 +629,7 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         
         # Formatting
         ax.set_xscale("log")
+        ax.set_ylim(y_min, y_max)  # Apply consistent y-axis range
         ax.set_xlabel("Affinity Cutoff (nM)", fontsize=11, fontweight="bold")
         if idx == 0:
             ax.set_ylabel("EF@1%", fontsize=11, fontweight="bold")
@@ -656,6 +652,10 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         best_cutoff = subset.loc[best_idx, "cutoff_nM"]
         ax.axvline(best_cutoff, color="gray", linestyle="--", linewidth=1.5, alpha=0.6, 
                   label=f"Optimal: {int(best_cutoff)} nM")
+    
+    # Hide unused axes
+    for idx in range(n_models, len(axes)):
+        axes[idx].axis("off")
     
     plt.suptitle("Potency-Tier Stratified Cutoff Sensitivity (Best Configs)", 
                 fontsize=14, fontweight="bold", y=1.02)
@@ -1035,9 +1035,6 @@ def main() -> None:
     plot_cutoff_curves(df, "bedroc_160", output_dir, "cutoff_curves_bedroc_160")
     plot_cutoff_curves(df, "ief_20", output_dir, "cutoff_curves_ief_20")
     plot_cutoff_curves(df, "ief_160", output_dir, "cutoff_curves_ief_160")
-
-    # Quality-quantity
-    plot_quality_quantity(df, output_dir)
 
     # Tier-wise cutoff sensitivity (best configs only)
     plot_cutoff_tier_sensitivity(df, output_dir)
