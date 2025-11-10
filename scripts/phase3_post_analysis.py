@@ -1145,7 +1145,7 @@ def plot_stratified_degradation_curves(
 
 
 def plot_bedroc_ief_stratified_curves(
-    df_stratified: pd.DataFrame,
+    df: pd.DataFrame,
     output_dir: Path,
     logger: logging.Logger
 ) -> None:
@@ -1155,11 +1155,22 @@ def plot_bedroc_ief_stratified_curves(
     
     Note: Shows overall metrics only (not tier-specific) since BEDROC/IEF 
     per tier would require filtering which changes denominator.
+    
+    Args:
+        df: Main Phase 3 results dataframe (with BEDROC/IEF columns)
+        output_dir: Output directory for plots
+        logger: Logger instance
     """
     logger.info("Generating BEDROC/IEF stratified degradation curves...")
     
-    # Aggregate stratified data by (method, representation, mf_size_target)
-    df_stratified["mf_size_target_numeric"] = df_stratified["mf_size_target"].apply(
+    # Check if BEDROC/IEF columns exist
+    required_cols = ["bedroc_20", "bedroc_160", "ief_20", "ief_160"]
+    if not all(col in df.columns for col in required_cols):
+        logger.warning(f"Missing BEDROC/IEF columns. Skipping BEDROC/IEF stratified curves.")
+        return
+    
+    # Aggregate data by (method, representation, mf_size_target)
+    df["mf_size_target_numeric"] = df["mf_size_target"].apply(
         lambda x: 999999 if str(x).lower() == "full" else int(x)
     )
     
@@ -1172,17 +1183,17 @@ def plot_bedroc_ief_stratified_curves(
         "ief_160": ["mean", "sem"],
     }
     
-    df_strat_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
+    df_agg = df.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
     
     # Flatten column names
-    df_strat_agg.columns = [
+    df_agg.columns = [
         "_".join(col).strip("_") if isinstance(col, tuple) else col
-        for col in df_strat_agg.columns
+        for col in df_agg.columns
     ]
     
     # Create model_key
-    df_strat_agg["model_key"] = df_strat_agg.apply(get_model_key, axis=1)
-    model_keys = sorted(df_strat_agg["model_key"].unique())
+    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
+    model_keys = sorted(df_agg["model_key"].unique())
     
     n_models = len(model_keys)
     if n_models == 0:
@@ -1205,9 +1216,9 @@ def plot_bedroc_ief_stratified_curves(
         # Compute global y-axis range for this group
         all_y_values = []
         for mean_col, sem_col, _ in metric_pairs:
-            if mean_col in df_strat_agg.columns and sem_col in df_strat_agg.columns:
+            if mean_col in df_agg.columns and sem_col in df_agg.columns:
                 for model_key in model_keys:
-                    subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+                    subset = df_agg[df_agg["model_key"] == model_key].copy()
                     y_mean = subset[mean_col].values
                     y_sem = subset[sem_col].values
                     valid_mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
@@ -1225,7 +1236,7 @@ def plot_bedroc_ief_stratified_curves(
         
         # Create separate plot for each metric in the group
         for mean_col, sem_col, title in metric_pairs:
-            if mean_col not in df_strat_agg.columns:
+            if mean_col not in df_agg.columns:
                 logger.warning(f"{mean_col} not in dataframe. Skipping {title} plot.")
                 continue
             
@@ -1236,7 +1247,7 @@ def plot_bedroc_ief_stratified_curves(
             
             for idx, model_key in enumerate(model_keys):
                 ax = axes[idx]
-                subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+                subset = df_agg[df_agg["model_key"] == model_key].copy()
                 subset = subset.sort_values("mf_size_target_numeric")
                 
                 method = subset["method"].iloc[0]
@@ -1658,7 +1669,7 @@ def main():
                 
                 # Generate stratified plots
                 plot_stratified_degradation_curves(df, df_stratified, output_dir, logger)
-                plot_bedroc_ief_stratified_curves(df_stratified, output_dir, logger)
+                plot_bedroc_ief_stratified_curves(df, output_dir, logger)
                 plot_tier_enrichment_ratio(df_stratified, output_dir, logger)
             else:
                 logger.warning("No stratified metrics computed (missing artifacts?)")
