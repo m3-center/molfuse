@@ -486,16 +486,42 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
     ef1_medium = compute_ef_at_percent(ranked_df, tier="Medium", top_pct=0.01)
     ef1_weak = compute_ef_at_percent(ranked_df, tier="Weak", top_pct=0.01)
     
-    # Compute BEDROC and IEF for overall (tier=None) only
-    # (Computing tier-specific BEDROC requires filtering which changes the denominator)
+    # Compute BEDROC and IEF for overall AND tier-specific
     import numpy as np
-    labels = np.asarray(ranked_df["label"].values, dtype=int)
-    scores = np.asarray(ranked_df["score"].values, dtype=float)
     
-    bedroc_20 = bedroc(labels, scores, alpha=20.0)
-    bedroc_160 = bedroc(labels, scores, alpha=160.9)
-    ief_20 = ief(labels, scores, alpha=20.0)
-    ief_160 = ief(labels, scores, alpha=160.9)
+    # Overall (all actives)
+    labels_all = np.asarray(ranked_df["label"].values, dtype=int)
+    scores_all = np.asarray(ranked_df["score"].values, dtype=float)
+    
+    bedroc_20 = bedroc(labels_all, scores_all, alpha=20.0)
+    bedroc_160 = bedroc(labels_all, scores_all, alpha=160.9)
+    ief_20 = ief(labels_all, scores_all, alpha=20.0)
+    ief_160 = ief(labels_all, scores_all, alpha=160.9)
+    
+    # Tier-specific BEDROC and IEF
+    # For each tier: create binary labels (1 if active in tier, 0 otherwise)
+    def compute_tier_metrics(tier_name: str):
+        """Compute BEDROC/IEF for a specific potency tier."""
+        # Binary labels: 1 if active AND in this tier, 0 otherwise
+        tier_labels = ((ranked_df["source"] == "actives") & (ranked_df["potency_tier"] == tier_name)).astype(int).values
+        
+        # Only compute if there are actives in this tier
+        if tier_labels.sum() == 0:
+            return None, None, None, None
+        
+        labels_arr = np.asarray(tier_labels, dtype=int)
+        scores_arr = np.asarray(ranked_df["score"].values, dtype=float)
+        
+        b20 = bedroc(labels_arr, scores_arr, alpha=20.0)
+        b160 = bedroc(labels_arr, scores_arr, alpha=160.9)
+        i20 = ief(labels_arr, scores_arr, alpha=20.0)
+        i160 = ief(labels_arr, scores_arr, alpha=160.9)
+        
+        return b20, b160, i20, i160
+    
+    bedroc_20_high, bedroc_160_high, ief_20_high, ief_160_high = compute_tier_metrics("High")
+    bedroc_20_medium, bedroc_160_medium, ief_20_medium, ief_160_medium = compute_tier_metrics("Medium")
+    bedroc_20_weak, bedroc_160_weak, ief_20_weak, ief_160_weak = compute_tier_metrics("Weak")
     
     # Format EF values for logging
     ef1_all_str = f"{ef1_all:.2f}" if ef1_all is not None else "N/A"
@@ -523,6 +549,18 @@ def analyze_single_run(run_dir: Path, logger: logging.Logger) -> Optional[dict]:
         "BEDROC_160": bedroc_160,
         "IEF_20": ief_20,
         "IEF_160": ief_160,
+        "BEDROC_20_high": bedroc_20_high,
+        "BEDROC_20_medium": bedroc_20_medium,
+        "BEDROC_20_weak": bedroc_20_weak,
+        "BEDROC_160_high": bedroc_160_high,
+        "BEDROC_160_medium": bedroc_160_medium,
+        "BEDROC_160_weak": bedroc_160_weak,
+        "IEF_20_high": ief_20_high,
+        "IEF_20_medium": ief_20_medium,
+        "IEF_20_weak": ief_20_weak,
+        "IEF_160_high": ief_160_high,
+        "IEF_160_medium": ief_160_medium,
+        "IEF_160_weak": ief_160_weak,
         "N_total": N_total,
         "N_zinc": N_zinc,
         "N_actives": N_actives,
@@ -569,6 +607,30 @@ def aggregate_by_config(df: pd.DataFrame) -> pd.DataFrame:
         IEF_20_std=("IEF_20", "std"),
         IEF_160_mean=("IEF_160", "mean"),
         IEF_160_std=("IEF_160", "std"),
+        BEDROC_20_high_mean=("BEDROC_20_high", "mean"),
+        BEDROC_20_high_std=("BEDROC_20_high", "std"),
+        BEDROC_20_medium_mean=("BEDROC_20_medium", "mean"),
+        BEDROC_20_medium_std=("BEDROC_20_medium", "std"),
+        BEDROC_20_weak_mean=("BEDROC_20_weak", "mean"),
+        BEDROC_20_weak_std=("BEDROC_20_weak", "std"),
+        BEDROC_160_high_mean=("BEDROC_160_high", "mean"),
+        BEDROC_160_high_std=("BEDROC_160_high", "std"),
+        BEDROC_160_medium_mean=("BEDROC_160_medium", "mean"),
+        BEDROC_160_medium_std=("BEDROC_160_medium", "std"),
+        BEDROC_160_weak_mean=("BEDROC_160_weak", "mean"),
+        BEDROC_160_weak_std=("BEDROC_160_weak", "std"),
+        IEF_20_high_mean=("IEF_20_high", "mean"),
+        IEF_20_high_std=("IEF_20_high", "std"),
+        IEF_20_medium_mean=("IEF_20_medium", "mean"),
+        IEF_20_medium_std=("IEF_20_medium", "std"),
+        IEF_20_weak_mean=("IEF_20_weak", "mean"),
+        IEF_20_weak_std=("IEF_20_weak", "std"),
+        IEF_160_high_mean=("IEF_160_high", "mean"),
+        IEF_160_high_std=("IEF_160_high", "std"),
+        IEF_160_medium_mean=("IEF_160_medium", "mean"),
+        IEF_160_medium_std=("IEF_160_medium", "std"),
+        IEF_160_weak_mean=("IEF_160_weak", "mean"),
+        IEF_160_weak_std=("IEF_160_weak", "std"),
         n_runs=("run_name", "count"),
     ).reset_index()
     
