@@ -248,10 +248,37 @@ def add_tier_metrics_to_cutoff(
     ef1_medium, n_medium = compute_ef_at_percent(ranked_df, "Medium", 0.01)
     ef1_weak, n_weak = compute_ef_at_percent(ranked_df, "Weak", 0.01)
     
-    # Compute tier-specific BEDROC and IEF (overall only, not per-tier)
-    # Note: Computing BEDROC per tier would require filtering which changes the denominator
-    # So we compute overall BEDROC/IEF here (already done by compute_bedroc_ief_from_ranked_scores)
-    # but keep this function focused on tier-specific EF metrics
+    # Compute tier-specific BEDROC and IEF
+    # For each tier: filter actives to that tier, treat as "positives", compute BEDROC/IEF
+    # This answers: "How well does the ranking enrich for high-potency actives specifically?"
+    tier_bedroc_ief = {}
+    
+    for tier_name, tier_label in [("High", "high"), ("Medium", "medium"), ("Weak", "weak")]:
+        # Create binary label: 1 if active AND in this tier, 0 otherwise
+        tier_mask = ranked_df["potency_tier"] == tier_name
+        tier_labels = tier_mask.astype(int).values
+        
+        # Only compute if we have positives in this tier
+        if tier_labels.sum() > 0:
+            scores = ranked_df["score"].values
+            
+            # Compute BEDROC and IEF for this tier
+            from molfuse.metrics.metrics import bedroc, ief
+            
+            bedroc_20 = bedroc(tier_labels, scores, alpha=20.0)
+            bedroc_160 = bedroc(tier_labels, scores, alpha=160.9)
+            ief_20 = ief(tier_labels, scores, alpha=20.0)
+            ief_160 = ief(tier_labels, scores, alpha=160.9)
+            
+            tier_bedroc_ief[f"bedroc_20_{tier_label}"] = bedroc_20
+            tier_bedroc_ief[f"bedroc_160_{tier_label}"] = bedroc_160
+            tier_bedroc_ief[f"ief_20_{tier_label}"] = ief_20
+            tier_bedroc_ief[f"ief_160_{tier_label}"] = ief_160
+        else:
+            tier_bedroc_ief[f"bedroc_20_{tier_label}"] = np.nan
+            tier_bedroc_ief[f"bedroc_160_{tier_label}"] = np.nan
+            tier_bedroc_ief[f"ief_20_{tier_label}"] = np.nan
+            tier_bedroc_ief[f"ief_160_{tier_label}"] = np.nan
     
     return {
         "ef1_high": ef1_high,
@@ -260,6 +287,7 @@ def add_tier_metrics_to_cutoff(
         "n_actives_high": n_high,
         "n_actives_medium": n_medium,
         "n_actives_weak": n_weak,
+        **tier_bedroc_ief,
     }
 
 
@@ -678,6 +706,182 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     print(f"Saved tier metrics (best configs): {output_dir / 'phase2_tier_metrics_best_configs.csv'}")
 
 
+def plot_cutoff_tier_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
+    """
+    Plot tier-stratified BEDROC and IEF vs affinity cutoff for best configs per method.
+    
+    Creates 4 plots (BEDROC α=20, BEDROC α=160, IEF α=20, IEF α=160), each showing:
+    - Overall metric (all actives)
+    - High-potency metric (High tier actives only)
+    - Medium-potency metric (Medium tier actives only)
+    - Weak-potency metric (Weak tier actives only)
+    
+    Interpretation: "BEDROC_High" = How well does ranking enrich high-potency actives specifically?
+    
+    Args:
+        df: Aggregated Phase 2 metrics with tier-specific BEDROC/IEF columns
+        output_dir: Output directory for plots
+    """
+    # Check if tier-stratified BEDROC/IEF metrics are available
+    required_cols = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak"]
+    if not all(col in df.columns for col in required_cols):
+        print("WARNING: No tier-stratified BEDROC/IEF metrics found.")
+        print("Skipping tier-stratified BEDROC/IEF sensitivity plots.")
+        return
+    
+    # Filter to best configs per method
+    df_best = get_best_configs_per_method(df)
+    
+    if df_best.empty:
+        print("WARNING: No best configs identified. Skipping tier-stratified BEDROC/IEF plot.")
+        return
+    
+    print(f"\nBest configurations per method × representation (for tier-stratified BEDROC/IEF plot):")
+    for model_key in sorted(df_best["model_key"].unique()):
+        method = df_best[df_best["model_key"] == model_key]["method"].iloc[0]
+        rep = df_best[df_best["model_key"] == model_key]["representation"].iloc[0]
+        print(f"  {method}/{rep}: {model_key}")
+    
+    # Sort by cutoff for proper line plotting
+    df_best = df_best.sort_values(by=["model_key", "cutoff_nM"]).reset_index(drop=True)
+    
+    # Group metrics with same y-axis range
+    metric_groups = [
+        ([("bedroc_20", "bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak", "BEDROC (α=20)")],
+         "bedroc_20", "BEDROC (α=20)"),
+        ([("bedroc_160", "bedroc_160_high", "bedroc_160_medium", "bedroc_160_weak", "BEDROC (α=160)")],
+         "bedroc_160", "BEDROC (α=160)"),
+        ([("ief_20", "ief_20_high", "ief_20_medium", "ief_20_weak", "IEF (α=20)")],
+         "ief_20", "IEF (α=20)"),
+        ([("ief_160", "ief_160_high", "ief_160_medium", "ief_160_weak", "IEF (α=160)")],
+         "ief_160", "IEF (α=160)"),
+    ]
+    
+    # Color scheme for tiers (same as EF plot)
+    colors = {
+        "All": "#2E7D32",      # Green (overall)
+        "High": "#1976D2",     # Blue (high potency)
+        "Medium": "#F57C00",   # Orange (medium)
+        "Weak": "#C62828",     # Red (weak)
+    }
+    
+    for metric_spec, file_prefix, group_title in metric_groups:
+        all_col, high_col, medium_col, weak_col, _ = metric_spec[0]
+        
+        # Check if columns exist
+        if all_col not in df_best.columns:
+            print(f"WARNING: {all_col} not in dataframe. Skipping {group_title} plot.")
+            continue
+        
+        # Compute global y-axis range for this metric group
+        all_values = []
+        for col in [all_col, high_col, medium_col, weak_col]:
+            if col in df_best.columns:
+                valid_vals = df_best[col].dropna().values
+                if len(valid_vals) > 0:
+                    all_values.extend(valid_vals)
+        
+        if len(all_values) == 0:
+            print(f"WARNING: No valid {group_title} values. Skipping plot.")
+            continue
+        
+        y_min = max(0, np.min(all_values) * 0.95)
+        y_max = np.max(all_values) * 1.05
+        
+        # Create multi-panel plot (2×2 grid for 4 model_keys)
+        n_models = df_best["model_key"].nunique()
+        
+        if n_models <= 2:
+            fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5), sharey=True, squeeze=False)
+            axes = axes.flatten()
+        else:
+            ncols = 2
+            nrows = int(np.ceil(n_models / ncols))
+            fig, axes = plt.subplots(nrows, ncols, figsize=(12, 5 * nrows), sharey=True, squeeze=False)
+            axes = axes.flatten()
+        
+        for idx, model_key in enumerate(sorted(df_best["model_key"].unique())):
+            ax = axes[idx]
+            subset = df_best[df_best["model_key"] == model_key].copy()
+            
+            # Get tier counts
+            n_high = subset["n_actives_high"].iloc[0] if "n_actives_high" in subset.columns else 0
+            n_medium = subset["n_actives_medium"].iloc[0] if "n_actives_medium" in subset.columns else 0
+            n_weak = subset["n_actives_weak"].iloc[0] if "n_actives_weak" in subset.columns else 0
+            
+            x = subset["cutoff_nM"].values
+            
+            # All actives (baseline)
+            y_all = subset[all_col].values
+            mask_all = ~np.isnan(y_all)
+            if mask_all.any():
+                ax.plot(x[mask_all], y_all[mask_all], marker="o", label="All", 
+                       color=colors["All"], linewidth=2.5, markersize=8, alpha=0.9)
+            
+            # High potency tier
+            if high_col in subset.columns:
+                y_high = subset[high_col].values
+                mask_high = ~np.isnan(y_high)
+                if mask_high.any():
+                    ax.plot(x[mask_high], y_high[mask_high], marker="s", 
+                           label=f"High (n={n_high})", 
+                           color=colors["High"], linewidth=2, markersize=7, alpha=0.8)
+            
+            # Medium potency tier
+            if medium_col in subset.columns:
+                y_medium = subset[medium_col].values
+                mask_medium = ~np.isnan(y_medium)
+                if mask_medium.any():
+                    ax.plot(x[mask_medium], y_medium[mask_medium], marker="^", 
+                           label=f"Medium (n={n_medium})", 
+                           color=colors["Medium"], linewidth=2, markersize=7, alpha=0.8)
+            
+            # Weak potency tier
+            if weak_col in subset.columns:
+                y_weak = subset[weak_col].values
+                mask_weak = ~np.isnan(y_weak)
+                if mask_weak.any():
+                    ax.plot(x[mask_weak], y_weak[mask_weak], marker="D", 
+                           label=f"Weak (n={n_weak})", 
+                           color=colors["Weak"], linewidth=2, markersize=7, alpha=0.8)
+            
+            # Formatting
+            ax.set_xscale("log")
+            ax.set_ylim(y_min, y_max)  # Apply consistent y-axis range
+            ax.set_xlabel("Affinity Cutoff (nM)", fontsize=11, fontweight="bold")
+            if idx == 0:
+                ax.set_ylabel(group_title, fontsize=11, fontweight="bold")
+            
+            # Extract method and representation for title
+            method = subset["method"].iloc[0]
+            rep = subset["representation"].iloc[0]
+            dim = subset["dim"].iloc[0]
+            
+            title = f"{method.upper()} ({rep}, dim={dim})\n"
+            title += f"Tiers: High={n_high}, Medium={n_medium}, Weak={n_weak}"
+            ax.set_title(title, fontsize=11, fontweight="bold")
+            
+            ax.legend(loc="best", fontsize=9, framealpha=0.9)
+            ax.grid(True, alpha=0.3)
+            
+            # Add vertical line at optimal cutoff (based on overall metric)
+            if mask_all.any():
+                best_idx = subset.loc[mask_all, all_col].idxmax()
+                best_cutoff = subset.loc[best_idx, "cutoff_nM"]
+                ax.axvline(best_cutoff, color="gray", linestyle="--", linewidth=1.5, alpha=0.6)
+        
+        # Hide unused axes
+        for idx in range(n_models, len(axes)):
+            axes[idx].axis("off")
+        
+        plt.suptitle(f"Potency-Tier Stratified Cutoff Sensitivity: {group_title} (Best Configs)", 
+                    fontsize=14, fontweight="bold", y=1.02)
+        plt.tight_layout()
+        
+        save_figure(fig, output_dir, f"cutoff_tier_{file_prefix}_sensitivity_best_configs")
+        print(f"Saved cutoff_tier_{file_prefix}_sensitivity_best_configs.png/pdf")
+
+
 def plot_cutoff_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     """
     Plot BEDROC and IEF vs affinity cutoff for best configs per method.
@@ -878,7 +1082,10 @@ def main() -> None:
     # Tier-wise cutoff sensitivity (best configs only)
     plot_cutoff_tier_sensitivity(df, output_dir)
 
-    # BEDROC and IEF cutoff sensitivity (best configs only)
+    # Tier-wise BEDROC and IEF cutoff sensitivity (best configs only)
+    plot_cutoff_tier_bedroc_ief_sensitivity(df, output_dir)
+
+    # BEDROC and IEF cutoff sensitivity (best configs only) - overall only, no tiers
     plot_cutoff_bedroc_ief_sensitivity(df, output_dir)
 
     # Identify best cutoffs
