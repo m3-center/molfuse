@@ -880,89 +880,254 @@ def plot_tier_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: log
         logger.info(f"Saved: {filename}.png")
 
 
-def plot_bedroc_ief_comparison(df_grouped: pd.DataFrame, output_dir: Path, logger: logging.Logger) -> None:
+def plot_bedroc_manuscript_figure(df_grouped: pd.DataFrame, output_dir: Path, logger: logging.Logger, alpha: int = 20) -> None:
     """
-    Create BEDROC and IEF comparison plots for Phase 1.
+    Create BEDROC manuscript figure in same format as EF@1% Figure 1.
     
-    Creates bar charts showing BEDROC(α=20) and BEDROC(α=160.9) and IEF for 
-    best-performing configurations across methods and representations.
+    4-panel bar chart layout (2x2 grid):
+    - Row 1: UMAP features (best), UMAP fingerprints (best)
+    - Row 2: PCA features (best), PCA fingerprints (best)
+    
+    Each panel shows BEDROC for High/Medium/Weak potency tiers (3 bars per panel).
+    All panels share the same y-axis range for direct comparability.
+    
+    Args:
+        alpha: BEDROC alpha parameter (20 or 160)
     """
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     
-    logger.info("Generating BEDROC and IEF comparison plots...")
+    metric_prefix = f"BEDROC_{alpha}"
     
-    # For each combination of representation and method, find best config by BEDROC_20
-    metrics_list = ["BEDROC_20", "BEDROC_160", "IEF_20", "IEF_160"]
+    # Define the 4 configurations to plot
+    configs = [
+        {"method": "umap", "representation": "features", "label": "UMAP + Mordred Features", "panel": "A", "position": (0, 0)},
+        {"method": "umap", "representation": "fingerprints", "label": "UMAP + ECFP4 Fingerprints", "panel": "B", "position": (0, 1)},
+        {"method": "pca", "representation": "features", "label": "PCA + Mordred Features", "panel": "C", "position": (1, 0)},
+        {"method": "pca", "representation": "fingerprints", "label": "PCA + ECFP4 Fingerprints", "panel": "D", "position": (1, 1)},
+    ]
     
-    for metric in metrics_list:
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        axes = axes.flatten()
+    # First pass: find best configs and determine global y-axis range
+    plot_data = []
+    global_max = 0.0
+    
+    for config in configs:
+        method = config["method"]
+        rep = config["representation"]
         
-        configs = [
-            {"method": "umap", "representation": "features", "label": "UMAP + Features"},
-            {"method": "umap", "representation": "fingerprints", "label": "UMAP + Fingerprints"},
-            {"method": "pca", "representation": "features", "label": "PCA + Features"},
-            {"method": "pca", "representation": "fingerprints", "label": "PCA + Fingerprints"},
-        ]
+        subset = df_grouped[(df_grouped["method"] == method) & (df_grouped["representation"] == rep)].copy()
         
-        y_max = 0.0
+        if subset.empty:
+            logger.warning(f"No data for {config['label']}")
+            continue
         
-        for ax_idx, config in enumerate(configs):
-            method = config["method"]
-            rep = config["representation"]
-            label = config["label"]
-            
-            # Filter for this method + representation
-            subset = df_grouped[
-                (df_grouped["method"] == method) &
-                (df_grouped["representation"] == rep)
-            ]
-            
-            if subset.empty:
-                axes[ax_idx].text(0.5, 0.5, "No data", ha="center", va="center", transform=axes[ax_idx].transAxes)
-                continue
-            
-            # Find best config by mean metric
-            mean_col = f"{metric}_mean"
-            std_col = f"{metric}_std"
-            
-            best_idx = subset[mean_col].idxmax()
-            best_row = subset.loc[best_idx]
-            
-            # Extract values
-            mean_val = best_row[mean_col]
-            std_val = best_row.get(std_col, 0.0)
-            dim = best_row.get("dim", "?")
-            
-            # Track max for shared y-axis
-            y_max = max(y_max, mean_val + std_val)
-            
-            # Plot single bar
-            x_pos = [0]
-            axes[ax_idx].bar(x_pos, [mean_val], yerr=[std_val], 
-                            capsize=5, color="steelblue", alpha=0.8, width=0.5)
-            
-            axes[ax_idx].set_xticks([0])
-            axes[ax_idx].set_xticklabels([label], fontsize=10)
-            axes[ax_idx].set_ylabel(metric.replace("_", " (α=") + ")" if "_" in metric else metric, fontsize=11, fontweight="bold")
-            axes[ax_idx].set_title(f"{label} (dim={dim})", fontsize=11, fontweight="bold")
-            axes[ax_idx].grid(True, alpha=0.3, axis="y")
+        # Pick best config by high-potency BEDROC
+        best_row = subset.sort_values(f"{metric_prefix}_high_mean", ascending=False).iloc[0]
         
-        # Set shared y-axis
-        for ax in axes:
-            ax.set_ylim(0, y_max * 1.1)
+        # Extract values
+        dim = int(best_row["dim"])
+        high_mean = float(best_row.get(f"{metric_prefix}_high_mean", 0))
+        high_std = float(best_row.get(f"{metric_prefix}_high_std", 0))
+        medium_mean = float(best_row.get(f"{metric_prefix}_medium_mean", 0))
+        medium_std = float(best_row.get(f"{metric_prefix}_medium_std", 0))
+        weak_mean = float(best_row.get(f"{metric_prefix}_weak_mean", 0))
+        weak_std = float(best_row.get(f"{metric_prefix}_weak_std", 0))
         
-        fig.suptitle(f"Phase 1: {metric.replace('_', ' (α=')+')' if '_' in metric else metric} Across Methods", fontsize=14, fontweight="bold")
-        fig.tight_layout(rect=[0, 0, 1, 0.97])
+        if method == "umap":
+            nn = best_row.get("umap_n_neighbors")
+            md = best_row.get("umap_min_dist")
+            hp_str = f"dim={dim}, n_neighbors={nn}, min_dist={md}"
+        else:
+            hp_str = f"dim={dim}"
         
-        # Save
-        filename = f"phase1_{metric.lower()}_comparison"
-        fig.savefig(plots_dir / f"{filename}.png", dpi=300, bbox_inches="tight")
-        fig.savefig(plots_dir / f"{filename}.pdf", bbox_inches="tight")
-        plt.close(fig)
+        plot_data.append({
+            "config": config, "dim": dim, "hp_str": hp_str,
+            "high_mean": high_mean, "high_std": high_std,
+            "medium_mean": medium_mean, "medium_std": medium_std,
+            "weak_mean": weak_mean, "weak_std": weak_std,
+        })
         
-        logger.info(f"Saved: {filename}.png")
+        global_max = max(global_max, high_mean + high_std, medium_mean + medium_std, weak_mean + weak_std)
+    
+    if not plot_data:
+        logger.error(f"No valid data for BEDROC (α={alpha}) manuscript figure")
+        return
+    
+    y_max = global_max * 1.1
+    logger.info(f"BEDROC (α={alpha}): Using shared y-axis range [0, {y_max:.3f}]")
+    
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9), sharey=True)
+    
+    for data in plot_data:
+        config = data["config"]
+        row, col = config["position"]
+        ax = axes[row, col]
+        
+        tiers = ["High", "Medium", "Weak"]
+        means = [data["high_mean"], data["medium_mean"], data["weak_mean"]]
+        stds = [data["high_std"], data["medium_std"], data["weak_std"]]
+        colors = ["#1f77b4", "#ff7f0e", "#d62728"]
+        
+        x = np.arange(len(tiers))
+        bars = ax.bar(x, means, yerr=stds, capsize=4, width=0.6, 
+                     color=colors, alpha=0.85, edgecolor="black", linewidth=0.8)
+        
+        for bar, mean_val, std_val in zip(bars, means, stds):
+            if np.isfinite(mean_val):
+                text_y = bar.get_height() + std_val + (y_max * 0.015)
+                ax.text(bar.get_x() + bar.get_width()/2, text_y,
+                       f"{mean_val:.2f}", ha="center", va="bottom", 
+                       fontsize=9, fontweight="bold")
+        
+        ax.text(0.02, 0.98, config["panel"], transform=ax.transAxes,
+               fontsize=14, fontweight="bold", verticalalignment="top",
+               bbox=dict(boxstyle="square", facecolor="white", edgecolor="black", linewidth=1.5))
+        
+        ax.set_title(f"{config['label']}\n({data['hp_str']})", fontsize=10, fontweight="bold", pad=8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(tiers, fontsize=10)
+        ax.set_xlabel("Potency Tier", fontsize=10, fontweight="bold")
+        
+        if col == 0:
+            ax.set_ylabel(f"BEDROC (α={alpha})", fontsize=11, fontweight="bold")
+        
+        ax.set_ylim(0, y_max)
+        ax.grid(True, alpha=0.3, axis="y", linewidth=0.5)
+    
+    fig.suptitle(f"Phase 1: BEDROC (α={alpha}) Across Methods", fontsize=13, fontweight="bold", y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.99))
+    
+    filename = f"phase1_bedroc_{alpha}_across_methods"
+    fig.savefig(plots_dir / f"{filename}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(plots_dir / f"{filename}.pdf", bbox_inches="tight")
+    plt.close(fig)
+    
+    logger.info(f"Saved: {filename}.png/.pdf")
+
+
+def plot_ief_manuscript_figure(df_grouped: pd.DataFrame, output_dir: Path, logger: logging.Logger, alpha: int = 20) -> None:
+    """
+    Create IEF manuscript figure in same format as EF@1% Figure 1.
+    
+    4-panel bar chart layout (2x2 grid):
+    - Row 1: UMAP features (best), UMAP fingerprints (best)
+    - Row 2: PCA features (best), PCA fingerprints (best)
+    
+    Each panel shows IEF for High/Medium/Weak potency tiers (3 bars per panel).
+    All panels share the same y-axis range for direct comparability.
+    
+    Args:
+        alpha: IEF alpha parameter (20 or 160)
+    """
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    metric_prefix = f"IEF_{alpha}"
+    
+    # Define the 4 configurations to plot
+    configs = [
+        {"method": "umap", "representation": "features", "label": "UMAP + Mordred Features", "panel": "A", "position": (0, 0)},
+        {"method": "umap", "representation": "fingerprints", "label": "UMAP + ECFP4 Fingerprints", "panel": "B", "position": (0, 1)},
+        {"method": "pca", "representation": "features", "label": "PCA + Mordred Features", "panel": "C", "position": (1, 0)},
+        {"method": "pca", "representation": "fingerprints", "label": "PCA + ECFP4 Fingerprints", "panel": "D", "position": (1, 1)},
+    ]
+    
+    # First pass: find best configs and determine global y-axis range
+    plot_data = []
+    global_max = 0.0
+    
+    for config in configs:
+        method = config["method"]
+        rep = config["representation"]
+        
+        subset = df_grouped[(df_grouped["method"] == method) & (df_grouped["representation"] == rep)].copy()
+        
+        if subset.empty:
+            logger.warning(f"No data for {config['label']}")
+            continue
+        
+        # Pick best config by high-potency IEF
+        best_row = subset.sort_values(f"{metric_prefix}_high_mean", ascending=False).iloc[0]
+        
+        # Extract values
+        dim = int(best_row["dim"])
+        high_mean = float(best_row.get(f"{metric_prefix}_high_mean", 0))
+        high_std = float(best_row.get(f"{metric_prefix}_high_std", 0))
+        medium_mean = float(best_row.get(f"{metric_prefix}_medium_mean", 0))
+        medium_std = float(best_row.get(f"{metric_prefix}_medium_std", 0))
+        weak_mean = float(best_row.get(f"{metric_prefix}_weak_mean", 0))
+        weak_std = float(best_row.get(f"{metric_prefix}_weak_std", 0))
+        
+        if method == "umap":
+            nn = best_row.get("umap_n_neighbors")
+            md = best_row.get("umap_min_dist")
+            hp_str = f"dim={dim}, n_neighbors={nn}, min_dist={md}"
+        else:
+            hp_str = f"dim={dim}"
+        
+        plot_data.append({
+            "config": config, "dim": dim, "hp_str": hp_str,
+            "high_mean": high_mean, "high_std": high_std,
+            "medium_mean": medium_mean, "medium_std": medium_std,
+            "weak_mean": weak_mean, "weak_std": weak_std,
+        })
+        
+        global_max = max(global_max, high_mean + high_std, medium_mean + medium_std, weak_mean + weak_std)
+    
+    if not plot_data:
+        logger.error(f"No valid data for IEF (α={alpha}) manuscript figure")
+        return
+    
+    y_max = global_max * 1.1
+    logger.info(f"IEF (α={alpha}): Using shared y-axis range [0, {y_max:.1f}]")
+    
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9), sharey=True)
+    
+    for data in plot_data:
+        config = data["config"]
+        row, col = config["position"]
+        ax = axes[row, col]
+        
+        tiers = ["High", "Medium", "Weak"]
+        means = [data["high_mean"], data["medium_mean"], data["weak_mean"]]
+        stds = [data["high_std"], data["medium_std"], data["weak_std"]]
+        colors = ["#1f77b4", "#ff7f0e", "#d62728"]
+        
+        x = np.arange(len(tiers))
+        bars = ax.bar(x, means, yerr=stds, capsize=4, width=0.6, 
+                     color=colors, alpha=0.85, edgecolor="black", linewidth=0.8)
+        
+        for bar, mean_val, std_val in zip(bars, means, stds):
+            if np.isfinite(mean_val):
+                text_y = bar.get_height() + std_val + (y_max * 0.015)
+                ax.text(bar.get_x() + bar.get_width()/2, text_y,
+                       f"{mean_val:.1f}", ha="center", va="bottom", 
+                       fontsize=9, fontweight="bold")
+        
+        ax.text(0.02, 0.98, config["panel"], transform=ax.transAxes,
+               fontsize=14, fontweight="bold", verticalalignment="top",
+               bbox=dict(boxstyle="square", facecolor="white", edgecolor="black", linewidth=1.5))
+        
+        ax.set_title(f"{config['label']}\n({data['hp_str']})", fontsize=10, fontweight="bold", pad=8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(tiers, fontsize=10)
+        ax.set_xlabel("Potency Tier", fontsize=10, fontweight="bold")
+        
+        if col == 0:
+            ax.set_ylabel(f"IEF (α={alpha})", fontsize=11, fontweight="bold")
+        
+        ax.set_ylim(0, y_max)
+        ax.grid(True, alpha=0.3, axis="y", linewidth=0.5)
+    
+    fig.suptitle(f"Phase 1: IEF (α={alpha}) Across Methods", fontsize=13, fontweight="bold", y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.99))
+    
+    filename = f"phase1_ief_{alpha}_across_methods"
+    fig.savefig(plots_dir / f"{filename}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(plots_dir / f"{filename}.pdf", bbox_inches="tight")
+    plt.close(fig)
+    
+    logger.info(f"Saved: {filename}.png/.pdf")
 
 
 # ============================================================================
@@ -1029,13 +1194,19 @@ Example:
         logger.info("Regenerating plots with shared y-axis...")
         plot_tier_comparison(df_grouped, output_dir, logger)
         
-        # Create BEDROC/IEF comparison plots
-        logger.info("Regenerating BEDROC and IEF comparison plots...")
-        plot_bedroc_ief_comparison(df_grouped, output_dir, logger)
-        
-        # Create Figure 1 for manuscript
-        logger.info("Creating Figure 1 for manuscript...")
+        # Create Figure 1 for manuscript (EF@1%)
+        logger.info("Creating Figure 1 for manuscript (EF@1%)...")
         plot_figure1_manuscript(df_grouped, output_dir, logger)
+        
+        # Create BEDROC manuscript figures (α=20 and α=160)
+        logger.info("Creating BEDROC manuscript figures...")
+        plot_bedroc_manuscript_figure(df_grouped, output_dir, logger, alpha=20)
+        plot_bedroc_manuscript_figure(df_grouped, output_dir, logger, alpha=160)
+        
+        # Create IEF manuscript figures (α=20 and α=160)
+        logger.info("Creating IEF manuscript figures...")
+        plot_ief_manuscript_figure(df_grouped, output_dir, logger, alpha=20)
+        plot_ief_manuscript_figure(df_grouped, output_dir, logger, alpha=160)
         
         logger.info("="*80)
         logger.info("PLOT REGENERATION COMPLETE")
@@ -1113,13 +1284,19 @@ Example:
     logger.info("Creating tier comparison plots...")
     plot_tier_comparison(df_grouped, output_dir, logger)
     
-    # Create BEDROC/IEF comparison plots
-    logger.info("Creating BEDROC and IEF comparison plots...")
-    plot_bedroc_ief_comparison(df_grouped, output_dir, logger)
-    
-    # Create Figure 1 for manuscript
-    logger.info("Creating Figure 1 for manuscript...")
+    # Create Figure 1 for manuscript (EF@1%)
+    logger.info("Creating Figure 1 for manuscript (EF@1%)...")
     plot_figure1_manuscript(df_grouped, output_dir, logger)
+    
+    # Create BEDROC manuscript figures (α=20 and α=160)
+    logger.info("Creating BEDROC manuscript figures...")
+    plot_bedroc_manuscript_figure(df_grouped, output_dir, logger, alpha=20)
+    plot_bedroc_manuscript_figure(df_grouped, output_dir, logger, alpha=160)
+    
+    # Create IEF manuscript figures (α=20 and α=160)
+    logger.info("Creating IEF manuscript figures...")
+    plot_ief_manuscript_figure(df_grouped, output_dir, logger, alpha=20)
+    plot_ief_manuscript_figure(df_grouped, output_dir, logger, alpha=160)
     
     logger.info("="*80)
     logger.info("ANALYSIS COMPLETE")
