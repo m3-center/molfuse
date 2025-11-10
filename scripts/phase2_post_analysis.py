@@ -446,40 +446,6 @@ def plot_cutoff_curves(df: pd.DataFrame, metric_col: str, output_dir: Path, base
     print(f"Saved {basename}.png/pdf")
 
 
-def plot_cutoff_heatmap(df: pd.DataFrame, metric_col: str, output_dir: Path, basename: str) -> None:
-    """
-    Plot heatmap of metric across models (rows) and cutoffs (columns).
-    """
-    # Pivot table: rows = model_key, columns = cutoff_nM
-    pivot = df.pivot_table(index="model_key", columns="cutoff_nM", values=metric_col, aggfunc="mean")
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    if _HAVE_SNS:
-        sns.heatmap(pivot, annot=True, fmt=".2f", cmap="YlOrRd", ax=ax, cbar_kws={"label": metric_col.upper()})
-    else:
-        im = ax.imshow(pivot.to_numpy(), aspect="auto", cmap="YlOrRd")
-        ax.set_xticks(range(len(pivot.columns)))
-        ax.set_xticklabels([f"{int(c)}" for c in pivot.columns], rotation=45)
-        ax.set_yticks(range(len(pivot.index)))
-        ax.set_yticklabels(pivot.index, rotation=0)
-        fig.colorbar(im, ax=ax, label=metric_col.upper())
-
-        # Annotate cells
-        for i in range(len(pivot.index)):
-            for j in range(len(pivot.columns)):
-                val = pivot.iloc[i, j]
-                if not np.isnan(val):
-                    ax.text(j, i, f"{val:.2f}", ha="center", va="center", color="black", fontsize=9)
-
-    ax.set_xlabel("Cutoff (nM)", fontsize=12, fontweight="bold")
-    ax.set_ylabel("Model", fontsize=12, fontweight="bold")
-    ax.set_title(f"Cutoff Heatmap: {metric_col.upper()}", fontsize=14, fontweight="bold")
-
-    save_figure(fig, output_dir, basename)
-    print(f"Saved {basename}.png/pdf")
-
-
 def plot_quality_quantity(df: pd.DataFrame, output_dir: Path) -> None:
     """
     Scatter plot: MF cloud size (x) vs EF@1% (y), colored by method/representation.
@@ -1069,12 +1035,6 @@ def main() -> None:
     plot_cutoff_curves(df, "bedroc_160", output_dir, "cutoff_curves_bedroc_160")
     plot_cutoff_curves(df, "ief_20", output_dir, "cutoff_curves_ief_20")
     plot_cutoff_curves(df, "ief_160", output_dir, "cutoff_curves_ief_160")
-
-    # Heatmaps
-    plot_cutoff_heatmap(df, "ef1", output_dir, "cutoff_heatmap_ef1")
-    plot_cutoff_heatmap(df, "roc_auc", output_dir, "cutoff_heatmap_roc_auc")
-    plot_cutoff_heatmap(df, "bedroc_20", output_dir, "cutoff_heatmap_bedroc_20")
-    plot_cutoff_heatmap(df, "bedroc_160", output_dir, "cutoff_heatmap_bedroc_160")
 
     # Quality-quantity
     plot_quality_quantity(df, output_dir)

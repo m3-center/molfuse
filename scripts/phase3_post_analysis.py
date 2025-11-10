@@ -776,227 +776,6 @@ def plot_metrics_grid(
     logger.info(f"Saved: {output_path_png.name}")
 
 
-def compute_degradation_slopes(df_agg: pd.DataFrame, logger: logging.Logger) -> pd.DataFrame:
-    """
-    Compute degradation slope between consecutive MF sizes (second derivative).
-    
-    Slope = (EF@1%[i+1] - EF@1%[i]) / (log10(MF[i+1]) - log10(MF[i]))
-    """
-    logger.info("Computing degradation slopes...")
-    
-    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
-    model_keys = sorted(df_agg["model_key"].unique())
-    
-    slope_records = []
-    
-    for model_key in model_keys:
-        subset = df_agg[df_agg["model_key"] == model_key].copy()
-        subset = subset.sort_values("mf_size_target_numeric").reset_index(drop=True)
-        
-        for i in range(len(subset) - 1):
-            mf_curr = subset.loc[i, "mf_size_target_numeric"]
-            mf_next = subset.loc[i + 1, "mf_size_target_numeric"]
-            ef_curr = subset.loc[i, "ef_1%_mean"]
-            ef_next = subset.loc[i + 1, "ef_1%_mean"]
-            
-            # Log-scale slope
-            if mf_curr > 0 and mf_next > 0:
-                slope = (ef_next - ef_curr) / (np.log10(mf_next) - np.log10(mf_curr))
-            else:
-                slope = 0.0
-            
-            slope_records.append({
-                "model_key": model_key,
-                "method": subset.loc[i, "method"],
-                "representation": subset.loc[i, "representation"],
-                "mf_from": int(mf_curr),
-                "mf_to": int(mf_next),
-                "slope": slope,
-            })
-    
-    df_slopes = pd.DataFrame(slope_records)
-    logger.info(f"Computed {len(df_slopes)} slope values")
-    
-    return df_slopes
-
-
-def plot_phase_transition_heatmap(
-    df_slopes: pd.DataFrame,
-    output_dir: Path,
-    logger: logging.Logger
-) -> None:
-    """
-    Plot heatmap of degradation slopes (identifies phase transitions).
-    
-    Steepest negative slope indicates critical MF size threshold.
-    """
-    logger.info("Generating phase transition heatmap...")
-    
-    if not _HAVE_SNS:
-        logger.warning("Seaborn not available, skipping heatmap")
-        return
-    
-    # Pivot for heatmap
-    df_pivot = df_slopes.pivot_table(
-        index="model_key",
-        columns="mf_from",
-        values="slope",
-        aggfunc="mean"
-    )
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    sns.heatmap(
-        df_pivot,
-        annot=True,
-        fmt=".2f",
-        cmap="RdYlGn",
-        center=0,
-        cbar_kws={"label": "Slope (EF@1% / log10(MF size))"},
-        ax=ax,
-        linewidths=0.5,
-        linecolor="gray"
-    )
-    
-    ax.set_title("Phase Transition Analysis: Degradation Slopes", fontweight="bold", fontsize=14)
-    ax.set_xlabel("MF Size (starting point)", fontweight="bold")
-    ax.set_ylabel("Method / Representation", fontweight="bold")
-    
-    plt.tight_layout()
-    
-    output_path_png = output_dir / "mf_ablation_phase_transition.png"
-    output_path_pdf = output_dir / "mf_ablation_phase_transition.pdf"
-    fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
-    fig.savefig(output_path_pdf, bbox_inches="tight")
-    plt.close(fig)
-    
-    logger.info(f"Saved: {output_path_png.name}")
-
-
-def plot_replicate_variance(
-    df: pd.DataFrame,
-    output_dir: Path,
-    logger: logging.Logger
-) -> None:
-    """
-    Plot box plots showing variance across replicates.
-    """
-    logger.info("Generating replicate variance analysis...")
-    
-    df["model_key"] = df.apply(get_model_key, axis=1)
-    model_keys = sorted(df["model_key"].unique())
-    
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
-    axes = axes.flatten()
-    
-    for idx, model_key in enumerate(model_keys):
-        if idx >= len(axes):
-            break
-        
-        ax = axes[idx]
-        subset = df[df["model_key"] == model_key].copy()
-        
-        # Prepare data for box plot
-        mf_sizes = sorted(subset["mf_size_target_numeric"].unique())
-        data_to_plot = []
-        labels = []
-        
-        for mf_size in mf_sizes:
-            ef_values = subset[subset["mf_size_target_numeric"] == mf_size]["ef_1%"].values
-            data_to_plot.append(ef_values)
-            if mf_size == 999999:
-                labels.append("full")
-            else:
-                labels.append(f"{int(mf_size)}")
-        
-        bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True)
-        
-        # Color boxes
-        for patch in bp['boxes']:
-            patch.set_facecolor("#aec7e8")
-        
-        ax.set_xlabel("MF Cloud Size", fontweight="bold")
-        ax.set_ylabel("EF@1% (individual replicates)", fontweight="bold")
-        ax.set_title(f"{model_key.replace('_', '/')}", fontweight="bold")
-        ax.grid(True, alpha=0.3, axis="y")
-        ax.tick_params(axis='x', rotation=45)
-    
-    # Hide unused subplots
-    for idx in range(len(model_keys), len(axes)):
-        axes[idx].axis("off")
-    
-    plt.tight_layout()
-    
-    output_path_png = output_dir / "mf_ablation_replicate_variance.png"
-    output_path_pdf = output_dir / "mf_ablation_replicate_variance.pdf"
-    fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
-    fig.savefig(output_path_pdf, bbox_inches="tight")
-    plt.close(fig)
-    
-    logger.info(f"Saved: {output_path_png.name}")
-
-
-def analyze_variance_correlation(
-    df_agg: pd.DataFrame,
-    output_dir: Path,
-    logger: logging.Logger
-) -> None:
-    """
-    Analyze correlation between MF size and performance variance.
-    
-    Question: Does smaller MF cloud lead to more unstable performance?
-    """
-    logger.info("Analyzing MF size vs variance correlation...")
-    
-    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    colors = {
-        "pca_features": "#1f77b4",
-        "pca_fingerprints": "#aec7e8",
-        "umap_features": "#ff7f0e",
-        "umap_fingerprints": "#ffbb78",
-    }
-    
-    for model_key in sorted(df_agg["model_key"].unique()):
-        subset = df_agg[df_agg["model_key"] == model_key].copy()
-        
-        x = subset["mf_size_target_numeric"].values
-        y = subset["ef_1%_std"].values
-        
-        ax.scatter(
-            x, y,
-            label=model_key.replace("_", "/"),
-            color=colors.get(model_key, "#333333"),
-            s=80, alpha=0.7
-        )
-        
-        # Fit trend line
-        if len(x) > 2:
-            z = np.polyfit(np.log10(x), y, 1)
-            p = np.poly1d(z)
-            x_fit = np.logspace(np.log10(x.min()), np.log10(x.max()), 100)
-            ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.5, linewidth=1.5)
-    
-    ax.set_xscale("log")
-    ax.set_xlabel("MF Cloud Size (compounds)", fontweight="bold", fontsize=12)
-    ax.set_ylabel("EF@1% Std Dev (across replicates)", fontweight="bold", fontsize=12)
-    ax.set_title("MF Size vs Performance Variability", fontweight="bold", fontsize=14)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=10)
-    
-    plt.tight_layout()
-    
-    output_path_png = output_dir / "mf_ablation_variance_correlation.png"
-    output_path_pdf = output_dir / "mf_ablation_variance_correlation.pdf"
-    fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
-    fig.savefig(output_path_pdf, bbox_inches="tight")
-    plt.close(fig)
-    
-    logger.info(f"Saved: {output_path_png.name}")
-
-
 def plot_stratified_degradation_curves(
     df: pd.DataFrame,
     df_stratified: pd.DataFrame,
@@ -1481,7 +1260,7 @@ def identify_minimum_viable_sizes(
 def generate_analysis_report(
     df: pd.DataFrame,
     df_agg: pd.DataFrame,
-    df_slopes: pd.DataFrame,
+    df_slopes: Optional[pd.DataFrame],
     min_viable: Dict[str, int],
     output_dir: Path,
     logger: logging.Logger
@@ -1519,21 +1298,22 @@ def generate_analysis_report(
                 f"{int(row['ef_1%_count'])} |"
             )
     
-    report_lines.extend([
-        "",
-        "## Phase Transition Analysis",
-        "",
-        "Degradation slopes (EF@1% change per log10(MF size)):",
-        "",
-        "| Model | MF Transition | Slope |",
-        "|---|---|---|",
-    ])
-    
-    for _, row in df_slopes.iterrows():
-        report_lines.append(
-            f"| {row['model_key']} | {int(row['mf_from']):,} → {int(row['mf_to']):,} | "
-            f"{row['slope']:.3f} |"
-        )
+    if df_slopes is not None:
+        report_lines.extend([
+            "",
+            "## Phase Transition Analysis",
+            "",
+            "Degradation slopes (EF@1% change per log10(MF size)):",
+            "",
+            "| Model | MF Transition | Slope |",
+            "|---|---|---|",
+        ])
+        
+        for _, row in df_slopes.iterrows():
+            report_lines.append(
+                f"| {row['model_key']} | {int(row['mf_from']):,} → {int(row['mf_to']):,} | "
+                f"{row['slope']:.3f} |"
+            )
     
     report_lines.extend([
         "",
@@ -1623,16 +1403,6 @@ def main():
         plot_bedroc_ief_comparison_overlay(df_agg, output_dir, logger)
         plot_metrics_grid(df_agg, output_dir, logger)
         
-        # 4. Phase transition analysis
-        df_slopes = compute_degradation_slopes(df_agg, logger)
-        plot_phase_transition_heatmap(df_slopes, output_dir, logger)
-        
-        # 5. Replicate variance
-        plot_replicate_variance(df, output_dir, logger)
-        
-        # 6. Variance correlation
-        analyze_variance_correlation(df_agg, output_dir, logger)
-        
         # 7. Potency-stratified analysis (if enabled)
         if args.stratify:
             logger.info("\n" + "="*80)
@@ -1679,7 +1449,7 @@ def main():
         min_viable = identify_minimum_viable_sizes(df_agg, args.threshold_pct, output_dir, logger)
         
         # 9. Generate report
-        generate_analysis_report(df, df_agg, df_slopes, min_viable, output_dir, logger)
+        generate_analysis_report(df, df_agg, None, min_viable, output_dir, logger)
         
         logger.info("="*80)
         logger.info("PHASE 3 POST-ANALYSIS COMPLETED")
