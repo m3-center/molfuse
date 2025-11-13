@@ -66,8 +66,7 @@ python scripts/phase1_post_analysis.py \
     --workspace_dir "${WORKSPACE_DIR}" \
     --phase phase1 \
     --output_dir "${POST_ANALYSIS_OUTPUT}" \
-    --metrics ef1 \
-    --distance_xranges 0-0.5
+    --metrics ef1
 
 POST_ANALYSIS_EXIT=$?
 

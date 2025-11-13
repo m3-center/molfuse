@@ -4,7 +4,7 @@
 #SBATCH --error=slurm_logs/phase3_%A_%a.err
 #SBATCH --time=24:00:00
 #SBATCH --mem=300G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=64
 #SBATCH --partition=hpc
 
 # Phase 3: MF Cloud Ablation - Single Run Script
