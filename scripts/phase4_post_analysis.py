@@ -1315,7 +1315,7 @@ def main():
         logger.info("AFFINITY CUTOFF SENSITIVITY ANALYSIS")
         logger.info("="*80)
         
-        cutoffs = [10.0, 100.0, 1000.0, 10000.0, 100000.0]
+        cutoffs = [100.0, 1000.0, 10000.0, 100000.0]
         df_cutoff_agg = aggregate_cutoff_sensitivity(workspace_dir, df, cutoffs, output_dir, logger)
         
         if not df_cutoff_agg.empty:
