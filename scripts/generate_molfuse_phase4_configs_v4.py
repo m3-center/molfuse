@@ -49,15 +49,15 @@ RANDOM_SEEDS = [42, 123, 456, 789, 1011]
 METHOD = "umap"
 REPRESENTATION = "features"
 
-# Best hyperparameters from Phase 1
+# Best hyperparameters from Phase 1 (reporting/phase1_post_analysis/phase1_best_configs.json)
 BEST_UMAP_FEATURES = {
-    "dim": 10,
-    "n_neighbors": 5,
-    "min_dist": 0.0,
+    "dim": 2,
+    "n_neighbors": 10,
+    "min_dist": 0.01,
 }
 
-# Optimal affinity cutoff from Phase 2 (assumed 100K nM for now)
-AFFINITY_CUTOFF_NM = 100000
+# Optimal affinity cutoff from Phase 2 (reporting/phase2_post_analysis/phase2_best_cutoffs.json)
+AFFINITY_CUTOFF_NM = 100
 
 # Dataset paths (recalculated features)
 BASE_DATA_DIR = Path("output_recalculated_full_datasets/datasets_2d_all")
