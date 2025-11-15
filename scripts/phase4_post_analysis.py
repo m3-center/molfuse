@@ -1119,7 +1119,9 @@ def plot_high_potency_correlation(
                     x_fit = np.logspace(np.log10(x_valid.min()), np.log10(x_valid.max()), 100)
                     ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.7, linewidth=2)
                 except np.linalg.LinAlgError:
-                    logger.warning(f"Could not fit trendline for {model_key} (SVD did not converge)")    ax.set_xscale("log")
+                    logger.warning(f"Could not fit trendline for {model_key} (SVD did not converge)")
+    
+    ax.set_xscale("log")
     ax.set_xlabel("Natural MF Cloud Size (pre-cutoff, compounds)", fontweight="bold", fontsize=13)
     ax.set_ylabel("High-Potency EF@1% (≤100 nM, Mean)", fontweight="bold", fontsize=13)
     ax.set_title("Phase 4: MF Cloud Size vs High-Potency Enrichment", fontweight="bold", fontsize=15)
