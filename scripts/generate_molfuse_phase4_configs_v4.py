@@ -57,7 +57,7 @@ BEST_UMAP_FEATURES = {
 }
 
 # Optimal affinity cutoff from Phase 2 (reporting/phase2_post_analysis/phase2_best_cutoffs.json)
-AFFINITY_CUTOFF_NM = 100
+AFFINITY_CUTOFF_NM = 100000  # 100 µM
 
 # Dataset paths (recalculated features)
 BASE_DATA_DIR = Path("output_recalculated_full_datasets/datasets_2d_all")
