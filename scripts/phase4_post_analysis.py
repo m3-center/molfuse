@@ -464,7 +464,10 @@ def plot_cutoff_sensitivity_per_target(
     
     df_cutoff_agg["model_key"] = df_cutoff_agg["method"] + "_" + df_cutoff_agg["representation"]
     
-    targets = sorted(df_cutoff_agg["target"].unique())
+    # Sort targets by MF cloud size (use n_mf_mean as proxy for actual MF size post-cutoff)
+    # Get average MF size across all cutoffs per target for sorting
+    target_sizes = df_cutoff_agg.groupby("target")["n_mf_mean"].mean().sort_values()
+    targets = target_sizes.index.tolist()
     n_targets = len(targets)
     
     # Create subplot grid
@@ -480,6 +483,12 @@ def plot_cutoff_sensitivity_per_target(
         "umap_features": "#ff7f0e",
         "umap_fingerprints": "#ffbb78",
     }
+    
+    # Compute global y-axis limits for consistency
+    y_min = df_cutoff_agg["ef_1%_mean"].min() - df_cutoff_agg["ef_1%_sem"].max()
+    y_max = df_cutoff_agg["ef_1%_mean"].max() + df_cutoff_agg["ef_1%_sem"].max()
+    y_margin = (y_max - y_min) * 0.05
+    y_lim = (max(0, y_min - y_margin), y_max + y_margin)
     
     for idx, target in enumerate(targets):
         ax = axes[idx]
@@ -499,6 +508,7 @@ def plot_cutoff_sensitivity_per_target(
                             color=colors.get(model_key, "#333333"), alpha=0.2)
         
         ax.set_xscale("log")
+        ax.set_ylim(y_lim)
         ax.set_xlabel("Affinity Cutoff (nM)", fontweight="bold")
         ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold")
         ax.set_title(f"{target}", fontweight="bold")
@@ -632,7 +642,8 @@ def load_actives_with_tiers(
     logger: logging.Logger
 ) -> Optional[pd.DataFrame]:
     """Load actives embeddings with affinity values and assign potency tiers."""
-    artifacts_dir = workspace_dir / "phase4" / target / run_name / "artifacts"
+    # Phase 4 structure: workspace/phase4/cross_target/{run_name}/artifacts
+    artifacts_dir = workspace_dir / "phase4" / "cross_target" / run_name / "artifacts"
     actives_path = artifacts_dir / "embedding_actives.csv"
     
     if not actives_path.exists():
@@ -655,7 +666,8 @@ def compute_stratified_metrics_for_run(
     logger: logging.Logger
 ) -> Optional[Dict[str, float]]:
     """Compute tier-specific EF@1% for a single Phase 4 run."""
-    artifacts_dir = workspace_dir / "phase4" / target / run_name / "artifacts"
+    # Phase 4 structure: workspace/phase4/cross_target/{run_name}/artifacts
+    artifacts_dir = workspace_dir / "phase4" / "cross_target" / run_name / "artifacts"
     
     # Load ranked scores
     ranked_path = artifacts_dir / "ranked_scores.csv"
@@ -724,7 +736,9 @@ def plot_cross_target_comparison(
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
     
     # Sort targets by actual MF size (post-cutoff), fallback to natural if not available
-    if "mf_size_actual" in df_agg.columns:
+    if "mf_size_actual_mean" in df_agg.columns:
+        target_order = df_agg.groupby("target")["mf_size_actual_mean"].mean().sort_values().index.tolist()
+    elif "mf_size_actual" in df_agg.columns:
         target_order = df_agg.groupby("target")["mf_size_actual"].mean().sort_values().index.tolist()
     else:
         target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
@@ -792,7 +806,9 @@ def plot_cross_target_bedroc_ief(
     
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
     # Sort targets by actual MF size (post-cutoff)
-    if "mf_size_actual" in df_agg.columns:
+    if "mf_size_actual_mean" in df_agg.columns:
+        target_order = df_agg.groupby("target")["mf_size_actual_mean"].mean().sort_values().index.tolist()
+    elif "mf_size_actual" in df_agg.columns:
         target_order = df_agg.groupby("target")["mf_size_actual"].mean().sort_values().index.tolist()
     else:
         target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
@@ -1221,10 +1237,14 @@ def generate_analysis_report(
     subset = df_agg[df_agg["model_key"] == best_model].sort_values("natural_mf_size")
     
     for _, row in subset.iterrows():
+        # Handle NaN values gracefully
+        mf_size_str = f"{int(row['natural_mf_size']):,}" if pd.notna(row['natural_mf_size']) else "N/A"
+        n_actives_str = f"{int(row['n_actives'])}" if pd.notna(row['n_actives']) else "N/A"
+        
         report_lines.append(
-            f"| {row['target']} | {int(row['natural_mf_size']):,} | "
+            f"| {row['target']} | {mf_size_str} | "
             f"{row['ef_1%_mean']:.2f} ± {row['ef_1%_sem']:.2f} | "
-            f"{int(row['n_actives'])} |"
+            f"{n_actives_str} |"
         )
     
     report_lines.extend([
@@ -1278,6 +1298,8 @@ def main():
                        help="Output directory for analysis")
     parser.add_argument("--stratify", action="store_true",
                        help="Enable potency tier stratification (High/Medium/Weak)")
+    parser.add_argument("--debug", action="store_true",
+                       help="Debug mode: process only first target for quick testing")
     args = parser.parse_args()
     
     workspace_dir = Path(args.workspace_dir)
@@ -1301,11 +1323,19 @@ def main():
     logger.info(f"Workspace: {workspace_dir}")
     logger.info(f"Output: {output_dir}")
     logger.info(f"Stratify by potency: {args.stratify}")
+    logger.info(f"Debug mode: {args.debug}")
     logger.info("="*80)
     
     try:
         # 1. Collect results
         df = collect_phase4_results(workspace_dir, logger)
+        
+        # Debug mode: filter to first target only
+        if args.debug:
+            first_target = sorted(df['target'].unique())[0]
+            logger.info(f"\n🐛 DEBUG MODE: Processing only target {first_target}")
+            df = df[df['target'] == first_target].copy()
+            logger.info(f"   Filtered to {len(df)} runs\n")
         
         # 2. Aggregate by target
         df_agg = aggregate_by_target(df, logger)
