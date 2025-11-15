@@ -194,21 +194,21 @@ def collect_phase4_results(
     target_counts = df.groupby(['target', 'method', 'representation']).size().reset_index(name='n_replicates')
     target_counts = target_counts.sort_values(['target', 'method', 'representation'])
     
-    logger.info("\nExpected: 3 replicates per target-method-representation combo")
+    logger.info("\nExpected: 5 replicates per target-method-representation combo")
     logger.info(f"Actual: {len(target_counts)} conditions found\n")
     
     for _, row in target_counts.iterrows():
-        status = "✓ OK" if row['n_replicates'] == 3 else "✗ IRREGULAR"
+        status = "✓ OK" if row['n_replicates'] == 5 else "✗ IRREGULAR"
         logger.info(f"  {status:12s} | {row['target']:8s} | {row['method']:4s} / {row['representation']:12s} | n={row['n_replicates']}")
     
     # Summary of irregular conditions
-    irregular = target_counts[target_counts['n_replicates'] != 3]
+    irregular = target_counts[target_counts['n_replicates'] != 5]
     if len(irregular) > 0:
         logger.warning(f"\n⚠️  Found {len(irregular)} conditions with irregular replicate counts:")
         for _, row in irregular.iterrows():
-            logger.warning(f"    {row['target']}/{row['method']}/{row['representation']}: {row['n_replicates']} replicates (expected 3)")
+            logger.warning(f"    {row['target']}/{row['method']}/{row['representation']}: {row['n_replicates']} replicates (expected 5)")
     else:
-        logger.info("\n✓ All conditions have exactly 3 replicates")
+        logger.info("\n✓ All conditions have exactly 5 replicates")
     
     logger.info("="*80 + "\n")
     
@@ -316,7 +316,6 @@ def compute_metrics_for_cutoff(
 
 def run_cutoff_sensitivity_for_run(
     workspace_dir: Path,
-    target: str,
     run_name: str,
     cutoffs: List[float],
     logger: logging.Logger
@@ -326,7 +325,8 @@ def run_cutoff_sensitivity_for_run(
     
     Loads pre-computed embeddings and re-scores across cutoff range.
     """
-    artifacts_dir = workspace_dir / "phase4" / target / run_name / "artifacts"
+    # Phase 4 structure: workspace/phase4/cross_target/{run_name}/artifacts
+    artifacts_dir = workspace_dir / "phase4" / "cross_target" / run_name / "artifacts"
     
     # Load embeddings
     mf_path = artifacts_dir / "embedding_mf.csv"
@@ -403,7 +403,7 @@ def aggregate_cutoff_sensitivity(
         logger.info(f"Processing {run_name}...")
         
         cutoff_results = run_cutoff_sensitivity_for_run(
-            workspace_dir, target, run_name, cutoffs, logger
+            workspace_dir, run_name, cutoffs, logger
         )
         
         for cutoff_metrics in cutoff_results:
@@ -723,8 +723,11 @@ def plot_cross_target_comparison(
     # Create model_key
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
     
-    # Sort targets by natural MF size
-    target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
+    # Sort targets by actual MF size (post-cutoff), fallback to natural if not available
+    if "mf_size_actual" in df_agg.columns:
+        target_order = df_agg.groupby("target")["mf_size_actual"].mean().sort_values().index.tolist()
+    else:
+        target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
     
     model_keys = sorted(df_agg["model_key"].unique())
     
@@ -788,7 +791,11 @@ def plot_cross_target_bedroc_ief(
     logger.info("Generating cross-target BEDROC and IEF comparison bar charts...")
     
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
-    target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
+    # Sort targets by actual MF size (post-cutoff)
+    if "mf_size_actual" in df_agg.columns:
+        target_order = df_agg.groupby("target")["mf_size_actual"].mean().sort_values().index.tolist()
+    else:
+        target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
     model_keys = sorted(df_agg["model_key"].unique())
     
     colors = {
@@ -899,10 +906,13 @@ def plot_mf_size_correlation(
         
         # Fit trend line (log-scale)
         if len(x) > 2:
-            z = np.polyfit(np.log10(x), y, 1)
-            p = np.poly1d(z)
-            x_fit = np.logspace(np.log10(x.min()), np.log10(x.max()), 100)
-            ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.6, linewidth=1.5)
+            try:
+                z = np.polyfit(np.log10(x), y, 1)
+                p = np.poly1d(z)
+                x_fit = np.logspace(np.log10(x.min()), np.log10(x.max()), 100)
+                ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.6, linewidth=1.5)
+            except np.linalg.LinAlgError:
+                logger.warning(f"Could not fit trendline for {model_key} (SVD did not converge)")
     
     ax.set_xscale("log")
     ax.set_xlabel("Natural MF Cloud Size (pre-cutoff, compounds)", fontweight="bold", fontsize=12)
@@ -962,8 +972,8 @@ def plot_stratified_cross_target(
     df_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
     df_agg.columns = ["_".join(col).strip("_") if isinstance(col, tuple) else col for col in df_agg.columns]
     
-    # Sort targets by natural MF size
-    target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
+    # Sort targets by natural MF size (use first value since all same per target)
+    target_order = df_agg.groupby("target")["natural_mf_size_first"].first().sort_values().index.tolist()
     
     model_keys = sorted(df_agg["model_key"].unique())
     
@@ -1103,12 +1113,13 @@ def plot_high_potency_correlation(
         
         # Fit trend line (log-scale)
         if len(x_valid) > 2:
-            z = np.polyfit(np.log10(x_valid), y_valid, 1)
-            p = np.poly1d(z)
-            x_fit = np.logspace(np.log10(x_valid.min()), np.log10(x_valid.max()), 100)
-            ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.7, linewidth=2)
-    
-    ax.set_xscale("log")
+                try:
+                    z = np.polyfit(np.log10(x_valid), y_valid, 1)
+                    p = np.poly1d(z)
+                    x_fit = np.logspace(np.log10(x_valid.min()), np.log10(x_valid.max()), 100)
+                    ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.7, linewidth=2)
+                except np.linalg.LinAlgError:
+                    logger.warning(f"Could not fit trendline for {model_key} (SVD did not converge)")    ax.set_xscale("log")
     ax.set_xlabel("Natural MF Cloud Size (pre-cutoff, compounds)", fontweight="bold", fontsize=13)
     ax.set_ylabel("High-Potency EF@1% (≤100 nM, Mean)", fontweight="bold", fontsize=13)
     ax.set_title("Phase 4: MF Cloud Size vs High-Potency Enrichment", fontweight="bold", fontsize=15)
