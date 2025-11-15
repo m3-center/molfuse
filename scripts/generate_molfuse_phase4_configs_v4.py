@@ -31,15 +31,15 @@ from typing import Dict, List, Tuple
 
 # Targets with natural MF cloud sizes (from wc -l output)
 # Selected based on top compound count per KW category (from analyze_kw_targets.py)
-TARGETS: List[Tuple[str, str, int]] = [
-    ("KW-0049_Antioxidant", "P00441", 39),        # SOD1 - Superoxide dismutase [Cu-Zn]
-    ("KW-0929_Antimicrobial", "P14555", 582),     # PLA2G2A - Phospholipase A2
-    ("KW-0505_Motor_protein", "P52732", 1158),    # KIF11 - Kinesin-like protein KIF11
-    ("KW-0202_Cytokine", "P43490", 2904),         # NAMPT - Nicotinamide phosphoribosyltransferase
-    ("KW-0358_Heparin-binding", "P11362", 4150),  # FGFR1 - Fibroblast growth factor receptor 1
-    ("KW-0456_Lyase", "P00918", 9685),            # CA2 - Carbonic anhydrase 2
-    ("KW-0560_Oxidoreductase", "P08684", 6151),   # CYP3A4 - Cytochrome P450 3A4
-    ("KW-0808_Transferase", "P00519", 5505),      # ABL1 - Tyrosine-protein kinase ABL1 (baseline)
+TARGETS: List[Tuple[str, str]] = [
+    ("KW-0049_Antioxidant", "P00441"),        # SOD1 - Superoxide dismutase [Cu-Zn]
+    ("KW-0929_Antimicrobial", "P14555"),      # PLA2G2A - Phospholipase A2
+    ("KW-0505_Motor_protein", "P52732"),      # KIF11 - Kinesin-like protein KIF11
+    ("KW-0202_Cytokine", "P43490"),           # NAMPT - Nicotinamide phosphoribosyltransferase
+    ("KW-0358_Heparin-binding", "P11362"),    # FGFR1 - Fibroblast growth factor receptor 1
+    ("KW-0456_Lyase", "P00918"),              # CA2 - Carbonic anhydrase 2
+    ("KW-0560_Oxidoreductase", "P08684"),     # CYP3A4 - Cytochrome P450 3A4
+    ("KW-0808_Transferase", "P00519"),        # ABL1 - Tyrosine-protein kinase ABL1 (baseline)
 ]
 
 N_REPLICATES = 5
@@ -78,7 +78,7 @@ def generate_phase4_configs(output_dir: Path) -> List[Path]:
     
     generated_configs = []
     
-    for target_kw, target_accession, mf_size in TARGETS:
+    for target_kw, target_accession in TARGETS:
         # Extract target short name (remove KW prefix)
         target_short = target_kw.split("_", 1)[1]  # e.g., "Antioxidant"
         
@@ -101,7 +101,6 @@ def generate_phase4_configs(output_dir: Path) -> List[Path]:
                 "target": target_accession,  # UniProt accession (placeholder)
                 "target_kw": target_kw,  # KW identifier (primary)
                 "target_short": target_short,
-                "mf_size_natural": mf_size,
                 "affinity_cutoff_nM": AFFINITY_CUTOFF_NM,
                 "replicate": rep_idx,
                 "random_seed": seed,
@@ -154,9 +153,9 @@ def main():
     
     # Print summary by target
     print("\nConfigs per target:")
-    for target_kw, _, mf_size in TARGETS:
+    for target_kw, _ in TARGETS:
         target_short = target_kw.split("_", 1)[1]
-        print(f"  {target_short:20s} (MF={mf_size:>7,}): {N_REPLICATES} replicates")
+        print(f"  {target_short:20s}: {N_REPLICATES} replicates")
     
     print("\nNext steps:")
     print("  1. Review configs in configs/molfuse_phase4_grid/")
