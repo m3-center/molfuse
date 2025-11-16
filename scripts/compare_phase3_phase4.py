@@ -4,12 +4,10 @@ Compare Phase 3 (MF Ablation on P00519) vs Phase 4 (Cross-Target Generalization)
 
 Creates overlay plots showing:
 1. Phase 3: MF size vs EF@1% for P00519 (within-target subsampling)
-2. Phase 4: MF size vs EF@1% across 8 targets (cross-target)
+2. Phase 4: MF size vs EF@1% across 8 protein function categories
 
 This validates whether the Phase 3 pattern (larger MF → higher EF) 
-generalizes across different kinase targets.
-
-Usage:
+generalizes across different protein function categories.Usage:
     python scripts/compare_phase3_phase4.py \
         --phase3_aggregated reporting/phase3_post_analysis/phase3_summary_aggregated.csv \
         --phase3_stratified reporting/phase3_post_analysis/phase3_summary_stratified.csv \
@@ -99,10 +97,17 @@ def plot_phase3_phase4_overlay_overall(
     p4_x_valid = p4_x[valid_mask]
     p4_y_valid = p4_y[valid_mask]
     
-    # Plot Phase 4 points
-    ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#A23B72', alpha=0.7,
-               edgecolors='black', linewidth=1.5, label='Phase 4: 8 kinase targets',
-               zorder=4)
+    # Plot Phase 4 points with labels
+    scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#A23B72', alpha=0.7,
+                        edgecolors='black', linewidth=1.5, label='Phase 4: 8 protein functions',
+                        zorder=4)
+    
+    # Add target labels
+    for i, (x, y, target) in enumerate(zip(p4_x_valid, p4_y_valid, p4_agg.loc[valid_mask, "target"])):
+        # Clean up target name for display
+        label = target.replace('_', ' ')
+        ax.annotate(label, (x, y), fontsize=8, ha='left', va='bottom',
+                   xytext=(5, 5), textcoords='offset points', alpha=0.8)
     
     # Add Phase 4 trendline
     if len(p4_x_valid) >= 3:
@@ -167,17 +172,20 @@ def plot_phase3_phase4_overlay_high_potency(
     fig, ax = plt.subplots(figsize=(12, 7))
     
     # Phase 3: High-potency curve
-    # Phase 3 stratified has individual runs, need to aggregate by mf_size
-    p3_by_size = p3_umap_feat.groupby("mf_size", dropna=False).agg({
+    # Phase 3 stratified has individual runs, need to aggregate by mf_size_target
+    # Convert mf_size_target (categorical string) to numeric first
+    p3_umap_feat["mf_size_numeric"] = pd.to_numeric(p3_umap_feat["mf_size_target"], errors="coerce")
+    
+    p3_by_size = p3_umap_feat.groupby("mf_size_numeric", dropna=False).agg({
         "ef_1%_high": ["mean", "sem"]
     }).reset_index()
-    p3_by_size.columns = ["mf_size", "ef_1%_high_mean", "ef_1%_high_sem"]
-    p3_by_size = p3_by_size.sort_values("mf_size")
+    p3_by_size.columns = ["mf_size_numeric", "ef_1%_high_mean", "ef_1%_high_sem"]
+    p3_by_size = p3_by_size.sort_values("mf_size_numeric")
     
     # Remove NaN and convert to numpy arrays
-    p3_valid = p3_by_size.dropna(subset=["mf_size", "ef_1%_high_mean"])
+    p3_valid = p3_by_size.dropna(subset=["mf_size_numeric", "ef_1%_high_mean"])
     
-    p3_x = np.array(p3_valid["mf_size"].values, dtype=float)
+    p3_x = np.array(p3_valid["mf_size_numeric"].values, dtype=float)
     p3_y_mean = np.array(p3_valid["ef_1%_high_mean"].values, dtype=float)
     p3_y_sem = np.array(p3_valid["ef_1%_high_sem"].values, dtype=float)
     
@@ -188,18 +196,25 @@ def plot_phase3_phase4_overlay_high_potency(
                      color='#2E86AB', alpha=0.2, zorder=2)
     
     # Phase 4: Cross-target scatter
-    p4_x = p4_agg["natural_mf_size"].values
-    p4_y = p4_agg["ef_1%_high"].values
+    p4_x = np.array(p4_agg["natural_mf_size"].values, dtype=float)
+    p4_y = np.array(p4_agg["ef_1%_high"].values, dtype=float)
     
     # Remove NaN
     valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
     p4_x_valid = p4_x[valid_mask]
     p4_y_valid = p4_y[valid_mask]
     
-    # Plot Phase 4 points
-    ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#F18F01', alpha=0.7,
-               edgecolors='black', linewidth=1.5, label='Phase 4: 8 targets high-potency',
-               zorder=4)
+    # Plot Phase 4 points with labels
+    scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#F18F01', alpha=0.7,
+                        edgecolors='black', linewidth=1.5, label='Phase 4: 8 protein functions (high-potency)',
+                        zorder=4)
+    
+    # Add target labels
+    for i, (x, y, target) in enumerate(zip(p4_x_valid, p4_y_valid, p4_agg.loc[valid_mask, "target"])):
+        # Clean up target name for display
+        label = target.replace('_', ' ')
+        ax.annotate(label, (x, y), fontsize=8, ha='left', va='bottom',
+                   xytext=(5, 5), textcoords='offset points', alpha=0.8)
     
     # Add Phase 4 trendline
     if len(p4_x_valid) >= 3:
