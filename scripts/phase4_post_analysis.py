@@ -161,6 +161,8 @@ def collect_phase4_results(
             record = {
                 "run_name": data.get("run_name"),
                 "target": data.get("target"),
+                "target_kw": data.get("target_kw"),  # Keyword collection (e.g., "KW-0808_Transferase")
+                "target_short": data.get("target_short"),  # Short name (e.g., "Transferase")
                 "target_chembl_id": data.get("target_chembl_id"),
                 "method": data.get("method"),
                 "representation": data.get("representation"),
@@ -237,7 +239,7 @@ def aggregate_by_target(df: pd.DataFrame, logger: logging.Logger) -> pd.DataFram
     """
     logger.info("Aggregating results by target...")
     
-    group_keys = ["target", "target_chembl_id", "method", "representation", "dim", 
+    group_keys = ["target", "target_kw", "target_short", "target_chembl_id", "method", "representation", "dim", 
                   "affinity_cutoff_nM", "natural_mf_size"]
     
     agg_dict = {

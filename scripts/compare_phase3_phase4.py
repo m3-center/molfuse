@@ -91,13 +91,13 @@ def plot_phase3_phase4_overlay_overall(
     # Phase 4: Cross-target scatter
     p4_x = np.array(p4_umap_feat["natural_mf_size"].values, dtype=float)
     p4_y = np.array(p4_umap_feat["ef_1%_mean"].values, dtype=float)
-    p4_targets = p4_umap_feat["target"].values
+    p4_labels = p4_umap_feat["target_short"].values  # Use functional category names
     
     # Remove NaN
     valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
     p4_x_valid = p4_x[valid_mask]
     p4_y_valid = p4_y[valid_mask]
-    p4_targets_valid = p4_targets[valid_mask]
+    p4_labels_valid = p4_labels[valid_mask]
     
     # Plot Phase 4 points with labels
     scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#A23B72', alpha=0.7,
@@ -105,10 +105,10 @@ def plot_phase3_phase4_overlay_overall(
                         zorder=4)
     
     # Add target labels
-    for x, y, target in zip(p4_x_valid, p4_y_valid, p4_targets_valid):
-        # Clean up target name for display
-        label = target.replace('_', ' ')
-        ax.annotate(label, (x, y), fontsize=8, ha='left', va='bottom',
+    for x, y, label in zip(p4_x_valid, p4_y_valid, p4_labels_valid):
+        # Clean up label for display
+        display_label = label.replace('_', ' ') if isinstance(label, str) else str(label)
+        ax.annotate(display_label, (x, y), fontsize=8, ha='left', va='bottom',
                    xytext=(5, 5), textcoords='offset points', alpha=0.8)    # Add Phase 4 trendline
     if len(p4_x_valid) >= 3:
         rho, p_value = stats.spearmanr(p4_x_valid, p4_y_valid)
@@ -164,8 +164,8 @@ def plot_phase3_phase4_overlay_high_potency(
         (df_phase4_strat["representation"] == "features")
     ].copy()
     
-    # Aggregate Phase 4 by target
-    p4_agg = p4_umap_feat.groupby(["target", "natural_mf_size"], dropna=False).agg({
+    # Aggregate Phase 4 by target_short (functional category)
+    p4_agg = p4_umap_feat.groupby(["target_short", "natural_mf_size"], dropna=False).agg({
         "ef_1%_high": "mean"
     }).reset_index()
     
@@ -198,13 +198,13 @@ def plot_phase3_phase4_overlay_high_potency(
     # Phase 4: Cross-target scatter
     p4_x = np.array(p4_agg["natural_mf_size"].values, dtype=float)
     p4_y = np.array(p4_agg["ef_1%_high"].values, dtype=float)
-    p4_targets = p4_agg["target"].values
+    p4_labels = p4_agg["target_short"].values  # Use functional category names
     
     # Remove NaN
     valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
     p4_x_valid = p4_x[valid_mask]
     p4_y_valid = p4_y[valid_mask]
-    p4_targets_valid = p4_targets[valid_mask]
+    p4_labels_valid = p4_labels[valid_mask]
     
     # Plot Phase 4 points with labels
     scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#F18F01', alpha=0.7,
@@ -212,10 +212,10 @@ def plot_phase3_phase4_overlay_high_potency(
                         zorder=4)
     
     # Add target labels
-    for x, y, target in zip(p4_x_valid, p4_y_valid, p4_targets_valid):
-        # Clean up target name for display
-        label = target.replace('_', ' ')
-        ax.annotate(label, (x, y), fontsize=8, ha='left', va='bottom',
+    for x, y, label in zip(p4_x_valid, p4_y_valid, p4_labels_valid):
+        # Clean up label for display
+        display_label = label.replace('_', ' ') if isinstance(label, str) else str(label)
+        ax.annotate(display_label, (x, y), fontsize=8, ha='left', va='bottom',
                    xytext=(5, 5), textcoords='offset points', alpha=0.8)
     
     # Add Phase 4 trendline
