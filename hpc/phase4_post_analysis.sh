@@ -15,7 +15,8 @@
 #   sbatch hpc/phase4_post_analysis.sh
 #   sbatch hpc/phase4_post_analysis.sh --stratify           # With stratified analysis
 #   sbatch hpc/phase4_post_analysis.sh --debug              # Quick debug mode
-#   sbatch hpc/phase4_post_analysis.sh --stratify --debug   # Both options
+#   sbatch hpc/phase4_post_analysis.sh --plots-only         # Regenerate plots only
+#   sbatch hpc/phase4_post_analysis.sh --stratify --debug   # Multiple options
 
 # Configuration
 WORKSPACE_DIR="${WORKSPACE_DIR:-experiment_workspace_v4}"
@@ -24,6 +25,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-reporting/phase4_post_analysis}"
 # Parse command-line arguments for flags
 STRATIFY_FLAG=""
 DEBUG_FLAG=""
+PLOTS_ONLY_FLAG=""
 
 for arg in "$@"; do
     case $arg in
@@ -32,6 +34,9 @@ for arg in "$@"; do
             ;;
         --debug)
             DEBUG_FLAG="--debug"
+            ;;
+        --plots-only)
+            PLOTS_ONLY_FLAG="--plots-only"
             ;;
     esac
 done
@@ -50,7 +55,8 @@ echo "Workspace: $WORKSPACE_DIR"
 echo "Output: $OUTPUT_DIR"
 echo "Stratified analysis: ${STRATIFY_FLAG:-disabled}"
 echo "Debug mode: ${DEBUG_FLAG:-disabled}"
-echo "=================================================="
+echo "Plots-only mode: ${PLOTS_ONLY_FLAG:-disabled}"
+echo "================================================="=
 echo ""
 
 # Load required modules (adjust for your HPC environment)
@@ -66,7 +72,8 @@ python scripts/phase4_post_analysis.py \
     --workspace_dir "$WORKSPACE_DIR" \
     --output_dir "$OUTPUT_DIR" \
     $STRATIFY_FLAG \
-    $DEBUG_FLAG
+    $DEBUG_FLAG \
+    $PLOTS_ONLY_FLAG
 
 EXIT_CODE=$?
 
