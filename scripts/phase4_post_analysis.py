@@ -1240,7 +1240,7 @@ def generate_analysis_report(
     for _, row in subset.iterrows():
         # Handle NaN values gracefully
         mf_size_str = f"{int(row['natural_mf_size']):,}" if pd.notna(row['natural_mf_size']) else "N/A"
-        n_actives_str = f"{int(row['n_actives'])}" if pd.notna(row['n_actives']) else "N/A"
+        n_actives_str = f"{int(row['n_actives_first'])}" if pd.notna(row['n_actives_first']) else "N/A"
         
         report_lines.append(
             f"| {row['target']} | {mf_size_str} | "
