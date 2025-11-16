@@ -464,9 +464,9 @@ def plot_cutoff_sensitivity_per_target(
     
     df_cutoff_agg["model_key"] = df_cutoff_agg["method"] + "_" + df_cutoff_agg["representation"]
     
-    # Sort targets by MF cloud size (use n_mf_mean as proxy for actual MF size post-cutoff)
-    # Get average MF size across all cutoffs per target for sorting
-    target_sizes = df_cutoff_agg.groupby("target")["n_mf_mean"].mean().sort_values()
+    # Sort targets by natural MF cloud size
+    # Get natural_mf_size per target (should be consistent across cutoffs)
+    target_sizes = df_cutoff_agg.groupby("target")["natural_mf_size"].first().sort_values()
     targets = target_sizes.index.tolist()
     n_targets = len(targets)
     
@@ -735,13 +735,8 @@ def plot_cross_target_comparison(
     # Create model_key
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
     
-    # Sort targets by actual MF size (post-cutoff), fallback to natural if not available
-    if "mf_size_actual_mean" in df_agg.columns:
-        target_order = df_agg.groupby("target")["mf_size_actual_mean"].mean().sort_values().index.tolist()
-    elif "mf_size_actual" in df_agg.columns:
-        target_order = df_agg.groupby("target")["mf_size_actual"].mean().sort_values().index.tolist()
-    else:
-        target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
+    # Sort targets by natural MF size
+    target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     
     model_keys = sorted(df_agg["model_key"].unique())
     
@@ -805,13 +800,9 @@ def plot_cross_target_bedroc_ief(
     logger.info("Generating cross-target BEDROC and IEF comparison bar charts...")
     
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
-    # Sort targets by actual MF size (post-cutoff)
-    if "mf_size_actual_mean" in df_agg.columns:
-        target_order = df_agg.groupby("target")["mf_size_actual_mean"].mean().sort_values().index.tolist()
-    elif "mf_size_actual" in df_agg.columns:
-        target_order = df_agg.groupby("target")["mf_size_actual"].mean().sort_values().index.tolist()
-    else:
-        target_order = df_agg.groupby("target")["natural_mf_size"].mean().sort_values().index.tolist()
+    
+    # Sort targets by natural MF size
+    target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     model_keys = sorted(df_agg["model_key"].unique())
     
     colors = {
@@ -883,15 +874,15 @@ def plot_mf_size_correlation(
     Returns:
         Dict mapping model_key → (rho, p_value)
     """
-    logger.info("Generating MF size vs High-potency EF@1% correlation plot...")
+    logger.info("Generating MF size vs Overall EF@1% correlation plot...")
     
-    # Need stratified data for this
-    # For now, use overall EF@1% as proxy (will be replaced by high-potency in stratified version)
+    # df_agg already has one row per (target, method, representation)
+    # Each model_key should have 8 data points (one per target)
     
     df_agg["model_key"] = df_agg["method"] + "_" + df_agg["representation"]
     model_keys = sorted(df_agg["model_key"].unique())
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 7))
     
     colors = {
         "pca_features": "#1f77b4",
@@ -905,37 +896,47 @@ def plot_mf_size_correlation(
     for model_key in model_keys:
         subset = df_agg[df_agg["model_key"] == model_key].copy()
         
+        # Use natural_mf_size (consistent per target) and ef_1%_mean (aggregated across replicates)
         x = subset["natural_mf_size"].values
         y = subset["ef_1%_mean"].values
         
+        # Remove NaN values
+        valid_mask = ~np.isnan(y) & ~np.isnan(x)
+        x_valid = x[valid_mask]
+        y_valid = y[valid_mask]
+        
+        if len(x_valid) < 3:
+            logger.warning(f"{model_key}: Not enough valid data points ({len(x_valid)}) for correlation")
+            continue
+        
         # Compute Spearman correlation
-        rho, p_value = stats.spearmanr(x, y)
+        rho, p_value = stats.spearmanr(x_valid, y_valid)
         correlations[model_key] = (rho, p_value)
         
         # Scatter plot
         ax.scatter(
-            x, y,
+            x_valid, y_valid,
             label=f"{model_key.replace('_', '/')} (ρ={rho:.3f}, p={p_value:.3f})",
             color=colors.get(model_key, "#333333"),
-            s=100, alpha=0.7, edgecolors="black"
+            s=120, alpha=0.7, edgecolors="black", linewidth=1.5
         )
         
         # Fit trend line (log-scale)
-        if len(x) > 2:
+        if len(x_valid) > 2:
             try:
-                z = np.polyfit(np.log10(x), y, 1)
+                z = np.polyfit(np.log10(x_valid), y_valid, 1)
                 p = np.poly1d(z)
-                x_fit = np.logspace(np.log10(x.min()), np.log10(x.max()), 100)
-                ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.6, linewidth=1.5)
+                x_fit = np.logspace(np.log10(x_valid.min()), np.log10(x_valid.max()), 100)
+                ax.plot(x_fit, p(np.log10(x_fit)), "--", color=colors.get(model_key, "#333333"), alpha=0.7, linewidth=2)
             except np.linalg.LinAlgError:
                 logger.warning(f"Could not fit trendline for {model_key} (SVD did not converge)")
     
     ax.set_xscale("log")
-    ax.set_xlabel("Natural MF Cloud Size (pre-cutoff, compounds)", fontweight="bold", fontsize=12)
-    ax.set_ylabel("Overall EF@1% (Mean)", fontweight="bold", fontsize=12)
-    ax.set_title("MF Cloud Size vs Enrichment: Cross-Target Correlation", fontweight="bold", fontsize=14)
+    ax.set_xlabel("Natural MF Cloud Size (pre-cutoff, compounds)", fontweight="bold", fontsize=13)
+    ax.set_ylabel("Overall EF@1% (Mean)", fontweight="bold", fontsize=13)
+    ax.set_title("MF Cloud Size vs Enrichment: Cross-Target Correlation", fontweight="bold", fontsize=15)
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=9)
+    ax.legend(loc="best", fontsize=10, framealpha=0.9)
     
     plt.tight_layout()
     
@@ -988,8 +989,8 @@ def plot_stratified_cross_target(
     df_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
     df_agg.columns = ["_".join(col).strip("_") if isinstance(col, tuple) else col for col in df_agg.columns]
     
-    # Sort targets by natural MF size (use first value since all same per target)
-    target_order = df_agg.groupby("target")["natural_mf_size_first"].first().sort_values().index.tolist()
+    # Sort targets by natural MF size
+    target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     
     model_keys = sorted(df_agg["model_key"].unique())
     
@@ -1300,6 +1301,8 @@ def main():
                        help="Enable potency tier stratification (High/Medium/Weak)")
     parser.add_argument("--debug", action="store_true",
                        help="Debug mode: process only first target for quick testing")
+    parser.add_argument("--plots-only", action="store_true",
+                       help="Plots-only mode: skip data collection and only regenerate plots from existing CSVs")
     args = parser.parse_args()
     
     workspace_dir = Path(args.workspace_dir)
@@ -1324,91 +1327,140 @@ def main():
     logger.info(f"Output: {output_dir}")
     logger.info(f"Stratify by potency: {args.stratify}")
     logger.info(f"Debug mode: {args.debug}")
+    logger.info(f"Plots-only mode: {args.plots_only}")
     logger.info("="*80)
     
     try:
-        # 1. Collect results
-        df = collect_phase4_results(workspace_dir, logger)
+        if args.plots_only:
+            # Plots-only mode: load existing aggregated data
+            logger.info("\n🎨 PLOTS-ONLY MODE: Loading existing aggregated data...")
+            
+            agg_csv = output_dir / "phase4_summary_aggregated.csv"
+            if not agg_csv.exists():
+                raise FileNotFoundError(
+                    f"Aggregated data not found: {agg_csv}\n"
+                    "Run without --plots-only first to generate aggregated data."
+                )
+            
+            df_agg = pd.read_csv(agg_csv)
+            logger.info(f"Loaded aggregated data: {len(df_agg)} rows")
+            
+            # Load cutoff sensitivity data if available
+            cutoff_csv = output_dir / "phase4_cutoff_sensitivity_aggregated.csv"
+            if cutoff_csv.exists():
+                df_cutoff_agg = pd.read_csv(cutoff_csv)
+                logger.info(f"Loaded cutoff sensitivity data: {len(df_cutoff_agg)} rows")
+            else:
+                df_cutoff_agg = pd.DataFrame()
+                logger.warning("Cutoff sensitivity data not found, skipping those plots")
+            
+            # Load stratified data if available
+            if args.stratify:
+                strat_csv = output_dir / "phase4_summary_stratified.csv"
+                if strat_csv.exists():
+                    df_stratified = pd.read_csv(strat_csv)
+                    logger.info(f"Loaded stratified data: {len(df_stratified)} rows")
+                else:
+                    df_stratified = pd.DataFrame()
+                    logger.warning("Stratified data not found, skipping those plots")
+            
+            # Skip to plotting section
+            logger.info("\nGenerating plots from existing data...\n")
+            
+        else:
+            # Normal mode: collect and aggregate data
+            # 1. Collect results
+            df = collect_phase4_results(workspace_dir, logger)
         
-        # Debug mode: filter to first target only
-        if args.debug:
-            first_target = sorted(df['target'].unique())[0]
-            logger.info(f"\n🐛 DEBUG MODE: Processing only target {first_target}")
-            df = df[df['target'] == first_target].copy()
-            logger.info(f"   Filtered to {len(df)} runs\n")
+            # Debug mode: filter to first target only
+            if args.debug:
+                first_target = sorted(df['target'].unique())[0]
+                logger.info(f"\n🐛 DEBUG MODE: Processing only target {first_target}")
+                df = df[df['target'] == first_target].copy()
+                logger.info(f"   Filtered to {len(df)} runs\n")
+            
+            # 2. Aggregate by target
+            df_agg = aggregate_by_target(df, logger)
+            
+            # 3. Affinity cutoff sensitivity analysis
+            logger.info("\n" + "="*80)
+            logger.info("AFFINITY CUTOFF SENSITIVITY ANALYSIS")
+            logger.info("="*80)
+            
+            cutoffs = [100.0, 1000.0, 10000.0, 100000.0]
+            df_cutoff_agg = aggregate_cutoff_sensitivity(workspace_dir, df, cutoffs, output_dir, logger)
+            
+            # Potency-stratified analysis (if enabled)
+            if args.stratify:
+                logger.info("\n" + "="*80)
+                logger.info("POTENCY TIER STRATIFICATION")
+                logger.info("="*80)
+                
+                # Compute tier-specific metrics for all runs
+                logger.info("Computing tier-specific EF@1% for all runs...")
+                stratified_records = []
+                
+                for _, row in df.iterrows():
+                    target = row["target"]
+                    run_name = row["run_name"]
+                    
+                    tier_metrics = compute_stratified_metrics_for_run(workspace_dir, target, run_name, logger)
+                    
+                    if tier_metrics:
+                        record = {
+                            "run_name": run_name,
+                            "target": target,
+                            "method": row["method"],
+                            "representation": row["representation"],
+                            "replicate": row["replicate"],
+                            "natural_mf_size": row["natural_mf_size"],
+                            **tier_metrics
+                        }
+                        stratified_records.append(record)
+                
+                if stratified_records:
+                    df_stratified = pd.DataFrame(stratified_records)
+                    logger.info(f"Computed stratified metrics for {len(df_stratified)} runs")
+                    
+                    # Save stratified CSV
+                    strat_csv = output_dir / "phase4_summary_stratified.csv"
+                    df_stratified.to_csv(strat_csv, index=False)
+                    logger.info(f"Saved: {strat_csv.name}")
+                else:
+                    df_stratified = pd.DataFrame()
+                    logger.warning("No stratified metrics computed (missing artifacts?)")
+            
+            # Save aggregated data
+            save_aggregated_summary(df_agg, output_dir, logger)
         
-        # 2. Aggregate by target
-        df_agg = aggregate_by_target(df, logger)
-        
-        # 3. Affinity cutoff sensitivity analysis
-        logger.info("\n" + "="*80)
-        logger.info("AFFINITY CUTOFF SENSITIVITY ANALYSIS")
-        logger.info("="*80)
-        
-        cutoffs = [100.0, 1000.0, 10000.0, 100000.0]
-        df_cutoff_agg = aggregate_cutoff_sensitivity(workspace_dir, df, cutoffs, output_dir, logger)
-        
+        # 4. Generate plots (common to both modes)
+        # Cutoff sensitivity plots
         if not df_cutoff_agg.empty:
             plot_cutoff_sensitivity_per_target(df_cutoff_agg, output_dir, logger)
-            best_cutoffs = identify_best_cutoffs_per_target(df_cutoff_agg, output_dir, logger)
+            if not args.plots_only:  # Only identify best cutoffs in normal mode
+                best_cutoffs = identify_best_cutoffs_per_target(df_cutoff_agg, output_dir, logger)
         
-        # 4. Generate plots
+        # Cross-target comparison plots
         plot_cross_target_comparison(df_agg, output_dir, logger)
         plot_cross_target_bedroc_ief(df_agg, output_dir, logger)
         correlations = plot_mf_size_correlation(df_agg, output_dir, logger)
         
-        # 5. Potency-stratified analysis (if enabled)
-        if args.stratify:
-            logger.info("\n" + "="*80)
-            logger.info("POTENCY TIER STRATIFICATION")
-            logger.info("="*80)
+        # Stratified plots (if enabled and data available)
+        if args.stratify and 'df_stratified' in locals() and not df_stratified.empty:
+            plot_stratified_cross_target(df_stratified, output_dir, logger)
+            high_potency_correlations = plot_high_potency_correlation(df_stratified, output_dir, logger)
             
-            # Compute tier-specific metrics for all runs
-            logger.info("Computing tier-specific EF@1% for all runs...")
-            stratified_records = []
-            
-            for _, row in df.iterrows():
-                target = row["target"]
-                run_name = row["run_name"]
-                
-                tier_metrics = compute_stratified_metrics_for_run(workspace_dir, target, run_name, logger)
-                
-                if tier_metrics:
-                    record = {
-                        "run_name": run_name,
-                        "target": target,
-                        "method": row["method"],
-                        "representation": row["representation"],
-                        "replicate": row["replicate"],
-                        "natural_mf_size": row["natural_mf_size"],
-                        **tier_metrics
-                    }
-                    stratified_records.append(record)
-            
-            if stratified_records:
-                df_stratified = pd.DataFrame(stratified_records)
-                logger.info(f"Computed stratified metrics for {len(df_stratified)} runs")
-                
-                # Save stratified CSV
-                strat_csv = output_dir / "phase4_summary_stratified.csv"
-                df_stratified.to_csv(strat_csv, index=False)
-                logger.info(f"Saved: {strat_csv.name}")
-                
-                # Generate stratified plots
-                plot_stratified_cross_target(df_stratified, output_dir, logger)
-                high_potency_correlations = plot_high_potency_correlation(df_stratified, output_dir, logger)
-                
-                # Save high-potency correlation results
+            # Save correlation results
+            if not args.plots_only:
                 save_correlation_results(high_potency_correlations, output_dir, logger)
-            else:
-                logger.warning("No stratified metrics computed (missing artifacts?)")
         
-        # 5. Summary outputs
-        save_aggregated_summary(df_agg, output_dir, logger)
-        save_correlation_results(correlations, output_dir, logger)
-        
-        # 6. Generate report
-        generate_analysis_report(df, df_agg, correlations, output_dir, logger)
+        # Summary outputs (skip in plots-only mode)
+        if not args.plots_only:
+            save_correlation_results(correlations, output_dir, logger)
+            
+            # Generate report (requires original df)
+            if 'df' in locals():
+                generate_analysis_report(df, df_agg, correlations, output_dir, logger)
         
         logger.info("="*80)
         logger.info("PHASE 4 POST-ANALYSIS COMPLETED")
