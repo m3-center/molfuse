@@ -42,15 +42,15 @@ def analyze_mf_cloud_by_cutoff(
     if activity_col not in df_mf.columns:
         raise ValueError(f"Expected column '{activity_col}' not found in {mf_csv_path}")
     
-    # Identify target column (could be Target_ChEMBL_ID or Target_Name)
+    # Identify target column (could be "Target ChEMBL ID" or "Target Name")
     target_col = None
-    for possible_col in ["Target_ChEMBL_ID", "Target_Name", "target", "Target"]:
+    for possible_col in ["Target ChEMBL ID", "Target Name", "Target_ChEMBL_ID", "Target_Name", "target", "Target"]:
         if possible_col in df_mf.columns:
             target_col = possible_col
             break
     
     if target_col is None:
-        raise ValueError(f"No target column found in {mf_csv_path}")
+        raise ValueError(f"No target column found in {mf_csv_path}. Available columns: {df_mf.columns.tolist()}")
     
     # Remove target protein from MF cloud (exclude actives)
     df_mf_clean = df_mf[df_mf[target_col] != target_protein].copy()
