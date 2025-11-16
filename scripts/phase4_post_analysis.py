@@ -471,6 +471,15 @@ def plot_cutoff_sensitivity_per_target(
     targets = target_sizes.index.tolist()
     n_targets = len(targets)
     
+    # DEBUG: Log target ordering
+    logger.info("\n" + "="*80)
+    logger.info("DEBUG: Cutoff Sensitivity Target Ordering")
+    logger.info("="*80)
+    for target in targets:
+        mf_size = target_sizes[target]
+        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+    logger.info("="*80 + "\n")
+    
     # Create subplot grid
     n_cols = 3
     n_rows = int(np.ceil(n_targets / n_cols))
@@ -739,6 +748,16 @@ def plot_cross_target_comparison(
     # Sort targets by natural MF size
     target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     
+    # DEBUG: Log target ordering
+    logger.info("\n" + "="*80)
+    logger.info("DEBUG: Cross-Target Comparison Target Ordering")
+    logger.info("="*80)
+    target_sizes = df_agg.groupby("target")["natural_mf_size"].first()
+    for target in target_order:
+        mf_size = target_sizes[target]
+        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+    logger.info("="*80 + "\n")
+    
     model_keys = sorted(df_agg["model_key"].unique())
     
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -805,6 +824,16 @@ def plot_cross_target_bedroc_ief(
     # Sort targets by natural MF size
     target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     model_keys = sorted(df_agg["model_key"].unique())
+    
+    # DEBUG: Log target ordering (only once, not per metric)
+    logger.info("\n" + "="*80)
+    logger.info("DEBUG: Cross-Target BEDROC/IEF Target Ordering")
+    logger.info("="*80)
+    target_sizes = df_agg.groupby("target")["natural_mf_size"].first()
+    for target in target_order:
+        mf_size = target_sizes[target]
+        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+    logger.info("="*80 + "\n")
     
     colors = {
         "pca_features": "#1f77b4",
@@ -991,6 +1020,16 @@ def plot_stratified_cross_target(
     
     # Sort targets by natural MF size
     target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
+    
+    # DEBUG: Log target ordering
+    logger.info("\n" + "="*80)
+    logger.info("DEBUG: Stratified Cross-Target Target Ordering")
+    logger.info("="*80)
+    target_sizes = df_agg.groupby("target")["natural_mf_size"].first()
+    for target in target_order:
+        mf_size = target_sizes[target]
+        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+    logger.info("="*80 + "\n")
     
     model_keys = sorted(df_agg["model_key"].unique())
     
