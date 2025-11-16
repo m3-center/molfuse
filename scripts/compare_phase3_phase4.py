@@ -89,13 +89,15 @@ def plot_phase3_phase4_overlay_overall(
                      color='#2E86AB', alpha=0.2, zorder=2)
     
     # Phase 4: Cross-target scatter
-    p4_x = p4_umap_feat["natural_mf_size"].values
-    p4_y = p4_umap_feat["ef_1%_mean"].values
+    p4_x = np.array(p4_umap_feat["natural_mf_size"].values, dtype=float)
+    p4_y = np.array(p4_umap_feat["ef_1%_mean"].values, dtype=float)
+    p4_targets = p4_umap_feat["target"].values
     
     # Remove NaN
     valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
     p4_x_valid = p4_x[valid_mask]
     p4_y_valid = p4_y[valid_mask]
+    p4_targets_valid = p4_targets[valid_mask]
     
     # Plot Phase 4 points with labels
     scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#A23B72', alpha=0.7,
@@ -103,13 +105,11 @@ def plot_phase3_phase4_overlay_overall(
                         zorder=4)
     
     # Add target labels
-    for i, (x, y, target) in enumerate(zip(p4_x_valid, p4_y_valid, p4_agg.loc[valid_mask, "target"])):
+    for x, y, target in zip(p4_x_valid, p4_y_valid, p4_targets_valid):
         # Clean up target name for display
         label = target.replace('_', ' ')
         ax.annotate(label, (x, y), fontsize=8, ha='left', va='bottom',
-                   xytext=(5, 5), textcoords='offset points', alpha=0.8)
-    
-    # Add Phase 4 trendline
+                   xytext=(5, 5), textcoords='offset points', alpha=0.8)    # Add Phase 4 trendline
     if len(p4_x_valid) >= 3:
         rho, p_value = stats.spearmanr(p4_x_valid, p4_y_valid)
         z = np.polyfit(np.log10(p4_x_valid), p4_y_valid, 1)
@@ -198,11 +198,13 @@ def plot_phase3_phase4_overlay_high_potency(
     # Phase 4: Cross-target scatter
     p4_x = np.array(p4_agg["natural_mf_size"].values, dtype=float)
     p4_y = np.array(p4_agg["ef_1%_high"].values, dtype=float)
+    p4_targets = p4_agg["target"].values
     
     # Remove NaN
     valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
     p4_x_valid = p4_x[valid_mask]
     p4_y_valid = p4_y[valid_mask]
+    p4_targets_valid = p4_targets[valid_mask]
     
     # Plot Phase 4 points with labels
     scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#F18F01', alpha=0.7,
@@ -210,7 +212,7 @@ def plot_phase3_phase4_overlay_high_potency(
                         zorder=4)
     
     # Add target labels
-    for i, (x, y, target) in enumerate(zip(p4_x_valid, p4_y_valid, p4_agg.loc[valid_mask, "target"])):
+    for x, y, target in zip(p4_x_valid, p4_y_valid, p4_targets_valid):
         # Clean up target name for display
         label = target.replace('_', ' ')
         ax.annotate(label, (x, y), fontsize=8, ha='left', va='bottom',
