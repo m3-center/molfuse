@@ -70,25 +70,19 @@ def plot_phase3_phase4_overlay_overall(
     fig, ax = plt.subplots(figsize=(12, 7))
     
     # Phase 3: MF ablation curve (line with error bars)
-    p3_sorted = p3_umap_feat.sort_values("mf_size_mean")
+    # Note: Phase 3 uses mf_size_target_numeric (not mf_size_mean)
+    p3_sorted = p3_umap_feat.sort_values("mf_size_target_numeric")
     
-    # Convert "full" to numeric (use max size for plotting)
-    p3_x = []
-    p3_y_mean = []
-    p3_y_sem = []
+    # Phase 3 already aggregated, just use directly
+    p3_x = np.array(p3_sorted["mf_size_target_numeric"].values, dtype=float)
+    p3_y_mean = np.array(p3_sorted["ef_1%_mean"].values, dtype=float)
+    p3_y_sem = np.array(p3_sorted["ef_1%_sem"].values, dtype=float)
     
-    for _, row in p3_sorted.iterrows():
-        mf_size = row["mf_size_mean"]
-        # Skip if NaN
-        if pd.isna(mf_size):
-            continue
-        p3_x.append(mf_size)
-        p3_y_mean.append(row["ef_1%_mean"])
-        p3_y_sem.append(row["ef_1%_sem"])
-    
-    p3_x = np.array(p3_x)
-    p3_y_mean = np.array(p3_y_mean)
-    p3_y_sem = np.array(p3_y_sem)
+    # Remove NaN
+    valid_mask = ~np.isnan(p3_x) & ~np.isnan(p3_y_mean)
+    p3_x = p3_x[valid_mask]
+    p3_y_mean = p3_y_mean[valid_mask]
+    p3_y_sem = p3_y_sem[valid_mask]
     
     # Plot Phase 3 curve
     ax.plot(p3_x, p3_y_mean, 'o-', color='#2E86AB', linewidth=2.5, markersize=8,
@@ -173,19 +167,19 @@ def plot_phase3_phase4_overlay_high_potency(
     fig, ax = plt.subplots(figsize=(12, 7))
     
     # Phase 3: High-potency curve
-    # Aggregate by mf_size
+    # Phase 3 stratified has individual runs, need to aggregate by mf_size
     p3_by_size = p3_umap_feat.groupby("mf_size", dropna=False).agg({
         "ef_1%_high": ["mean", "sem"]
     }).reset_index()
     p3_by_size.columns = ["mf_size", "ef_1%_high_mean", "ef_1%_high_sem"]
     p3_by_size = p3_by_size.sort_values("mf_size")
     
-    # Remove NaN
+    # Remove NaN and convert to numpy arrays
     p3_valid = p3_by_size.dropna(subset=["mf_size", "ef_1%_high_mean"])
     
-    p3_x = p3_valid["mf_size"].values
-    p3_y_mean = p3_valid["ef_1%_high_mean"].values
-    p3_y_sem = p3_valid["ef_1%_high_sem"].values
+    p3_x = np.array(p3_valid["mf_size"].values, dtype=float)
+    p3_y_mean = np.array(p3_valid["ef_1%_high_mean"].values, dtype=float)
+    p3_y_sem = np.array(p3_valid["ef_1%_high_sem"].values, dtype=float)
     
     # Plot Phase 3 curve
     ax.plot(p3_x, p3_y_mean, 'o-', color='#2E86AB', linewidth=2.5, markersize=8,
