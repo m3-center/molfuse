@@ -144,6 +144,20 @@ def collect_phase4_results(
                 data = json.load(f)
             
             # Extract key fields
+            natural_mf_size = data.get("natural_mf_size")
+            
+            # FALLBACK: If natural_mf_size missing from JSON, compute from MF embedding file
+            if natural_mf_size is None:
+                artifacts_dir = summary_path.parent.parent / "artifacts"
+                mf_embedding_path = artifacts_dir / "embedding_mf.csv"
+                if mf_embedding_path.exists():
+                    try:
+                        df_mf = pd.read_csv(mf_embedding_path)
+                        natural_mf_size = len(df_mf)
+                        logger.debug(f"Computed natural_mf_size={natural_mf_size} from {mf_embedding_path.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to compute natural_mf_size from {mf_embedding_path}: {e}")
+            
             record = {
                 "run_name": data.get("run_name"),
                 "target": data.get("target"),
@@ -154,7 +168,7 @@ def collect_phase4_results(
                 "affinity_cutoff_nM": data.get("affinity_cutoff_nM"),
                 "replicate": data.get("config", {}).get("replicate", 1),
                 "random_seed": data.get("random_seed"),
-                "natural_mf_size": data.get("natural_mf_size"),  # Pre-cutoff size
+                "natural_mf_size": natural_mf_size,  # Pre-cutoff size (from JSON or computed)
                 "mf_size_actual": data.get("mf_size_actual"),      # Post-cutoff size
                 "n_actives": data.get("n_actives"),
                 "n_zinc": data.get("n_zinc"),
