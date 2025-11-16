@@ -413,6 +413,7 @@ def aggregate_cutoff_sensitivity(
                 "method": row["method"],
                 "representation": row["representation"],
                 "replicate": row["replicate"],
+                "natural_mf_size": row["natural_mf_size"],  # Include for sorting later
                 **cutoff_metrics
             }
             all_records.append(record)
@@ -429,7 +430,7 @@ def aggregate_cutoff_sensitivity(
     logger.info(f"Saved: {cutoff_csv.name} ({len(df_cutoff)} rows)")
     
     # Aggregate by target and cutoff
-    group_keys = ["target", "method", "representation", "cutoff_nM"]
+    group_keys = ["target", "method", "representation", "cutoff_nM", "natural_mf_size"]
     agg_dict = {
         "n_mf": "mean",
         "ef_1%": ["mean", "sem", "std"],
