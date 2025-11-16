@@ -978,13 +978,12 @@ def plot_stratified_cross_target(
     # Aggregate by target
     df_stratified["model_key"] = df_stratified["method"] + "_" + df_stratified["representation"]
     
-    group_keys = ["target", "method", "representation", "model_key"]
+    group_keys = ["target", "method", "representation", "model_key", "natural_mf_size"]
     agg_dict = {
         "ef_1%_overall": ["mean", "sem"],
         "ef_1%_high": ["mean", "sem"],
         "ef_1%_medium": ["mean", "sem"],
         "ef_1%_weak": ["mean", "sem"],
-        "natural_mf_size": "first",
     }
     
     df_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
