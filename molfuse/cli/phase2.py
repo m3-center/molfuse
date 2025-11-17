@@ -114,227 +114,227 @@ def main() -> None:
             logger.info(f"Processing {model_key}: {model_info['run_name']} (replicate)")
             logger.info("=" * 80)
 
-        phase1_run_dir = Path(model_info["run_dir"])
+            phase1_run_dir = Path(model_info["run_dir"])
 
-        # Load embeddings (NO re-projection)
-        logger.info("Loading Phase 1 embeddings (NO re-projection)")
-        emb_mf = pd.read_csv(phase1_run_dir / "artifacts" / "embedding_mf.csv")
-        emb_zinc = pd.read_csv(phase1_run_dir / "artifacts" / "embedding_zinc.csv")
-        emb_act = pd.read_csv(phase1_run_dir / "artifacts" / "embedding_actives.csv")
+            # Load embeddings (NO re-projection)
+            logger.info("Loading Phase 1 embeddings (NO re-projection)")
+            emb_mf = pd.read_csv(phase1_run_dir / "artifacts" / "embedding_mf.csv")
+            emb_zinc = pd.read_csv(phase1_run_dir / "artifacts" / "embedding_zinc.csv")
+            emb_act = pd.read_csv(phase1_run_dir / "artifacts" / "embedding_actives.csv")
 
-        # Extract coordinate columns
-        z_cols = [c for c in emb_mf.columns if c.startswith("z")]
-        Z_mf_full = emb_mf[z_cols].to_numpy(dtype=float)
-        Z_zinc = emb_zinc[z_cols].to_numpy(dtype=float)
-        Z_act = emb_act[z_cols].to_numpy(dtype=float)
+            # Extract coordinate columns
+            z_cols = [c for c in emb_mf.columns if c.startswith("z")]
+            Z_mf_full = emb_mf[z_cols].to_numpy(dtype=float)
+            Z_zinc = emb_zinc[z_cols].to_numpy(dtype=float)
+            Z_act = emb_act[z_cols].to_numpy(dtype=float)
 
-        logger.info(f"Loaded embeddings: MF={len(Z_mf_full)}, ZINC={len(Z_zinc)}, Actives={len(Z_act)}")
+            logger.info(f"Loaded embeddings: MF={len(Z_mf_full)}, ZINC={len(Z_zinc)}, Actives={len(Z_act)}")
 
-        # Load MF source CSV to get affinity column
-        mf_csv_path = Path(model_info["mf_csv"])
-        if not mf_csv_path.exists():
-            logger.error(f"MF source CSV not found: {mf_csv_path}")
-            continue
+            # Load MF source CSV to get affinity column
+            mf_csv_path = Path(model_info["mf_csv"])
+            if not mf_csv_path.exists():
+                logger.error(f"MF source CSV not found: {mf_csv_path}")
+                continue
 
-        logger.info(f"Loading MF source CSV: {mf_csv_path}")
-        df_mf_source = pd.read_csv(mf_csv_path, low_memory=False)
+            logger.info(f"Loading MF source CSV: {mf_csv_path}")
+            df_mf_source = pd.read_csv(mf_csv_path, low_memory=False)
 
-        # Check for affinity column
-        if "Standard Value (nM)" not in df_mf_source.columns:
-            logger.warning(f"No 'Standard Value (nM)' column in MF source; cannot apply cutoffs. Skipping.")
-            continue
+            # Check for affinity column
+            if "Standard Value (nM)" not in df_mf_source.columns:
+                logger.warning(f"No 'Standard Value (nM)' column in MF source; cannot apply cutoffs. Skipping.")
+                continue
 
-        # Match MF source rows to embedding rows by SMILES (preferred) or Compound ID
-        # Phase 1 has filtered/deduplicated the MF data, so we need to match rows
-        smiles_col_emb = None
-        for col in ["canonical_smiles", "SMILES"]:
-            if col in emb_mf.columns:
-                smiles_col_emb = col
-                break
-        
-        id_col_emb = "Compound ChEMBL ID" if "Compound ChEMBL ID" in emb_mf.columns else None
-
-        if not smiles_col_emb and not id_col_emb:
-            logger.error(f"No SMILES or Compound ID column in embedding; cannot match to source. Skipping {model_key}.")
-            continue
-
-        # Try matching by SMILES first
-        if smiles_col_emb:
-            smiles_col_src = None
+            # Match MF source rows to embedding rows by SMILES (preferred) or Compound ID
+            # Phase 1 has filtered/deduplicated the MF data, so we need to match rows
+            smiles_col_emb = None
             for col in ["canonical_smiles", "SMILES"]:
-                if col in df_mf_source.columns:
-                    smiles_col_src = col
+                if col in emb_mf.columns:
+                    smiles_col_emb = col
                     break
             
-            if smiles_col_src:
-                logger.info(f"Matching MF rows by SMILES ({smiles_col_emb} in embedding, {smiles_col_src} in source)")
+            id_col_emb = "Compound ChEMBL ID" if "Compound ChEMBL ID" in emb_mf.columns else None
+
+            if not smiles_col_emb and not id_col_emb:
+                logger.error(f"No SMILES or Compound ID column in embedding; cannot match to source. Skipping.")
+                continue
+
+            # Try matching by SMILES first
+            if smiles_col_emb:
+                smiles_col_src = None
+                for col in ["canonical_smiles", "SMILES"]:
+                    if col in df_mf_source.columns:
+                        smiles_col_src = col
+                        break
                 
-                # Deduplicate source by SMILES: use median affinity aggregation (matching Phase 1 logic)
-                logger.info("Deduplicating source CSV by SMILES (aggregating to median affinity per compound, matching Phase 1)")
+                if smiles_col_src:
+                    logger.info(f"Matching MF rows by SMILES ({smiles_col_emb} in embedding, {smiles_col_src} in source)")
+                    
+                    # Deduplicate source by SMILES: use median affinity aggregation (matching Phase 1 logic)
+                    logger.info("Deduplicating source CSV by SMILES (aggregating to median affinity per compound, matching Phase 1)")
+                    
+                    # Build aggregation dictionary
+                    agg_dict = {}
+                    for col in df_mf_source.columns:
+                        if col == smiles_col_src:
+                            continue  # Skip the groupby column
+                        elif col == "Standard Value (nM)":
+                            agg_dict[col] = "median"  # Median for affinity (robust to outliers)
+                        else:
+                            agg_dict[col] = "first"  # First occurrence for metadata
+                    
+                    df_source_dedup = df_mf_source.groupby(smiles_col_src, as_index=False).agg(agg_dict)
+                    logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique SMILES (median affinity)")
+                    
+                    # Create a mapping: SMILES -> affinity
+                    affinity_map = df_source_dedup.set_index(smiles_col_src)["Standard Value (nM)"]
+                    affinity_nM = emb_mf[smiles_col_emb].map(affinity_map)
+                    
+                    n_matched = affinity_nM.notna().sum()
+                    logger.info(f"Matched {n_matched}/{len(emb_mf)} MF rows by SMILES")
+                    
+                    if n_matched < len(emb_mf) * 0.95:  # Less than 95% matched
+                        logger.warning(f"Only {n_matched}/{len(emb_mf)} rows matched; some affinity data may be missing")
+                else:
+                    logger.error(f"SMILES column not found in MF source; cannot match. Skipping.")
+                    continue
+            elif id_col_emb and "Compound ChEMBL ID" in df_mf_source.columns:
+                logger.info(f"Matching MF rows by Compound ChEMBL ID")
+                
+                # Deduplicate source by ChEMBL ID: use median affinity aggregation (matching Phase 1 logic)
+                logger.info("Deduplicating source CSV by ChEMBL ID (aggregating to median affinity per compound, matching Phase 1)")
                 
                 # Build aggregation dictionary
                 agg_dict = {}
                 for col in df_mf_source.columns:
-                    if col == smiles_col_src:
+                    if col == "Compound ChEMBL ID":
                         continue  # Skip the groupby column
                     elif col == "Standard Value (nM)":
                         agg_dict[col] = "median"  # Median for affinity (robust to outliers)
                     else:
                         agg_dict[col] = "first"  # First occurrence for metadata
                 
-                df_source_dedup = df_mf_source.groupby(smiles_col_src, as_index=False).agg(agg_dict)
-                logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique SMILES (median affinity)")
+                df_source_dedup = df_mf_source.groupby("Compound ChEMBL ID", as_index=False).agg(agg_dict)
+                logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique ChEMBL IDs (median affinity)")
                 
-                # Create a mapping: SMILES -> affinity
-                affinity_map = df_source_dedup.set_index(smiles_col_src)["Standard Value (nM)"]
-                affinity_nM = emb_mf[smiles_col_emb].map(affinity_map)
+                affinity_map = df_source_dedup.set_index("Compound ChEMBL ID")["Standard Value (nM)"]
+                affinity_nM = emb_mf[id_col_emb].map(affinity_map)
                 
                 n_matched = affinity_nM.notna().sum()
-                logger.info(f"Matched {n_matched}/{len(emb_mf)} MF rows by SMILES")
+                logger.info(f"Matched {n_matched}/{len(emb_mf)} MF rows by Compound ID")
                 
-                if n_matched < len(emb_mf) * 0.95:  # Less than 95% matched
+                if n_matched < len(emb_mf) * 0.95:
                     logger.warning(f"Only {n_matched}/{len(emb_mf)} rows matched; some affinity data may be missing")
             else:
-                logger.error(f"SMILES column not found in MF source; cannot match. Skipping {model_key}.")
+                logger.error(f"Cannot match MF rows (no common key between embedding and source). Skipping.")
                 continue
-        elif id_col_emb and "Compound ChEMBL ID" in df_mf_source.columns:
-            logger.info(f"Matching MF rows by Compound ChEMBL ID")
-            
-            # Deduplicate source by ChEMBL ID: use median affinity aggregation (matching Phase 1 logic)
-            logger.info("Deduplicating source CSV by ChEMBL ID (aggregating to median affinity per compound, matching Phase 1)")
-            
-            # Build aggregation dictionary
-            agg_dict = {}
-            for col in df_mf_source.columns:
-                if col == "Compound ChEMBL ID":
-                    continue  # Skip the groupby column
-                elif col == "Standard Value (nM)":
-                    agg_dict[col] = "median"  # Median for affinity (robust to outliers)
-                else:
-                    agg_dict[col] = "first"  # First occurrence for metadata
-            
-            df_source_dedup = df_mf_source.groupby("Compound ChEMBL ID", as_index=False).agg(agg_dict)
-            logger.info(f"Source rows: {len(df_mf_source)} → {len(df_source_dedup)} unique ChEMBL IDs (median affinity)")
-            
-            affinity_map = df_source_dedup.set_index("Compound ChEMBL ID")["Standard Value (nM)"]
-            affinity_nM = emb_mf[id_col_emb].map(affinity_map)
-            
-            n_matched = affinity_nM.notna().sum()
-            logger.info(f"Matched {n_matched}/{len(emb_mf)} MF rows by Compound ID")
-            
-            if n_matched < len(emb_mf) * 0.95:
-                logger.warning(f"Only {n_matched}/{len(emb_mf)} rows matched; some affinity data may be missing")
-        else:
-            logger.error(f"Cannot match MF rows (no common key between embedding and source). Skipping {model_key}.")
-            continue
 
-        affinity_nM = pd.to_numeric(affinity_nM, errors="coerce")
+            affinity_nM = pd.to_numeric(affinity_nM, errors="coerce")
 
-        # Build evaluation set labels (same for all cutoffs)
-        labels = np.concatenate([np.ones(len(Z_act), dtype=int), np.zeros(len(Z_zinc), dtype=int)])
+            # Build evaluation set labels (same for all cutoffs)
+            labels = np.concatenate([np.ones(len(Z_act), dtype=int), np.zeros(len(Z_zinc), dtype=int)])
 
-        # Get actives' pActivity for Spearman (if available)
-        if "Standard Value (nM)" in df_mf_source.columns:
-            # Try to read actives source to get pActivity
-            # For now, assume we can derive from ranked_scores.csv if it has labels
-            # Alternatively, reload actives CSV if path is in config
-            # Simplified: skip Spearman if actives lack affinity column
-            pact_actives = None  # Placeholder; could be loaded from actives CSV if available
-        else:
-            pact_actives = None
+            # Get actives' pActivity for Spearman (if available)
+            if "Standard Value (nM)" in df_mf_source.columns:
+                # Try to read actives source to get pActivity
+                # For now, assume we can derive from ranked_scores.csv if it has labels
+                # Alternatively, reload actives CSV if path is in config
+                # Simplified: skip Spearman if actives lack affinity column
+                pact_actives = None  # Placeholder; could be loaded from actives CSV if available
+            else:
+                pact_actives = None
 
-        # Create model-specific output directory
-        model_out_dir = ws["base"] / model_info["run_name"]
-        model_out_dir.mkdir(exist_ok=True)
+            # Create model-specific output directory
+            model_out_dir = ws["base"] / model_info["run_name"]
+            model_out_dir.mkdir(exist_ok=True)
 
-        # Process each cutoff
-        for cutoff_nM in cutoff_list:
-            logger.info("-" * 80)
-            logger.info(f"Cutoff: {cutoff_nM} nM")
+            # Process each cutoff
+            for cutoff_nM in cutoff_list:
+                logger.info("-" * 80)
+                logger.info(f"Cutoff: {cutoff_nM} nM")
 
-            # Filter MF by affinity
-            mask_cutoff = affinity_nM <= cutoff_nM
-            mask_cutoff = mask_cutoff.fillna(False).to_numpy(dtype=bool)
-            Z_mf_filtered = Z_mf_full[mask_cutoff]
+                # Filter MF by affinity
+                mask_cutoff = affinity_nM <= cutoff_nM
+                mask_cutoff = mask_cutoff.fillna(False).to_numpy(dtype=bool)
+                Z_mf_filtered = Z_mf_full[mask_cutoff]
 
-            n_mf_passing = int(mask_cutoff.sum())
-            logger.info(f"MF after cutoff: {n_mf_passing}/{len(Z_mf_full)}")
+                n_mf_passing = int(mask_cutoff.sum())
+                logger.info(f"MF after cutoff: {n_mf_passing}/{len(Z_mf_full)}")
 
-            if n_mf_passing == 0:
-                logger.warning(f"No MF compounds pass cutoff {cutoff_nM} nM; using full MF as fallback")
-                Z_mf_filtered = Z_mf_full
+                if n_mf_passing == 0:
+                    logger.warning(f"No MF compounds pass cutoff {cutoff_nM} nM; using full MF as fallback")
+                    Z_mf_filtered = Z_mf_full
 
-            # Re-score evaluation set (actives + ZINC) via 1-NN to filtered MF
-            Z_eval = np.vstack([Z_act, Z_zinc])
-            scores, distances = nn_min_distance_scores(Z_mf_filtered, Z_eval)
-            scores[np.isclose(scores, 0.0)] = 0.0
-            distances[np.isclose(distances, 0.0)] = 0.0
+                # Re-score evaluation set (actives + ZINC) via 1-NN to filtered MF
+                Z_eval = np.vstack([Z_act, Z_zinc])
+                scores, distances = nn_min_distance_scores(Z_mf_filtered, Z_eval)
+                scores[np.isclose(scores, 0.0)] = 0.0
+                distances[np.isclose(distances, 0.0)] = 0.0
 
-            # Compute metrics
-            ef1 = ef_at_k_percent(scores, labels, 1.0)
-            ef5 = ef_at_k_percent(scores, labels, 5.0)
-            ef10 = ef_at_k_percent(scores, labels, 10.0)
-            roc = roc_auc(labels, scores)
-            pr = pr_auc(labels, scores)
+                # Compute metrics
+                ef1 = ef_at_k_percent(scores, labels, 1.0)
+                ef5 = ef_at_k_percent(scores, labels, 5.0)
+                ef10 = ef_at_k_percent(scores, labels, 10.0)
+                roc = roc_auc(labels, scores)
+                pr = pr_auc(labels, scores)
 
-            # Spearman rho (placeholder; would need actives' affinity data)
-            # For now, set to NaN
-            rho, rho_p = np.nan, np.nan
+                # Spearman rho (placeholder; would need actives' affinity data)
+                # For now, set to NaN
+                rho, rho_p = np.nan, np.nan
 
-            metrics = {
-                "roc_auc": roc,
-                "pr_auc": pr,
-                "ef_1%": ef1,
-                "ef_5%": ef5,
-                "ef_10%": ef10,
-                "spearman_rho": rho,
-                "spearman_p": rho_p,
-                "n_actives": int(len(Z_act)),
-                "n_zinc_eval": int(len(Z_zinc)),
-                "n_mf_for_scoring": int(n_mf_passing),
-                "affinity_cutoff_nM": cutoff_nM,
-                "method": model_info["method"],
-                "representation": model_info["representation"],
-                "dim": model_info["dim"],
-                "phase1_run": model_info["run_name"],
-            }
+                metrics = {
+                    "roc_auc": roc,
+                    "pr_auc": pr,
+                    "ef_1%": ef1,
+                    "ef_5%": ef5,
+                    "ef_10%": ef10,
+                    "spearman_rho": rho,
+                    "spearman_p": rho_p,
+                    "n_actives": int(len(Z_act)),
+                    "n_zinc_eval": int(len(Z_zinc)),
+                    "n_mf_for_scoring": int(n_mf_passing),
+                    "affinity_cutoff_nM": cutoff_nM,
+                    "method": model_info["method"],
+                    "representation": model_info["representation"],
+                    "dim": model_info["dim"],
+                    "phase1_run": model_info["run_name"],
+                }
 
-            logger.info(f"Metrics: EF@1%={ef1:.2f}, EF@5%={ef5:.2f}, EF@10%={ef10:.2f}, ROC-AUC={roc:.4f}, PR-AUC={pr:.4f}")
+                logger.info(f"Metrics: EF@1%={ef1:.2f}, EF@5%={ef5:.2f}, EF@10%={ef10:.2f}, ROC-AUC={roc:.4f}, PR-AUC={pr:.4f}")
 
-            # Save per-cutoff outputs
-            cutoff_dir = model_out_dir / f"cutoff_{int(cutoff_nM)}nM"
-            cutoff_dir.mkdir(exist_ok=True)
+                # Save per-cutoff outputs
+                cutoff_dir = model_out_dir / f"cutoff_{int(cutoff_nM)}nM"
+                cutoff_dir.mkdir(exist_ok=True)
 
-            (cutoff_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+                (cutoff_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
-            # Ranked scores with compound identifiers
-            # Concatenate actives + ZINC identifiers (match embedding order)
-            id_cols_act = [c for c in emb_act.columns if c in ["SMILES", "canonical_smiles", "Compound ChEMBL ID"]]
-            id_cols_zinc = [c for c in emb_zinc.columns if c in ["SMILES", "canonical_smiles", "Compound ChEMBL ID", "zinc_id"]]
-            
-            # Build identifier DataFrames
-            ids_act = emb_act[id_cols_act].reset_index(drop=True) if id_cols_act else pd.DataFrame(index=range(len(emb_act)))
-            ids_zinc = emb_zinc[id_cols_zinc].reset_index(drop=True) if id_cols_zinc else pd.DataFrame(index=range(len(emb_zinc)))
-            
-            # Concatenate: actives first, then ZINC (matches label order)
-            ids_combined = pd.concat([ids_act, ids_zinc], ignore_index=True)
-            
-            # Build ranked DataFrame with identifiers
-            ranked = pd.DataFrame({
-                "score": scores,
-                "distance": distances,
-                "label": labels,
-            })
-            
-            # Add identifier columns
-            for col in ids_combined.columns:
-                ranked[col] = ids_combined[col].values
-            
-            # Sort by score
-            ranked.sort_values("score", ascending=False, inplace=True)
-            ranked.to_csv(cutoff_dir / "ranked_scores.csv", index=False)
+                # Ranked scores with compound identifiers
+                # Concatenate actives + ZINC identifiers (match embedding order)
+                id_cols_act = [c for c in emb_act.columns if c in ["SMILES", "canonical_smiles", "Compound ChEMBL ID"]]
+                id_cols_zinc = [c for c in emb_zinc.columns if c in ["SMILES", "canonical_smiles", "Compound ChEMBL ID", "zinc_id"]]
+                
+                # Build identifier DataFrames
+                ids_act = emb_act[id_cols_act].reset_index(drop=True) if id_cols_act else pd.DataFrame(index=range(len(emb_act)))
+                ids_zinc = emb_zinc[id_cols_zinc].reset_index(drop=True) if id_cols_zinc else pd.DataFrame(index=range(len(emb_zinc)))
+                
+                # Concatenate: actives first, then ZINC (matches label order)
+                ids_combined = pd.concat([ids_act, ids_zinc], ignore_index=True)
+                
+                # Build ranked DataFrame with identifiers
+                ranked = pd.DataFrame({
+                    "score": scores,
+                    "distance": distances,
+                    "label": labels,
+                })
+                
+                # Add identifier columns
+                for col in ids_combined.columns:
+                    ranked[col] = ids_combined[col].values
+                
+                # Sort by score
+                ranked.sort_values("score", ascending=False, inplace=True)
+                ranked.to_csv(cutoff_dir / "ranked_scores.csv", index=False)
 
-            logger.info(f"Saved outputs to {cutoff_dir}")
+                logger.info(f"Saved outputs to {cutoff_dir}")
 
     # Summary
     summary = {
