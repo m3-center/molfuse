@@ -180,10 +180,9 @@ def generate_phase3_configs(
         dim = best_config["dim"]
         umap_params = best_config.get("umap_params")
         
-        # Get method-specific cutoff (from Phase 2 results)
-        # phase2_cutoffs has keys like "pca_features", values like {"cutoff_nM": 1000, "ef1": 25.07, ...}
-        cutoff_data = phase2_cutoffs.get(model_key, {"cutoff_nM": 100000})
-        cutoff_nM = cutoff_data["cutoff_nM"]
+        # Use optimal cutoff from Phase 2: 100 nM (best performance across all methods)
+        # Note: This is used for SCORING only, not for filtering the training MF cloud
+        cutoff_nM = 100
         
         for mf_size in mf_sizes:
             for replicate in replicates:

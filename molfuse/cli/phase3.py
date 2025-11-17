@@ -278,59 +278,45 @@ def to_pactivity_from_nM(affinity_nM: pd.Series) -> pd.Series:
 def subsample_mf_cloud(
     df_mf: pd.DataFrame,
     target_size: int,
-    affinity_cutoff_nM: float,
     random_seed: int,
     logger: logging.Logger
 ) -> pd.DataFrame:
     """
-    Subsample MF cloud to target size.
+    Randomly subsample MF cloud to target size (NO affinity filtering).
+    
+    The affinity_cutoff_nM will be applied later for SCORING ONLY.
+    This ensures the similarity space is trained on full chemical diversity.
     
     Strategy:
-    1. Filter by affinity cutoff (≤ cutoff_nM)
-    2. If filtered size > target_size, randomly sample target_size compounds
-    3. If filtered size ≤ target_size, return all filtered compounds
+    1. If target_size is "full", return entire MF cloud
+    2. Otherwise, randomly sample target_size compounds from full MF cloud
     
     Args:
         df_mf: Full MF cloud DataFrame
-        target_size: Desired MF cloud size (if "full", return all filtered)
-        affinity_cutoff_nM: Affinity cutoff in nM
+        target_size: Desired MF cloud size (if "full", return all)
         random_seed: Random seed for reproducibility
         logger: Logger instance
     
     Returns:
         Subsampled MF DataFrame
     """
-    # Filter by affinity cutoff
-    affinity_col = "Standard Value (nM)"
-    if affinity_col not in df_mf.columns:
-        logger.error(f"Column '{affinity_col}' not found in MF data")
-        raise ValueError(f"Missing affinity column: {affinity_col}")
+    n_total = len(df_mf)
     
-    affinity = pd.to_numeric(df_mf[affinity_col], errors="coerce")
-    mask = affinity <= affinity_cutoff_nM
-    df_filtered = df_mf[mask].copy()
-    
-    n_filtered = len(df_filtered)
-    logger.info(f"MF after affinity cutoff (≤ {affinity_cutoff_nM} nM): {n_filtered:,} compounds")
-    
-    if n_filtered == 0:
-        logger.error("MF cloud is empty after affinity filtering!")
-        raise ValueError("Empty MF cloud after cutoff")
-    
-    # Subsample if target_size is specified and < filtered size
+    # Return full MF cloud if requested
     if isinstance(target_size, str) and target_size.lower() == "full":
-        logger.info(f"Using full MF cloud (size = {n_filtered:,})")
-        return df_filtered
+        logger.info(f"Using full MF cloud (size = {n_total:,})")
+        return df_mf.copy()
     
     target_size = int(target_size)
     
-    if target_size >= n_filtered:
-        logger.info(f"Target size ({target_size:,}) >= filtered size ({n_filtered:,}), using all")
-        return df_filtered
+    # Return all if target >= total
+    if target_size >= n_total:
+        logger.info(f"Target size ({target_size:,}) >= total size ({n_total:,}), using all")
+        return df_mf.copy()
     
-    # Random subsample
-    logger.info(f"Subsampling MF cloud: {n_filtered:,} → {target_size:,} (seed={random_seed})")
-    df_subsampled = df_filtered.sample(n=target_size, random_state=random_seed, replace=False)
+    # Random subsample from FULL MF cloud (not pre-filtered by affinity)
+    logger.info(f"Randomly subsampling MF cloud: {n_total:,} → {target_size:,} (seed={random_seed})")
+    df_subsampled = df_mf.sample(n=target_size, random_state=random_seed, replace=False)
     df_subsampled = df_subsampled.reset_index(drop=True)
     
     return df_subsampled
@@ -413,14 +399,15 @@ def run_phase3(config_path: Path, workspace_dir: Path) -> None:
     df_zinc = remove_overlap_by_smiles(df_zinc, get_smiles_col(df_zinc), df_mf[smiles_col_mf])
     
     # ========================================================================
-    # Step 2: Subsample MF Cloud
+    # Step 2: Subsample MF Cloud (NO affinity filtering)
     # ========================================================================
-    logger.info("\n[2/8] Subsampling MF cloud...")
+    logger.info("\n[2/8] Subsampling MF cloud (random sampling, no affinity filter)...")
     
-    affinity_cutoff_nM = cfg.get("affinity_cutoff_nM", 100000)
-    df_mf = subsample_mf_cloud(df_mf, mf_size, affinity_cutoff_nM, random_seed, logger)
+    # Subsample WITHOUT affinity filtering (will be applied for scoring only)
+    df_mf = subsample_mf_cloud(df_mf, mf_size, random_seed, logger)
     
-    logger.info(f"Final MF cloud size: {len(df_mf):,} compounds")
+    logger.info(f"MF cloud size after subsampling: {len(df_mf):,} compounds")
+    logger.info("Note: Affinity cutoff will be applied for SCORING only (not training)")
     
     # ========================================================================
     # Step 3: Feature Selection and Preprocessing
@@ -550,9 +537,26 @@ def run_phase3(config_path: Path, workspace_dir: Path) -> None:
     logger.info(f"Saved embedding_actives.csv ({len(emb_act):,} rows)")
     
     # ========================================================================
-    # Step 6: Scoring
+    # Step 6: Scoring (Apply affinity cutoff for scoring only)
     # ========================================================================
     logger.info("\n[6/8] Scoring evaluation set...")
+    
+    # Apply affinity cutoff to MF for scoring only (if column exists)
+    affinity_cutoff_nM = cfg.get("affinity_cutoff_nM", 100000)
+    
+    if "Standard Value (nM)" in df_mf.columns:
+        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+        Z_mf_for_scoring = Z_mf[mask_cut.to_numpy(dtype=bool)]
+        n_mf_scoring = len(Z_mf_for_scoring)
+        logger.info(f"MF for scoring (≤ {affinity_cutoff_nM} nM): {n_mf_scoring:,}/{len(Z_mf):,} compounds")
+        
+        if n_mf_scoring == 0:
+            logger.warning(f"No MF compounds pass cutoff {affinity_cutoff_nM} nM; using full MF as fallback")
+            Z_mf_for_scoring = Z_mf
+    else:
+        # No cutoff column; proceed without filtering
+        Z_mf_for_scoring = Z_mf
+        logger.info(f"MF for scoring: {len(Z_mf_for_scoring):,} compounds (no affinity filter)")
     
     # Build evaluation set: actives + ZINC
     Z_eval = np.vstack([np.asarray(Z_act), np.asarray(Z_zinc)])
@@ -563,8 +567,8 @@ def run_phase3(config_path: Path, workspace_dir: Path) -> None:
     
     logger.info(f"Evaluation set: {len(Z_eval):,} compounds ({len(Z_act):,} actives, {len(Z_zinc):,} ZINC)")
     
-    # 1-NN scoring against MF cloud
-    scores, distances = nn_min_distance_scores(Z_mf, Z_eval)
+    # 1-NN scoring against MF cloud (filtered by cutoff)
+    scores, distances = nn_min_distance_scores(Z_mf_for_scoring, Z_eval)
     
     logger.info(f"Score range: [{scores.min():.4f}, {scores.max():.4f}]")
     logger.info(f"Distance range: [{distances.min():.4f}, {distances.max():.4f}]")

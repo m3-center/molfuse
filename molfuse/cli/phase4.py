@@ -327,26 +327,12 @@ def run_phase4(config_path: Path, workspace_dir: Path) -> None:
     df_zinc = remove_overlap_by_smiles(df_zinc, get_smiles_col(df_zinc), df_mf[smiles_col_mf])
     
     # ========================================================================
-    # Step 2: Apply Affinity Cutoff (No Subsampling)
+    # Step 2: NO Affinity Filtering (Use Full MF Cloud for Training)
     # ========================================================================
-    logger.info("\n[2/8] Applying affinity cutoff to MF cloud...")
+    logger.info("\n[2/8] Using full MF cloud for training (affinity cutoff will be applied for scoring only)...")
     
-    affinity_cutoff_nM = cfg.get("affinity_cutoff_nM", 100000)
-    affinity_col = "Standard Value (nM)"
-    
-    if affinity_col in df_mf.columns:
-        affinity = pd.to_numeric(df_mf[affinity_col], errors="coerce")
-        mask = affinity <= affinity_cutoff_nM
-        df_mf = df_mf[mask].copy()
-        logger.info(f"MF after affinity cutoff (≤ {affinity_cutoff_nM} nM): {len(df_mf):,} compounds")
-    else:
-        logger.warning(f"No affinity column found, using full MF cloud")
-    
-    if len(df_mf) == 0:
-        logger.error("MF cloud is empty after affinity filtering!")
-        raise ValueError("Empty MF cloud after cutoff")
-    
-    logger.info(f"Final MF cloud size: {len(df_mf):,} compounds (full natural size)")
+    logger.info(f"MF cloud size: {len(df_mf):,} compounds (full natural size)")
+    logger.info("Note: Affinity cutoff will be applied for SCORING only (not training)")
     
     # ========================================================================
     # Step 3: Feature Selection and Preprocessing
@@ -498,9 +484,26 @@ def run_phase4(config_path: Path, workspace_dir: Path) -> None:
     logger.info(f"Saved embedding_actives.csv ({len(emb_act):,} rows)")
     
     # ========================================================================
-    # Step 6: Scoring
+    # Step 6: Scoring (Apply affinity cutoff for scoring only)
     # ========================================================================
     logger.info("\n[6/8] Scoring evaluation set...")
+    
+    # Apply affinity cutoff to MF for scoring only (if column exists)
+    affinity_cutoff_nM = cfg.get("affinity_cutoff_nM", 100000)
+    
+    if "Standard Value (nM)" in df_mf.columns:
+        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+        Z_mf_for_scoring = Z_mf[mask_cut.to_numpy(dtype=bool)]
+        n_mf_scoring = len(Z_mf_for_scoring)
+        logger.info(f"MF for scoring (≤ {affinity_cutoff_nM} nM): {n_mf_scoring:,}/{len(Z_mf):,} compounds")
+        
+        if n_mf_scoring == 0:
+            logger.warning(f"No MF compounds pass cutoff {affinity_cutoff_nM} nM; using full MF as fallback")
+            Z_mf_for_scoring = Z_mf
+    else:
+        # No cutoff column; proceed without filtering
+        Z_mf_for_scoring = Z_mf
+        logger.info(f"MF for scoring: {len(Z_mf_for_scoring):,} compounds (no affinity filter)")
     
     # Build evaluation set: actives + ZINC
     Z_eval = np.vstack([np.asarray(Z_act), np.asarray(Z_zinc)])
@@ -511,8 +514,8 @@ def run_phase4(config_path: Path, workspace_dir: Path) -> None:
     
     logger.info(f"Evaluation set: {len(Z_eval):,} compounds ({len(Z_act):,} actives, {len(Z_zinc):,} ZINC)")
     
-    # 1-NN scoring against MF cloud
-    scores, distances = nn_min_distance_scores(Z_mf, Z_eval)
+    # 1-NN scoring against MF cloud (filtered by cutoff)
+    scores, distances = nn_min_distance_scores(Z_mf_for_scoring, Z_eval)
     
     logger.info(f"Score range: [{scores.min():.4f}, {scores.max():.4f}]")
     logger.info(f"Distance range: [{distances.min():.4f}, {distances.max():.4f}]")
