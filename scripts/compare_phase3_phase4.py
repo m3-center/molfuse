@@ -65,6 +65,11 @@ def plot_phase3_phase4_overlay_overall(
         (df_phase4["representation"] == "features")
     ].copy()
     
+    # Extract target_short from target_kw if target_short is NaN
+    # target_kw format: "KW-0808_Transferase" -> target_short: "Transferase"
+    if p4_umap_feat["target_short"].isna().all():
+        p4_umap_feat["target_short"] = p4_umap_feat["target_kw"].str.split("_").str[1]
+    
     fig, ax = plt.subplots(figsize=(12, 7))
     
     # Phase 3: MF ablation curve (line with error bars)
@@ -170,15 +175,20 @@ def plot_phase3_phase4_overlay_high_potency(
     target_mapping = df_phase4_agg[
         (df_phase4_agg["method"] == "umap") & 
         (df_phase4_agg["representation"] == "features")
-    ][["target", "target_short", "natural_mf_size"]].drop_duplicates().copy()
+    ][["target", "target_kw", "target_short", "natural_mf_size"]].drop_duplicates().copy()
+    
+    # Extract target_short from target_kw if target_short is NaN
+    # target_kw format: "KW-0808_Transferase" -> target_short: "Transferase"
+    if target_mapping["target_short"].isna().all():
+        print("  Extracting target_short from target_kw...")
+        target_mapping["target_short"] = target_mapping["target_kw"].str.split("_").str[1]
     
     # Ensure target column is string type in both DataFrames
     p4_umap_feat["target"] = p4_umap_feat["target"].astype(str).str.strip()
     target_mapping["target"] = target_mapping["target"].astype(str).str.strip()
     
     print(f"  Target mapping: {len(target_mapping)} rows")
-    print(f"  Sample from mapping:\n{target_mapping.head()}")
-    print(f"  Sample from stratified:\n{p4_umap_feat[['target', 'ef_1%_high']].head()}")
+    print(f"  Sample from mapping:\n{target_mapping[['target', 'target_short', 'natural_mf_size']].head()}")
     
     # Merge target_short and natural_mf_size into stratified data
     p4_umap_feat = p4_umap_feat.merge(
