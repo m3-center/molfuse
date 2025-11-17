@@ -166,19 +166,29 @@ def plot_phase3_phase4_overlay_high_potency(
     ].copy()
     
     # Get target_short mapping from aggregated DataFrame
-    target_mapping = df_phase4_agg[["target", "target_short", "natural_mf_size"]].drop_duplicates()
+    # Use only UMAP/features from aggregated to ensure we have the right mapping
+    target_mapping = df_phase4_agg[
+        (df_phase4_agg["method"] == "umap") & 
+        (df_phase4_agg["representation"] == "features")
+    ][["target", "target_short", "natural_mf_size"]].drop_duplicates()
+    
+    print(f"  Target mapping: {len(target_mapping)} rows")
+    print(f"  Targets in mapping: {sorted(target_mapping['target'].unique().tolist())}")
+    print(f"  Targets in stratified: {sorted(p4_umap_feat['target'].unique().tolist())}")
     
     # Merge target_short and natural_mf_size into stratified data
     p4_umap_feat = p4_umap_feat.merge(
-        target_mapping, 
+        target_mapping[["target", "target_short", "natural_mf_size"]], 
         on="target", 
         how="left",
-        suffixes=("", "_agg")  # Keep original columns, add _agg suffix to duplicates
+        suffixes=("_strat", "")  # Keep aggregated columns without suffix
     )
     
-    # Use the merged natural_mf_size from aggregated data
-    if "natural_mf_size_agg" in p4_umap_feat.columns:
-        p4_umap_feat["natural_mf_size"] = p4_umap_feat["natural_mf_size_agg"]
+    # Check for NaN values after merge
+    n_nan = p4_umap_feat["target_short"].isna().sum()
+    if n_nan > 0:
+        print(f"  WARNING: {n_nan} rows have NaN target_short after merge")
+        print(f"  Rows with NaN:\n{p4_umap_feat[p4_umap_feat['target_short'].isna()][['target', 'target_short']]}")
     
     # Aggregate Phase 4 by target_short (functional category)
     p4_agg = p4_umap_feat.groupby(["target_short", "natural_mf_size"], dropna=False).agg({
