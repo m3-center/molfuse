@@ -344,21 +344,25 @@ def compute_bedroc_ief_from_ranked_scores(cutoff_dir: Path) -> Dict[str, float]:
 
 def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_tiers: bool = True) -> pd.DataFrame:
     """
-    Aggregate Phase 2 metrics across models and cutoffs.
+    Aggregate Phase 2 metrics across models, cutoffs, and replicates.
 
     Args:
         phase2_dir: Phase 2 output directory
         phase1_workspace: Phase 1 workspace for loading affinity data
         compute_tiers: If True, compute tier-stratified metrics
 
-    Returns DataFrame with columns: model_key, method, representation, dim, cutoff_nM, ef1, ef5, ef10, roc_auc, pr_auc, n_mf,
+    Returns DataFrame with columns: model_key, method, representation, dim, cutoff_nM, replicate,
+                                     ef1, ef5, ef10, roc_auc, pr_auc, n_mf,
                                      ef1_high, ef1_medium, ef1_weak, n_actives_high, n_actives_medium, n_actives_weak
+                                     
+    Note: Returns one row per (model_key, cutoff, replicate) combination.
+          For aggregated statistics (mean ± SEM), call aggregate_replicates() on this output.
     """
     rows: List[Dict] = []
 
-    # Scan for model subdirectories
+    # Scan for model subdirectories (now these are replicate-specific: e.g., ABL1_PCA_features_20d_rep1)
     for model_dir in phase2_dir.iterdir():
-        if not model_dir.is_dir() or model_dir.name in ("logs", "artifacts", "metrics"):
+        if not model_dir.is_dir() or model_dir.name in ("logs", "artifacts", "metrics", "selected_models.json"):
             continue
 
         # Scan for cutoff subdirectories
@@ -375,6 +379,12 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
                     metrics = json.load(f)
             except Exception:
                 continue
+            
+            # Extract replicate number from phase1_run name (e.g., "ABL1_PCA_features_20d_rep4" -> 4)
+            phase1_run = metrics.get("phase1_run", "unknown")
+            import re
+            rep_match = re.search(r'_rep(\d+)$', phase1_run)
+            replicate = int(rep_match.group(1)) if rep_match else None
 
             row = {
                 "model_key": f"{metrics.get('method', 'unknown')}_{metrics.get('representation', 'unknown')}",
@@ -382,13 +392,14 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
                 "representation": metrics.get("representation", "unknown"),
                 "dim": metrics.get("dim", 0),
                 "cutoff_nM": metrics.get("affinity_cutoff_nM", 0),
+                "replicate": replicate,
                 "ef1": metrics.get("ef_1%", 0.0),
                 "ef5": metrics.get("ef_5%", 0.0),
                 "ef10": metrics.get("ef_10%", 0.0),
                 "roc_auc": metrics.get("roc_auc", 0.0),
                 "pr_auc": metrics.get("pr_auc", 0.0),
                 "n_mf": metrics.get("n_mf_for_scoring", 0),
-                "phase1_run": metrics.get("phase1_run", "unknown"),
+                "phase1_run": phase1_run,
             }
             
             # Compute BEDROC and IEF retrospectively from ranked_scores.csv
@@ -397,8 +408,7 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
             
             # Compute tier-stratified metrics if requested
             if compute_tiers:
-                phase1_run = metrics.get("phase1_run", "")
-                if phase1_run:
+                if phase1_run and phase1_run != "unknown":
                     tier_metrics = add_tier_metrics_to_cutoff(cutoff_dir, phase1_workspace, phase1_run)
                     row.update(tier_metrics)
                 else:
@@ -418,26 +428,94 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
     return df
 
 
+def aggregate_replicates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate metrics across replicates, computing mean ± SEM.
+    
+    Groups by (model_key, method, representation, dim, cutoff_nM) and computes:
+    - Mean, SEM, std, count for all numeric metrics
+    - First value for categorical/ID columns
+    
+    Args:
+        df: DataFrame with one row per (model_key, cutoff, replicate)
+    
+    Returns:
+        DataFrame with one row per (model_key, cutoff), containing mean/SEM/std/count columns
+    """
+    # Identify metric columns to aggregate
+    metric_cols = [
+        "ef1", "ef5", "ef10", "roc_auc", "pr_auc", "n_mf",
+        "bedroc_20", "bedroc_160", "ief_20", "ief_160",
+        "ef1_high", "ef1_medium", "ef1_weak",
+        "bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak",
+        "bedroc_160_high", "bedroc_160_medium", "bedroc_160_weak",
+        "ief_20_high", "ief_20_medium", "ief_20_weak",
+        "ief_160_high", "ief_160_medium", "ief_160_weak",
+    ]
+    
+    # Filter to metrics that actually exist in df
+    metric_cols = [c for c in metric_cols if c in df.columns]
+    
+    # Group by configuration
+    group_keys = ["model_key", "method", "representation", "dim", "cutoff_nM"]
+    
+    # Build aggregation dictionary
+    agg_dict = {}
+    for col in metric_cols:
+        agg_dict[col] = ["mean", "sem", "std", "count"]
+    
+    # Add categorical columns (take first value)
+    for col in ["n_actives_high", "n_actives_medium", "n_actives_weak"]:
+        if col in df.columns:
+            agg_dict[col] = "first"
+    
+    # Aggregate
+    df_agg = df.groupby(group_keys, as_index=False).agg(agg_dict)
+    
+    # Flatten multi-level column names
+    df_agg.columns = ['_'.join(col).strip('_') if col[1] else col[0] for col in df_agg.columns.values]
+    
+    return df_agg
+
+
 def plot_cutoff_curves(df: pd.DataFrame, metric_col: str, output_dir: Path, basename: str) -> None:
     """
-    Plot metric vs cutoff curves for each model.
+    Plot metric vs cutoff curves for each model (aggregated across replicates).
 
     Args:
-        df: Aggregated metrics DataFrame
+        df: Aggregated metrics DataFrame (with mean/SEM columns)
         metric_col: Metric column to plot (e.g., "ef1", "ef5", "ef10")
         output_dir: Output directory
         basename: Base filename for saved plots
     """
+    # Check if we have aggregated data (mean column exists)
+    mean_col = f"{metric_col}_mean"
+    sem_col = f"{metric_col}_sem"
+    
+    if mean_col not in df.columns:
+        print(f"WARNING: No aggregated data found for {metric_col}. Skipping plot.")
+        return
+    
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Plot each model as a separate line
+    # Plot each model as a separate line with error bars
     for model_key in df["model_key"].unique():
         subset = df[df["model_key"] == model_key].sort_values("cutoff_nM")
-        ax.plot(subset["cutoff_nM"], subset[metric_col], marker="o", label=model_key, linewidth=2, markersize=6)
+        
+        x = subset["cutoff_nM"].values
+        y = subset[mean_col].values
+        yerr = subset[sem_col].values if sem_col in subset.columns else None
+        
+        # Plot line
+        ax.plot(x, y, marker="o", label=model_key, linewidth=2, markersize=6)
+        
+        # Add error bars if available
+        if yerr is not None:
+            ax.errorbar(x, y, yerr=yerr, fmt='none', capsize=3, alpha=0.5)
 
     ax.set_xscale("log")
     ax.set_xlabel("Affinity Cutoff (nM)", fontsize=12, fontweight="bold")
-    ax.set_ylabel(metric_col.upper().replace("_", " "), fontsize=12, fontweight="bold")
+    ax.set_ylabel(metric_col.upper().replace("_", " ") + " (mean ± SEM)", fontsize=12, fontweight="bold")
     ax.set_title(f"Cutoff Sensitivity: {metric_col.upper()}", fontsize=14, fontweight="bold")
     ax.legend(title="Model", fontsize=9, title_fontsize=10)
     ax.grid(True, alpha=0.3)
@@ -446,26 +524,30 @@ def plot_cutoff_curves(df: pd.DataFrame, metric_col: str, output_dir: Path, base
     print(f"Saved {basename}.png/pdf")
 
 
-
-def identify_best_cutoffs(df: pd.DataFrame, output_dir: Path) -> None:
+def identify_best_cutoffs(df_agg: pd.DataFrame, output_dir: Path) -> None:
     """
-    Identify best cutoff per model based on EF@1%.
+    Identify best cutoff per model based on mean EF@1% across replicates.
     Save as JSON.
+    
+    Args:
+        df_agg: Aggregated DataFrame with mean/SEM columns
     """
     best_cutoffs: Dict[str, Dict] = {}
 
-    for model_key in df["model_key"].unique():
-        subset = df[df["model_key"] == model_key]
-        best_row = subset.loc[subset["ef1"].idxmax()]
+    for model_key in df_agg["model_key"].unique():
+        subset = df_agg[df_agg["model_key"] == model_key]
+        best_row = subset.loc[subset["ef1_mean"].idxmax()]
 
         best_cutoffs[model_key] = {
             "cutoff_nM": int(best_row["cutoff_nM"]),
-            "ef1": float(best_row["ef1"]),
-            "ef5": float(best_row["ef5"]),
-            "ef10": float(best_row["ef10"]),
-            "roc_auc": float(best_row["roc_auc"]),
-            "pr_auc": float(best_row["pr_auc"]),
-            "n_mf": int(best_row["n_mf"]),
+            "ef1_mean": float(best_row["ef1_mean"]),
+            "ef1_sem": float(best_row["ef1_sem"]),
+            "ef1_count": int(best_row["ef1_count"]),
+            "ef5_mean": float(best_row["ef5_mean"]),
+            "ef10_mean": float(best_row["ef10_mean"]),
+            "roc_auc_mean": float(best_row["roc_auc_mean"]),
+            "pr_auc_mean": float(best_row["pr_auc_mean"]),
+            "n_mf_mean": float(best_row["n_mf_mean"]),
         }
 
     best_cutoffs_path = output_dir / "phase2_best_cutoffs.json"
@@ -474,10 +556,10 @@ def identify_best_cutoffs(df: pd.DataFrame, output_dir: Path) -> None:
 
     print(f"\nBest cutoffs per model (saved to {best_cutoffs_path}):")
     for model_key, info in best_cutoffs.items():
-        print(f"  {model_key}: {info['cutoff_nM']} nM (EF@1% = {info['ef1']:.2f})")
+        print(f"  {model_key}: {info['cutoff_nM']} nM (EF@1% = {info['ef1_mean']:.2f} ± {info['ef1_sem']:.2f}, n={info['ef1_count']})")
 
 
-def get_best_configs_per_method(df: pd.DataFrame) -> pd.DataFrame:
+def get_best_configs_per_method(df_agg: pd.DataFrame) -> pd.DataFrame:
     """
     Filter to best configuration per method × representation combination.
     
@@ -992,21 +1074,24 @@ def main() -> None:
     print(f"Output: {output_dir}")
     print()
 
-    # Aggregate results (with tier-stratified metrics)
+    # Aggregate results (with tier-stratified metrics, one row per replicate)
     print("Aggregating Phase 2 results and computing tier-stratified metrics...")
     print("(This may take a few minutes...)")
-    df = aggregate_phase2_results(phase2_dir, workspace_dir, compute_tiers=True)
+    df_raw = aggregate_phase2_results(phase2_dir, workspace_dir, compute_tiers=True)
 
-    if df.empty:
+    if df_raw.empty:
         print("ERROR: No Phase 2 results found. Check workspace directory.")
         return
 
-    print(f"Found {len(df)} results across {df['model_key'].nunique()} models and {df['cutoff_nM'].nunique()} cutoffs")
+    print(f"Found {len(df_raw)} individual results:")
+    print(f"  {df_raw['model_key'].nunique()} model families")
+    print(f"  {df_raw['cutoff_nM'].nunique()} cutoffs")
+    print(f"  {df_raw['replicate'].nunique()} replicates per configuration")
     
     # Report tier counts
-    if "n_actives_high" in df.columns and df["n_actives_high"].notna().any():
-        # Get unique tier counts (should be same across cutoffs for a given target)
-        tier_summary = df[["n_actives_high", "n_actives_medium", "n_actives_weak"]].drop_duplicates()
+    if "n_actives_high" in df_raw.columns and df_raw["n_actives_high"].notna().any():
+        # Get unique tier counts (should be same across cutoffs/replicates for a given target)
+        tier_summary = df_raw[["n_actives_high", "n_actives_medium", "n_actives_weak"]].drop_duplicates()
         if len(tier_summary) == 1:
             n_high = int(tier_summary["n_actives_high"].iloc[0])
             n_medium = int(tier_summary["n_actives_medium"].iloc[0])
@@ -1017,42 +1102,48 @@ def main() -> None:
             print(f"  Weak (1K-100K nM): {n_weak} actives")
     print()
 
-    # Save aggregated CSV
-    df.to_csv(output_dir / "phase2_aggregated_metrics.csv", index=False)
+    # Save raw (per-replicate) metrics
+    df_raw.to_csv(output_dir / "phase2_raw_metrics_per_replicate.csv", index=False)
+    print(f"Saved raw metrics (per replicate): {output_dir / 'phase2_raw_metrics_per_replicate.csv'}")
+
+    # Aggregate across replicates (compute mean ± SEM)
+    print("\nAggregating metrics across replicates (mean ± SEM)...")
+    df_agg = aggregate_replicates(df_raw)
+    print(f"Aggregated to {len(df_agg)} configurations (model_key × cutoff)")
+    
+    # Save aggregated metrics
+    df_agg.to_csv(output_dir / "phase2_aggregated_metrics.csv", index=False)
     print(f"Saved aggregated metrics: {output_dir / 'phase2_aggregated_metrics.csv'}")
     print()
 
-    # Generate plots
+    # Generate plots (using aggregated data with mean ± SEM)
     print("Generating plots...")
 
     # Cutoff curves for EF
-    plot_cutoff_curves(df, "ef1", output_dir, "cutoff_curves_ef1")
-    plot_cutoff_curves(df, "ef5", output_dir, "cutoff_curves_ef5")
-    plot_cutoff_curves(df, "ef10", output_dir, "cutoff_curves_ef10")
+    plot_cutoff_curves(df_agg, "ef1", output_dir, "cutoff_curves_ef1")
+    plot_cutoff_curves(df_agg, "ef5", output_dir, "cutoff_curves_ef5")
+    plot_cutoff_curves(df_agg, "ef10", output_dir, "cutoff_curves_ef10")
     
     # Cutoff curves for BEDROC and IEF
-    plot_cutoff_curves(df, "bedroc_20", output_dir, "cutoff_curves_bedroc_20")
-    plot_cutoff_curves(df, "bedroc_160", output_dir, "cutoff_curves_bedroc_160")
-    plot_cutoff_curves(df, "ief_20", output_dir, "cutoff_curves_ief_20")
-    plot_cutoff_curves(df, "ief_160", output_dir, "cutoff_curves_ief_160")
+    plot_cutoff_curves(df_agg, "bedroc_20", output_dir, "cutoff_curves_bedroc_20")
+    plot_cutoff_curves(df_agg, "bedroc_160", output_dir, "cutoff_curves_bedroc_160")
+    plot_cutoff_curves(df_agg, "ief_20", output_dir, "cutoff_curves_ief_20")
+    plot_cutoff_curves(df_agg, "ief_160", output_dir, "cutoff_curves_ief_160")
 
-    # Tier-wise cutoff sensitivity (best configs only)
-    plot_cutoff_tier_sensitivity(df, output_dir)
-
-    # Tier-wise BEDROC and IEF cutoff sensitivity (best configs only)
-    plot_cutoff_tier_bedroc_ief_sensitivity(df, output_dir)
-
-    # BEDROC and IEF cutoff sensitivity (best configs only) - overall only, no tiers
-    plot_cutoff_bedroc_ief_sensitivity(df, output_dir)
+    # NOTE: Tier-wise plotting functions need updating to use _mean columns
+    # Skipping for now - these require significant refactoring
+    # TODO: Update plot_cutoff_tier_sensitivity, plot_cutoff_tier_bedroc_ief_sensitivity, plot_cutoff_bedroc_ief_sensitivity
 
     # Identify best cutoffs
-    identify_best_cutoffs(df, output_dir)
+    identify_best_cutoffs(df_agg, output_dir)
 
     print()
     print("="*80)
     print("PHASE 2 POST-ANALYSIS COMPLETED")
     print("="*80)
     print(f"All outputs saved to: {output_dir}")
+    print()
+    print("NOTE: Tier-stratified plots currently disabled - functions need updating for replicate aggregation")
 
 
 if __name__ == "__main__":
