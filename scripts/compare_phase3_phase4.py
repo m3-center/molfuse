@@ -146,6 +146,7 @@ def plot_phase3_phase4_overlay_overall(
 def plot_phase3_phase4_overlay_high_potency(
     df_phase3_strat: pd.DataFrame,
     df_phase4_strat: pd.DataFrame,
+    df_phase4_agg: pd.DataFrame,  # Need this to get target_short mapping
     output_dir: Path
 ) -> None:
     """
@@ -163,6 +164,12 @@ def plot_phase3_phase4_overlay_high_potency(
         (df_phase4_strat["method"] == "umap") & 
         (df_phase4_strat["representation"] == "features")
     ].copy()
+    
+    # Get target_short mapping from aggregated DataFrame
+    target_mapping = df_phase4_agg[["target", "target_short", "natural_mf_size"]].drop_duplicates()
+    
+    # Merge target_short into stratified data
+    p4_umap_feat = p4_umap_feat.merge(target_mapping, on="target", how="left")
     
     # Aggregate Phase 4 by target_short (functional category)
     p4_agg = p4_umap_feat.groupby(["target_short", "natural_mf_size"], dropna=False).agg({
@@ -292,7 +299,7 @@ def main():
     
     # Generate overlay plots
     plot_phase3_phase4_overlay_overall(df_p3, df_p4, output_dir)
-    plot_phase3_phase4_overlay_high_potency(df_p3_strat, df_p4_strat, output_dir)
+    plot_phase3_phase4_overlay_high_potency(df_p3_strat, df_p4_strat, df_p4, output_dir)
     
     print("\n" + "="*80)
     print("COMPARISON COMPLETE")
