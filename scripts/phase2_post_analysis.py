@@ -138,157 +138,282 @@ def compute_ef_at_percent(
     return float(ef), N_actives
 
 
-def load_actives_with_affinity(phase1_workspace: Path, phase1_run: str) -> Optional[pd.DataFrame]:
+def load_actives_with_affinity(phase1_workspace: Path, phase1_run: str, cache: Dict = None) -> Optional[pd.DataFrame]:
     """
-    Load actives with affinity from Phase 1 source data.
+    Load actives with affinity from Phase 1 source data (with caching).
     
     Strategy:
     1. Load Phase 1 summary.json to get config
     2. Load actives CSV or MF CSV with affinity data
+    3. Cache results to avoid re-loading same file
+    
+    Args:
+        phase1_workspace: Base workspace directory
+        phase1_run: Phase 1 run name
+        cache: Optional dict to cache loaded data (keyed by phase1_run)
     
     Returns DataFrame with: Compound ChEMBL ID, SMILES, Standard Value (nM)
     """
+    # Check cache first
+    if cache is not None and phase1_run in cache:
+        return cache[phase1_run]
+    
     phase1_dir = phase1_workspace / "phase1" / phase1_run
     summary_path = phase1_dir / "logs" / "phase1_summary.json"
     
     if not summary_path.exists():
-        return None
+        result = None
+    else:
+        try:
+            with summary_path.open("r") as f:
+                summary = json.load(f)
+        except Exception:
+            result = None
+        else:
+            config = summary.get("config", {})
+            result = None
+            
+            # Try actives CSV first
+            actives_csv = config.get("actives_features_csv")
+            if actives_csv:
+                p = Path(actives_csv)
+                if p.exists():
+                    try:
+                        cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]
+                        df = pd.read_csv(p, usecols=lambda c: c in cols_needed + ["accession"], low_memory=False)
+                        result = df[cols_needed].copy()
+                    except Exception:
+                        pass
+            
+            # Fallback: load MF CSV and filter by target
+            if result is None:
+                mf_csv = config.get("mf_features_csv")
+                if mf_csv:
+                    p = Path(mf_csv)
+                    target = config.get("target", "")
+                    
+                    # Extract accession from target (e.g., "ABL1_P00519" -> "P00519")
+                    import re
+                    m = re.search(r"_([A-Z0-9]{6})$", target)
+                    if m and p.exists():
+                        accession = m.group(1)
+                        try:
+                            cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)", "accession"]
+                            df_all = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
+                            df = df_all[df_all["accession"] == accession].copy()
+                            result = df[["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]].copy()
+                        except Exception:
+                            pass
     
-    try:
-        with summary_path.open("r") as f:
-            summary = json.load(f)
-    except Exception:
-        return None
+    # Cache the result
+    if cache is not None:
+        cache[phase1_run] = result
     
-    config = summary.get("config", {})
-    
-    # Try actives CSV first
-    actives_csv = config.get("actives_features_csv")
-    if actives_csv:
-        p = Path(actives_csv)
-        if p.exists():
-            try:
-                cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]
-                df = pd.read_csv(p, usecols=lambda c: c in cols_needed + ["accession"], low_memory=False)
-                return df[cols_needed].copy()
-            except Exception:
-                pass
-    
-    # Fallback: load MF CSV and filter by target
-    mf_csv = config.get("mf_features_csv")
-    if mf_csv:
-        p = Path(mf_csv)
-        target = config.get("target", "")
-        
-        # Extract accession from target (e.g., "ABL1_P00519" -> "P00519")
-        import re
-        m = re.search(r"_([A-Z0-9]{6})$", target)
-        if m and p.exists():
-            accession = m.group(1)
-            try:
-                cols_needed = ["Compound ChEMBL ID", "SMILES", "Standard Value (nM)", "accession"]
-                df_all = pd.read_csv(p, usecols=lambda c: c in cols_needed, low_memory=False)
-                df = df_all[df_all["accession"] == accession].copy()
-                return df[["Compound ChEMBL ID", "SMILES", "Standard Value (nM)"]].copy()
-            except Exception:
-                pass
-    
-    return None
+    return result
 
 
-def add_tier_metrics_to_cutoff(
+def compute_all_metrics_for_cutoff(
     cutoff_dir: Path,
     phase1_workspace: Path,
-    phase1_run: str
+    phase1_run: str,
+    actives_cache: Dict,
+    affinity_lookup_cache: Dict
 ) -> Dict:
     """
-    Compute tier-stratified metrics for one Phase 2 cutoff directory.
+    Compute ALL metrics for one cutoff directory efficiently (single CSV load).
     
-    Returns dict with tier metrics or empty dict if failed.
+    Computes:
+    - BEDROC and IEF (overall)
+    - Tier-stratified EF@1%
+    - Tier-stratified BEDROC and IEF
+    
+    Args:
+        cutoff_dir: Path to cutoff directory
+        phase1_workspace: Base workspace for Phase 1
+        phase1_run: Phase 1 run name
+        actives_cache: Cache for actives DataFrames (shared across calls)
+        affinity_lookup_cache: Cache for affinity lookup dicts (shared across calls)
+    
+    Returns:
+        Dict with all metrics, or empty dict if failed
     """
-    # Load ranked scores (now has compound IDs from Phase 2)
     ranked_path = cutoff_dir / "ranked_scores.csv"
     if not ranked_path.exists():
         return {}
     
     try:
+        # Load ranked scores ONCE
         ranked_df = pd.read_csv(ranked_path, low_memory=False)
-    except Exception:
-        return {}
-    
-    # Load actives with affinity
-    actives_df = load_actives_with_affinity(phase1_workspace, phase1_run)
-    if actives_df is None or actives_df.empty:
-        return {}
-    
-    # Join affinity to ranked list
-    # Try ChEMBL ID first, fallback to SMILES
-    if "Compound ChEMBL ID" in ranked_df.columns and "Compound ChEMBL ID" in actives_df.columns:
-        join_key = "Compound ChEMBL ID"
-        ranked_df["_join"] = ranked_df[join_key].astype(str).str.upper().str.strip()
-        actives_df["_join"] = actives_df[join_key].astype(str).str.upper().str.strip()
-    elif "SMILES" in ranked_df.columns and "SMILES" in actives_df.columns:
-        join_key = "SMILES"
-        ranked_df["_join"] = ranked_df[join_key].astype(str).str.strip()
-        actives_df["_join"] = actives_df[join_key].astype(str).str.strip()
-    else:
-        return {}
-    
-    # Create affinity lookup
-    affinity_lookup = actives_df[["_join", "Standard Value (nM)"]].dropna(subset=["_join"]).drop_duplicates(subset=["_join"])
-    
-    # Left join (only actives get affinity values)
-    ranked_df = ranked_df.merge(affinity_lookup, on="_join", how="left")
-    
-    # Assign tiers
-    ranked_df["potency_tier"] = ranked_df["Standard Value (nM)"].apply(assign_potency_tier)
-    
-    # Compute tier-specific EF@1%
-    ef1_high, n_high = compute_ef_at_percent(ranked_df, "High", 0.01)
-    ef1_medium, n_medium = compute_ef_at_percent(ranked_df, "Medium", 0.01)
-    ef1_weak, n_weak = compute_ef_at_percent(ranked_df, "Weak", 0.01)
-    
-    # Compute tier-specific BEDROC and IEF
-    # For each tier: filter actives to that tier, treat as "positives", compute BEDROC/IEF
-    # This answers: "How well does the ranking enrich for high-potency actives specifically?"
-    tier_bedroc_ief = {}
-    
-    for tier_name, tier_label in [("High", "high"), ("Medium", "medium"), ("Weak", "weak")]:
-        # Create binary label: 1 if active AND in this tier, 0 otherwise
-        tier_mask = ranked_df["potency_tier"] == tier_name
-        tier_labels = tier_mask.astype(int).values
         
-        # Only compute if we have positives in this tier
-        if tier_labels.sum() > 0:
-            scores = ranked_df["score"].values
-            
-            # Compute BEDROC and IEF for this tier
-            from molfuse.metrics.metrics import bedroc, ief
-            
-            bedroc_20 = bedroc(tier_labels, scores, alpha=20.0)
-            bedroc_160 = bedroc(tier_labels, scores, alpha=160.9)
-            ief_20 = ief(tier_labels, scores, alpha=20.0)
-            ief_160 = ief(tier_labels, scores, alpha=160.9)
-            
-            tier_bedroc_ief[f"bedroc_20_{tier_label}"] = bedroc_20
-            tier_bedroc_ief[f"bedroc_160_{tier_label}"] = bedroc_160
-            tier_bedroc_ief[f"ief_20_{tier_label}"] = ief_20
-            tier_bedroc_ief[f"ief_160_{tier_label}"] = ief_160
-        else:
-            tier_bedroc_ief[f"bedroc_20_{tier_label}"] = np.nan
-            tier_bedroc_ief[f"bedroc_160_{tier_label}"] = np.nan
-            tier_bedroc_ief[f"ief_20_{tier_label}"] = np.nan
-            tier_bedroc_ief[f"ief_160_{tier_label}"] = np.nan
+        if "score" not in ranked_df.columns or "label" not in ranked_df.columns:
+            return {}
+        
+        # Extract arrays for BEDROC/IEF computation
+        labels = np.asarray(ranked_df["label"].values, dtype=int)
+        scores = np.asarray(ranked_df["score"].values, dtype=float)
+        
+        # Compute overall BEDROC and IEF
+        bedroc_20 = bedroc(labels, scores, alpha=20.0)
+        bedroc_160 = bedroc(labels, scores, alpha=160.9)
+        ief_20 = ief(labels, scores, alpha=20.0)
+        ief_160 = ief(labels, scores, alpha=160.9)
+        
+        metrics = {
+            "bedroc_20": bedroc_20,
+            "bedroc_160": bedroc_160,
+            "ief_20": ief_20,
+            "ief_160": ief_160,
+        }
+        
+    except Exception as e:
+        print(f"Error loading ranked scores for {cutoff_dir.name}: {e}")
+        return {}
     
-    return {
-        "ef1_high": ef1_high,
-        "ef1_medium": ef1_medium,
-        "ef1_weak": ef1_weak,
-        "n_actives_high": n_high,
-        "n_actives_medium": n_medium,
-        "n_actives_weak": n_weak,
-        **tier_bedroc_ief,
-    }
+    # Compute tier-stratified metrics
+    if phase1_run and phase1_run != "unknown":
+        # Load actives with affinity (cached)
+        actives_df = load_actives_with_affinity(phase1_workspace, phase1_run, cache=actives_cache)
+        
+        if actives_df is None or actives_df.empty:
+            # No tier data available
+            metrics.update({
+                "ef1_high": None,
+                "ef1_medium": None,
+                "ef1_weak": None,
+                "n_actives_high": 0,
+                "n_actives_medium": 0,
+                "n_actives_weak": 0,
+                "bedroc_20_high": np.nan,
+                "bedroc_20_medium": np.nan,
+                "bedroc_20_weak": np.nan,
+                "bedroc_160_high": np.nan,
+                "bedroc_160_medium": np.nan,
+                "bedroc_160_weak": np.nan,
+                "ief_20_high": np.nan,
+                "ief_20_medium": np.nan,
+                "ief_20_weak": np.nan,
+                "ief_160_high": np.nan,
+                "ief_160_medium": np.nan,
+                "ief_160_weak": np.nan,
+            })
+            return metrics
+        
+        # Create or retrieve affinity lookup (cached)
+        lookup_key = phase1_run
+        if lookup_key in affinity_lookup_cache:
+            affinity_lookup = affinity_lookup_cache[lookup_key]
+            join_key = affinity_lookup_cache[f"{lookup_key}_join_key"]
+        else:
+            # Determine join key and create lookup
+            if "Compound ChEMBL ID" in ranked_df.columns and "Compound ChEMBL ID" in actives_df.columns:
+                join_key = "Compound ChEMBL ID"
+                # Normalize join keys
+                actives_df["_join"] = actives_df[join_key].astype(str).str.upper().str.strip()
+            elif "SMILES" in ranked_df.columns and "SMILES" in actives_df.columns:
+                join_key = "SMILES"
+                actives_df["_join"] = actives_df[join_key].astype(str).str.strip()
+            else:
+                # No valid join key
+                metrics.update({
+                    "ef1_high": None,
+                    "ef1_medium": None,
+                    "ef1_weak": None,
+                    "n_actives_high": 0,
+                    "n_actives_medium": 0,
+                    "n_actives_weak": 0,
+                    "bedroc_20_high": np.nan,
+                    "bedroc_20_medium": np.nan,
+                    "bedroc_20_weak": np.nan,
+                    "bedroc_160_high": np.nan,
+                    "bedroc_160_medium": np.nan,
+                    "bedroc_160_weak": np.nan,
+                    "ief_20_high": np.nan,
+                    "ief_20_medium": np.nan,
+                    "ief_20_weak": np.nan,
+                    "ief_160_high": np.nan,
+                    "ief_160_medium": np.nan,
+                    "ief_160_weak": np.nan,
+                })
+                return metrics
+            
+            # Create affinity lookup dict
+            affinity_lookup = actives_df[["_join", "Standard Value (nM)"]].dropna(subset=["_join"]).drop_duplicates(subset=["_join"])
+            affinity_lookup_cache[lookup_key] = affinity_lookup
+            affinity_lookup_cache[f"{lookup_key}_join_key"] = join_key
+        
+        # Normalize ranked_df join key (only once)
+        if join_key == "Compound ChEMBL ID":
+            ranked_df["_join"] = ranked_df[join_key].astype(str).str.upper().str.strip()
+        else:  # SMILES
+            ranked_df["_join"] = ranked_df[join_key].astype(str).str.strip()
+        
+        # Left join to add affinity
+        ranked_df = ranked_df.merge(affinity_lookup, on="_join", how="left")
+        
+        # Assign potency tiers
+        ranked_df["potency_tier"] = ranked_df["Standard Value (nM)"].apply(assign_potency_tier)
+        
+        # Compute tier-specific EF@1%
+        ef1_high, n_high = compute_ef_at_percent(ranked_df, "High", 0.01)
+        ef1_medium, n_medium = compute_ef_at_percent(ranked_df, "Medium", 0.01)
+        ef1_weak, n_weak = compute_ef_at_percent(ranked_df, "Weak", 0.01)
+        
+        # Compute tier-specific BEDROC and IEF
+        tier_bedroc_ief = {}
+        
+        for tier_name, tier_label in [("High", "high"), ("Medium", "medium"), ("Weak", "weak")]:
+            # Create binary label: 1 if active AND in this tier, 0 otherwise
+            tier_mask = ranked_df["potency_tier"] == tier_name
+            tier_labels = tier_mask.astype(int).values
+            
+            # Only compute if we have positives in this tier
+            if tier_labels.sum() > 0:
+                tier_scores = ranked_df["score"].values
+                
+                tier_bedroc_ief[f"bedroc_20_{tier_label}"] = bedroc(tier_labels, tier_scores, alpha=20.0)
+                tier_bedroc_ief[f"bedroc_160_{tier_label}"] = bedroc(tier_labels, tier_scores, alpha=160.9)
+                tier_bedroc_ief[f"ief_20_{tier_label}"] = ief(tier_labels, tier_scores, alpha=20.0)
+                tier_bedroc_ief[f"ief_160_{tier_label}"] = ief(tier_labels, tier_scores, alpha=160.9)
+            else:
+                tier_bedroc_ief[f"bedroc_20_{tier_label}"] = np.nan
+                tier_bedroc_ief[f"bedroc_160_{tier_label}"] = np.nan
+                tier_bedroc_ief[f"ief_20_{tier_label}"] = np.nan
+                tier_bedroc_ief[f"ief_160_{tier_label}"] = np.nan
+        
+        # Add tier metrics to result
+        metrics.update({
+            "ef1_high": ef1_high,
+            "ef1_medium": ef1_medium,
+            "ef1_weak": ef1_weak,
+            "n_actives_high": n_high,
+            "n_actives_medium": n_medium,
+            "n_actives_weak": n_weak,
+            **tier_bedroc_ief,
+        })
+    else:
+        # No phase1_run info, skip tier computation
+        metrics.update({
+            "ef1_high": None,
+            "ef1_medium": None,
+            "ef1_weak": None,
+            "n_actives_high": 0,
+            "n_actives_medium": 0,
+            "n_actives_weak": 0,
+            "bedroc_20_high": np.nan,
+            "bedroc_20_medium": np.nan,
+            "bedroc_20_weak": np.nan,
+            "bedroc_160_high": np.nan,
+            "bedroc_160_medium": np.nan,
+            "bedroc_160_weak": np.nan,
+            "ief_20_high": np.nan,
+            "ief_20_medium": np.nan,
+            "ief_20_weak": np.nan,
+            "ief_160_high": np.nan,
+            "ief_160_medium": np.nan,
+            "ief_160_weak": np.nan,
+        })
+    
+    return metrics
 
 
 def parse_args() -> argparse.Namespace:
@@ -310,36 +435,13 @@ def save_figure(fig: plt.Figure, output_dir: Path, basename: str) -> None:
 
 def compute_bedroc_ief_from_ranked_scores(cutoff_dir: Path) -> Dict[str, float]:
     """
-    Compute BEDROC and IEF metrics from ranked_scores.csv retrospectively.
+    DEPRECATED: Use compute_all_metrics_for_cutoff() instead.
     
-    Returns dict with keys: bedroc_20, bedroc_160, ief_20, ief_160
+    This function is kept for backwards compatibility but should not be used.
+    compute_all_metrics_for_cutoff() is much more efficient as it loads
+    the CSV only once and computes all metrics together.
     """
-    ranked_path = cutoff_dir / "ranked_scores.csv"
-    if not ranked_path.exists():
-        return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
-    
-    try:
-        df = pd.read_csv(ranked_path)
-        if "score" not in df.columns or "label" not in df.columns:
-            return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
-        
-        labels = np.asarray(df["label"].values, dtype=int)
-        scores = np.asarray(df["score"].values, dtype=float)
-        
-        bedroc_20 = bedroc(labels, scores, alpha=20.0)
-        bedroc_160 = bedroc(labels, scores, alpha=160.9)
-        ief_20 = ief(labels, scores, alpha=20.0)
-        ief_160 = ief(labels, scores, alpha=160.9)
-        
-        return {
-            "bedroc_20": bedroc_20,
-            "bedroc_160": bedroc_160,
-            "ief_20": ief_20,
-            "ief_160": ief_160,
-        }
-    except Exception as e:
-        print(f"Error computing BEDROC/IEF for {cutoff_dir.name}: {e}")
-        return {"bedroc_20": np.nan, "bedroc_160": np.nan, "ief_20": np.nan, "ief_160": np.nan}
+    raise NotImplementedError("Use compute_all_metrics_for_cutoff() instead")
 
 
 def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_tiers: bool = True) -> pd.DataFrame:
@@ -359,6 +461,19 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
           For aggregated statistics (mean ± SEM), call aggregate_replicates() on this output.
     """
     rows: List[Dict] = []
+    
+    # Create caches for expensive operations
+    actives_cache: Dict = {}  # Cache for actives DataFrames (keyed by phase1_run)
+    affinity_lookup_cache: Dict = {}  # Cache for affinity lookup dicts
+
+    # Count total directories for progress tracking
+    total_dirs = sum(1 for model_dir in phase2_dir.iterdir() 
+                     if model_dir.is_dir() and model_dir.name not in ("logs", "artifacts", "metrics", "selected_models.json")
+                     for cutoff_dir in model_dir.iterdir()
+                     if cutoff_dir.is_dir() and cutoff_dir.name.startswith("cutoff_"))
+    
+    print(f"Processing {total_dirs} cutoff directories...")
+    processed = 0
 
     # Scan for model subdirectories (now these are replicate-specific: e.g., ABL1_PCA_features_20d_rep1)
     for model_dir in phase2_dir.iterdir():
@@ -402,28 +517,35 @@ def aggregate_phase2_results(phase2_dir: Path, phase1_workspace: Path, compute_t
                 "phase1_run": phase1_run,
             }
             
-            # Compute BEDROC and IEF retrospectively from ranked_scores.csv
-            bedroc_ief_metrics = compute_bedroc_ief_from_ranked_scores(cutoff_dir)
-            row.update(bedroc_ief_metrics)
-            
-            # Compute tier-stratified metrics if requested
-            if compute_tiers:
-                if phase1_run and phase1_run != "unknown":
-                    tier_metrics = add_tier_metrics_to_cutoff(cutoff_dir, phase1_workspace, phase1_run)
-                    row.update(tier_metrics)
-                else:
-                    # No Phase 1 run info, skip tier computation
-                    row.update({
-                        "ef1_high": None,
-                        "ef1_medium": None,
-                        "ef1_weak": None,
-                        "n_actives_high": 0,
-                        "n_actives_medium": 0,
-                        "n_actives_weak": 0,
-                    })
+            # Compute ALL metrics efficiently (BEDROC/IEF + tiers) in single pass
+            if compute_tiers and phase1_run and phase1_run != "unknown":
+                all_metrics = compute_all_metrics_for_cutoff(
+                    cutoff_dir, 
+                    phase1_workspace, 
+                    phase1_run,
+                    actives_cache,
+                    affinity_lookup_cache
+                )
+                row.update(all_metrics)
+            else:
+                # Just compute BEDROC/IEF without tiers
+                all_metrics = compute_all_metrics_for_cutoff(
+                    cutoff_dir, 
+                    phase1_workspace, 
+                    phase1_run,
+                    actives_cache,
+                    affinity_lookup_cache
+                )
+                row.update(all_metrics)
             
             rows.append(row)
+            
+            # Progress indicator
+            processed += 1
+            if processed % 10 == 0:
+                print(f"  Processed {processed}/{total_dirs} cutoff directories...")
 
+    print(f"  Completed: {processed}/{total_dirs} directories")
     df = pd.DataFrame(rows)
     return df
 
@@ -568,31 +690,34 @@ def get_best_configs_per_method(df_agg: pd.DataFrame) -> pd.DataFrame:
     2. This gives 4 best configs: PCA/features, PCA/fingerprints, UMAP/features, UMAP/fingerprints
     
     Args:
-        df: Aggregated Phase 2 metrics DataFrame
+        df_agg: Aggregated Phase 2 metrics DataFrame (with _mean columns)
     
     Returns:
         DataFrame filtered to best configs only (4 model_keys)
     """
     best_models = []
     
-    for method in df["method"].unique():
-        for rep in df["representation"].unique():
-            subset = df[(df["method"] == method) & (df["representation"] == rep)].copy()
+    # Use ef1_mean if available (aggregated data), otherwise ef1 (raw data)
+    ef_col = "ef1_mean" if "ef1_mean" in df_agg.columns else "ef1"
+    
+    for method in df_agg["method"].unique():
+        for rep in df_agg["representation"].unique():
+            subset = df_agg[(df_agg["method"] == method) & (df_agg["representation"] == rep)].copy()
             
             if subset.empty:
                 continue
             
             # Compute mean EF@1% across all cutoffs for each model_key
-            avg_ef1 = subset.groupby("model_key")["ef1"].mean()
+            avg_ef1 = subset.groupby("model_key")[ef_col].mean()
             if not avg_ef1.empty:
                 best_model_key = avg_ef1.idxmax()
                 best_models.append(best_model_key)
     
-    filtered = df[df["model_key"].isin(best_models)].copy()
+    filtered = df_agg[df_agg["model_key"].isin(best_models)].copy()
     return filtered
 
 
-def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
+def plot_cutoff_tier_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:
     """
     Plot potency-tier stratified EF@1% vs affinity cutoff for best configs per method.
     
@@ -606,17 +731,23 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     4. Method Sensitivity: Do PCA and UMAP respond differently to cutoffs?
     
     Args:
-        df: Aggregated Phase 2 metrics (must include ef1_high, ef1_medium, ef1_weak)
+        df_agg: Aggregated Phase 2 metrics with _mean columns (must include ef1_high_mean, ef1_medium_mean, ef1_weak_mean)
         output_dir: Output directory for plots
     """
+    # Determine column names (aggregated vs raw)
+    ef1_col = "ef1_mean" if "ef1_mean" in df_agg.columns else "ef1"
+    ef1_high_col = "ef1_high_mean" if "ef1_high_mean" in df_agg.columns else "ef1_high"
+    ef1_medium_col = "ef1_medium_mean" if "ef1_medium_mean" in df_agg.columns else "ef1_medium"
+    ef1_weak_col = "ef1_weak_mean" if "ef1_weak_mean" in df_agg.columns else "ef1_weak"
+    
     # Check if stratified metrics are available
-    if df["ef1_high"].isna().all():
+    if ef1_high_col not in df_agg.columns or df_agg[ef1_high_col].isna().all():
         print("WARNING: No stratified metrics found. Run phase2_add_stratified_metrics.py first.")
         print("Skipping tier-wise cutoff sensitivity plot.")
         return
     
     # Filter to best configs per method
-    df_best = get_best_configs_per_method(df)
+    df_best = get_best_configs_per_method(df_agg)
     
     if df_best.empty:
         print("WARNING: No best configs identified. Skipping tier-wise plot.")
@@ -633,7 +764,7 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     
     # Compute global y-axis range across ALL models and tiers for consistency
     all_values = []
-    for col in ["ef1", "ef1_high", "ef1_medium", "ef1_weak"]:
+    for col in [ef1_col, ef1_high_col, ef1_medium_col, ef1_weak_col]:
         if col in df_best.columns:
             valid_vals = df_best[col].dropna().values
             if len(valid_vals) > 0:
@@ -681,12 +812,12 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         x = subset["cutoff_nM"].values
         
         # All actives (baseline)
-        y_all = subset["ef1"].values
+        y_all = subset[ef1_col].values
         ax.plot(x, y_all, marker="o", label="All", color=colors["All"], 
                 linewidth=2.5, markersize=8, alpha=0.9)
         
         # High potency (0.1-100 nM)
-        y_high = subset["ef1_high"].values
+        y_high = subset[ef1_high_col].values
         mask_high = ~np.isnan(y_high)
         if mask_high.any():
             ax.plot(x[mask_high], y_high[mask_high], marker="s", 
@@ -694,7 +825,7 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
                    color=colors["High"], linewidth=2, markersize=7, alpha=0.8)
         
         # Medium potency (100-1000 nM)
-        y_medium = subset["ef1_medium"].values
+        y_medium = subset[ef1_medium_col].values
         mask_medium = ~np.isnan(y_medium)
         if mask_medium.any():
             ax.plot(x[mask_medium], y_medium[mask_medium], marker="^", 
@@ -702,14 +833,12 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
                    color=colors["Medium"], linewidth=2, markersize=7, alpha=0.8)
         
         # Weak potency (1K-100K nM)
-        y_weak = subset["ef1_weak"].values
+        y_weak = subset[ef1_weak_col].values
         mask_weak = ~np.isnan(y_weak)
         if mask_weak.any():
             ax.plot(x[mask_weak], y_weak[mask_weak], marker="D", 
                    label=f"Weak (n={n_weak})", 
-                   color=colors["Weak"], linewidth=2, markersize=7, alpha=0.8)
-        
-        # Formatting
+                   color=colors["Weak"], linewidth=2, markersize=7, alpha=0.8)        # Formatting
         ax.set_xscale("log")
         ax.set_ylim(y_min, y_max)  # Apply consistent y-axis range
         ax.set_xlabel("Affinity Cutoff (nM)", fontsize=11, fontweight="bold")
@@ -730,7 +859,7 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
         ax.grid(True, alpha=0.3)
         
         # Add vertical line at optimal cutoff (based on overall EF@1%)
-        best_idx = subset["ef1"].idxmax()
+        best_idx = subset[ef1_col].idxmax()
         best_cutoff = subset.loc[best_idx, "cutoff_nM"]
         ax.axvline(best_cutoff, color="gray", linestyle="--", linewidth=1.5, alpha=0.6, 
                   label=f"Optimal: {int(best_cutoff)} nM")
@@ -748,13 +877,15 @@ def plot_cutoff_tier_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
     
     # Save tier-wise metrics for best configs
     tier_cols = ["model_key", "method", "representation", "dim", "cutoff_nM", 
-                 "ef1", "ef1_high", "ef1_medium", "ef1_weak",
+                 ef1_col, ef1_high_col, ef1_medium_col, ef1_weak_col,
                  "n_actives_high", "n_actives_medium", "n_actives_weak"]
+    # Only include columns that exist
+    tier_cols = [c for c in tier_cols if c in df_best.columns]
     df_best[tier_cols].to_csv(output_dir / "phase2_tier_metrics_best_configs.csv", index=False)
     print(f"Saved tier metrics (best configs): {output_dir / 'phase2_tier_metrics_best_configs.csv'}")
 
 
-def plot_cutoff_tier_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
+def plot_cutoff_tier_bedroc_ief_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:
     """
     Plot tier-stratified BEDROC and IEF vs affinity cutoff for best configs per method.
     
@@ -767,18 +898,24 @@ def plot_cutoff_tier_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) 
     Interpretation: "BEDROC_High" = How well does ranking enrich high-potency actives specifically?
     
     Args:
-        df: Aggregated Phase 2 metrics with tier-specific BEDROC/IEF columns
+        df_agg: Aggregated Phase 2 metrics with tier-specific BEDROC/IEF _mean columns
         output_dir: Output directory for plots
     """
-    # Check if tier-stratified BEDROC/IEF metrics are available
-    required_cols = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak"]
-    if not all(col in df.columns for col in required_cols):
+    # Check if tier-stratified BEDROC/IEF metrics are available (try _mean first, fallback to raw)
+    required_cols_mean = ["bedroc_20_high_mean", "bedroc_20_medium_mean", "bedroc_20_weak_mean"]
+    required_cols_raw = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak"]
+    
+    if all(col in df_agg.columns for col in required_cols_mean):
+        use_mean = True
+    elif all(col in df_agg.columns for col in required_cols_raw):
+        use_mean = False
+    else:
         print("WARNING: No tier-stratified BEDROC/IEF metrics found.")
         print("Skipping tier-stratified BEDROC/IEF sensitivity plots.")
         return
     
     # Filter to best configs per method
-    df_best = get_best_configs_per_method(df)
+    df_best = get_best_configs_per_method(df_agg)
     
     if df_best.empty:
         print("WARNING: No best configs identified. Skipping tier-stratified BEDROC/IEF plot.")
@@ -793,15 +930,18 @@ def plot_cutoff_tier_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) 
     # Sort by cutoff for proper line plotting
     df_best = df_best.sort_values(by=["model_key", "cutoff_nM"]).reset_index(drop=True)
     
+    # Define column names based on whether we're using aggregated or raw data
+    suffix = "_mean" if use_mean else ""
+    
     # Group metrics with same y-axis range
     metric_groups = [
-        ([("bedroc_20", "bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak", "BEDROC (α=20)")],
+        ([(f"bedroc_20{suffix}", f"bedroc_20_high{suffix}", f"bedroc_20_medium{suffix}", f"bedroc_20_weak{suffix}", "BEDROC (α=20)")],
          "bedroc_20", "BEDROC (α=20)"),
-        ([("bedroc_160", "bedroc_160_high", "bedroc_160_medium", "bedroc_160_weak", "BEDROC (α=160)")],
+        ([(f"bedroc_160{suffix}", f"bedroc_160_high{suffix}", f"bedroc_160_medium{suffix}", f"bedroc_160_weak{suffix}", "BEDROC (α=160)")],
          "bedroc_160", "BEDROC (α=160)"),
-        ([("ief_20", "ief_20_high", "ief_20_medium", "ief_20_weak", "IEF (α=20)")],
+        ([(f"ief_20{suffix}", f"ief_20_high{suffix}", f"ief_20_medium{suffix}", f"ief_20_weak{suffix}", "IEF (α=20)")],
          "ief_20", "IEF (α=20)"),
-        ([("ief_160", "ief_160_high", "ief_160_medium", "ief_160_weak", "IEF (α=160)")],
+        ([(f"ief_160{suffix}", f"ief_160_high{suffix}", f"ief_160_medium{suffix}", f"ief_160_weak{suffix}", "IEF (α=160)")],
          "ief_160", "IEF (α=160)"),
     ]
     
@@ -930,7 +1070,7 @@ def plot_cutoff_tier_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) 
         print(f"Saved cutoff_tier_{file_prefix}_sensitivity_best_configs.png/pdf")
 
 
-def plot_cutoff_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> None:
+def plot_cutoff_bedroc_ief_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:
     """
     Plot BEDROC and IEF vs affinity cutoff for best configs per method.
     
@@ -938,16 +1078,22 @@ def plot_cutoff_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> No
     not tier-specific since BEDROC/IEF per tier would require filtering which changes denominator).
     
     Args:
-        df: Aggregated Phase 2 metrics (must include bedroc_20, bedroc_160, ief_20, ief_160)
+        df_agg: Aggregated Phase 2 metrics with _mean columns (must include bedroc_20_mean, bedroc_160_mean, ief_20_mean, ief_160_mean)
         output_dir: Output directory for plots
     """
-    # Check if BEDROC/IEF metrics are available
-    if "bedroc_20" not in df.columns or df["bedroc_20"].isna().all():
+    # Check if BEDROC/IEF metrics are available (try _mean first, fallback to raw)
+    bedroc_col = "bedroc_20_mean" if "bedroc_20_mean" in df_agg.columns else "bedroc_20"
+    
+    if bedroc_col not in df_agg.columns or df_agg[bedroc_col].isna().all():
         print("WARNING: No BEDROC/IEF metrics found. Skipping BEDROC/IEF cutoff sensitivity plot.")
         return
     
+    # Determine if we're using aggregated or raw data
+    use_mean = "bedroc_20_mean" in df_agg.columns
+    suffix = "_mean" if use_mean else ""
+    
     # Filter to best configs per method
-    df_best = get_best_configs_per_method(df)
+    df_best = get_best_configs_per_method(df_agg)
     
     if df_best.empty:
         print("WARNING: No best configs identified. Skipping BEDROC/IEF plot.")
@@ -965,8 +1111,8 @@ def plot_cutoff_bedroc_ief_sensitivity(df: pd.DataFrame, output_dir: Path) -> No
     # Create plots for BEDROC(α=20), BEDROC(α=160), IEF(α=20), IEF(α=160)
     # Group metrics with same y-axis range
     metric_groups = [
-        ([("bedroc_20", "BEDROC (α=20)"), ("bedroc_160", "BEDROC (α=160)")], "BEDROC"),
-        ([("ief_20", "IEF (α=20)"), ("ief_160", "IEF (α=160)")], "IEF"),
+        ([(f"bedroc_20{suffix}", "BEDROC (α=20)"), (f"bedroc_160{suffix}", "BEDROC (α=160)")], "BEDROC"),
+        ([(f"ief_20{suffix}", "IEF (α=20)"), (f"ief_160{suffix}", "IEF (α=160)")], "IEF"),
     ]
     
     for metric_pairs, group_name in metric_groups:
@@ -1130,9 +1276,14 @@ def main() -> None:
     plot_cutoff_curves(df_agg, "ief_20", output_dir, "cutoff_curves_ief_20")
     plot_cutoff_curves(df_agg, "ief_160", output_dir, "cutoff_curves_ief_160")
 
-    # NOTE: Tier-wise plotting functions need updating to use _mean columns
-    # Skipping for now - these require significant refactoring
-    # TODO: Update plot_cutoff_tier_sensitivity, plot_cutoff_tier_bedroc_ief_sensitivity, plot_cutoff_bedroc_ief_sensitivity
+    # Tier-wise cutoff sensitivity (best configs only)
+    plot_cutoff_tier_sensitivity(df_agg, output_dir)
+
+    # Tier-wise BEDROC and IEF cutoff sensitivity (best configs only)
+    plot_cutoff_tier_bedroc_ief_sensitivity(df_agg, output_dir)
+
+    # BEDROC and IEF cutoff sensitivity (best configs only) - overall only, no tiers
+    plot_cutoff_bedroc_ief_sensitivity(df_agg, output_dir)
 
     # Identify best cutoffs
     identify_best_cutoffs(df_agg, output_dir)
@@ -1142,8 +1293,6 @@ def main() -> None:
     print("PHASE 2 POST-ANALYSIS COMPLETED")
     print("="*80)
     print(f"All outputs saved to: {output_dir}")
-    print()
-    print("NOTE: Tier-stratified plots currently disabled - functions need updating for replicate aggregation")
 
 
 if __name__ == "__main__":
