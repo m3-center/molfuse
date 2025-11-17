@@ -170,11 +170,15 @@ def plot_phase3_phase4_overlay_high_potency(
     target_mapping = df_phase4_agg[
         (df_phase4_agg["method"] == "umap") & 
         (df_phase4_agg["representation"] == "features")
-    ][["target", "target_short", "natural_mf_size"]].drop_duplicates()
+    ][["target", "target_short", "natural_mf_size"]].drop_duplicates().copy()
+    
+    # Ensure target column is string type in both DataFrames
+    p4_umap_feat["target"] = p4_umap_feat["target"].astype(str).str.strip()
+    target_mapping["target"] = target_mapping["target"].astype(str).str.strip()
     
     print(f"  Target mapping: {len(target_mapping)} rows")
-    print(f"  Targets in mapping: {sorted(target_mapping['target'].unique().tolist())}")
-    print(f"  Targets in stratified: {sorted(p4_umap_feat['target'].unique().tolist())}")
+    print(f"  Sample from mapping:\n{target_mapping.head()}")
+    print(f"  Sample from stratified:\n{p4_umap_feat[['target', 'ef_1%_high']].head()}")
     
     # Merge target_short and natural_mf_size into stratified data
     p4_umap_feat = p4_umap_feat.merge(
@@ -188,7 +192,8 @@ def plot_phase3_phase4_overlay_high_potency(
     n_nan = p4_umap_feat["target_short"].isna().sum()
     if n_nan > 0:
         print(f"  WARNING: {n_nan} rows have NaN target_short after merge")
-        print(f"  Rows with NaN:\n{p4_umap_feat[p4_umap_feat['target_short'].isna()][['target', 'target_short']]}")
+    else:
+        print(f"  ✓ All rows have valid target_short after merge")
     
     # Aggregate Phase 4 by target_short (functional category)
     p4_agg = p4_umap_feat.groupby(["target_short", "natural_mf_size"], dropna=False).agg({
