@@ -116,19 +116,15 @@ def load_phase2_cutoffs(json_path: Optional[Path]) -> Dict[str, dict]:
     Load Phase 2 best affinity cutoffs per model_key.
     
     Args:
-        json_path: Path to phase2_best_cutoffs.json
+        json_path: Path to phase2_best_cutoffs.json (optional)
     
     Returns:
         Dict mapping model_key to {cutoff_nM, ef1, ef5, ...}
-    
-    Raises:
-        FileNotFoundError if json_path not provided or doesn't exist
+        Returns empty dict if file not found (uses hardcoded 100 nM in generate_phase3_configs)
     """
     if not json_path or not json_path.exists():
-        raise FileNotFoundError(
-            f"Phase 2 cutoffs required: {json_path}\n"
-            f"Run scripts/phase2_post_analysis.py to generate phase2_best_cutoffs.json"
-        )
+        print("  WARNING: Phase 2 cutoffs not found, using hardcoded 100 nM cutoff")
+        return {}
     
     with json_path.open("r") as f:
         return json.load(f)
@@ -226,7 +222,7 @@ def main():
     parser.add_argument("--phase1_grouped", type=str, default="reporting/phase1_post_analysis/phase1_summary_grouped.csv",
                        help="Path to Phase 1 grouped summary CSV (for extracting best hyperparameters)")
     parser.add_argument("--phase2_best_cutoffs", type=str, default="reporting/phase2_post_analysis/phase2_best_cutoffs.json",
-                       help="Path to Phase 2 best cutoffs JSON (REQUIRED)")
+                       help="Path to Phase 2 best cutoffs JSON (optional, uses 100 nM if not found)")
     parser.add_argument("--output_dir", type=str, default="configs/molfuse_phase3_grid",
                        help="Output directory for configs")
     parser.add_argument("--target", type=str, default="TyrosineProteinKinaseABL1_P00519",
@@ -276,9 +272,9 @@ def main():
         print(f"  {model_key}: {cfg['method']}/{cfg['representation']} (dim={cfg['dim']}){umap_str}")
     print()
     
-    print("Phase 2 Optimal Cutoffs:")
-    for model_key, cutoff_data in phase2_cutoffs.items():
-        print(f"  {model_key}: {cutoff_data['cutoff_nM']} nM (EF@1% = {cutoff_data['ef1']:.2f})")
+    print("Affinity Cutoff (for scoring only):")
+    print("  Using 100 nM for all methods (optimal from Phase 2)")
+    print("  Note: Cutoff applied to MF cloud for SCORING only, NOT for training")
     print()
     
     # Generate configs
