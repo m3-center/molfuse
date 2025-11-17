@@ -19,12 +19,13 @@ def select_best_phase1_models(
     phase1_workspace: Path,
     phase1_phase_dir: str = "phase1",
     min_required: int = 1,
-) -> Dict[str, Dict]:
+) -> Dict[str, List[Dict]]:
     """
     Select best Phase 1 runs for Phase 2 re-scoring.
 
     Scans phase1_workspace/phase1_phase_dir/ for completed runs.
-    Identifies best run per (method, representation) combo based on EF@1%.
+    Identifies best hyperparameter configuration per (method, representation) combo based on EF@1%.
+    Returns ALL replicates of the best configuration for statistical validity.
 
     Args:
         phase1_workspace: Base workspace directory
@@ -33,11 +34,11 @@ def select_best_phase1_models(
 
     Returns:
         Dict with keys: "pca_features", "pca_fingerprints", "umap_features", "umap_fingerprints"
-        Each value is a dict with keys: run_name, run_dir, ef1, method, representation, dim
-        Missing combos have value None.
+        Each value is a LIST of dicts (one per replicate) with keys: run_name, run_dir, ef1, method, representation, dim
+        Missing combos have value [] (empty list).
 
     Raises:
-        RuntimeError: If fewer than min_required valid models found
+        RuntimeError: If fewer than min_required valid model families found
     """
     phase1_dir = phase1_workspace / phase1_phase_dir
     if not phase1_dir.exists():
@@ -107,7 +108,7 @@ def select_best_phase1_models(
 
     logger.info(f"Found {len(candidates)} completed Phase 1 runs")
 
-    # Group by (method, representation) and select best by EF@1%
+    # Group by (method, representation) and select best hyperparameter configuration by mean EF@1%
     combos = {
         "pca_features": ("pca", "features"),
         "pca_fingerprints": ("pca", "fingerprints"),
@@ -115,27 +116,64 @@ def select_best_phase1_models(
         "umap_fingerprints": ("umap", "fingerprints"),
     }
 
-    selected: Dict[str, Optional[Dict]] = {}
+    selected: Dict[str, List[Dict]] = {}
     for key, (method, representation) in combos.items():
         matching = [c for c in candidates if c["method"] == method and c["representation"] == representation]
-        if matching:
-            # Sort by EF@1% descending, then by dimension ascending (prefer simpler models as tie-breaker)
-            best = max(matching, key=lambda x: (x["ef1"], -x["dim"]))
-            selected[key] = best
-            logger.info(
-                f"Selected {key}: {best['run_name']} (EF@1%={best['ef1']:.2f}, dim={best['dim']})"
-            )
-        else:
-            selected[key] = None
+        if not matching:
+            selected[key] = []
             logger.warning(f"No completed runs found for {key}")
+            continue
+
+        # Group by hyperparameter configuration (dim + UMAP params if applicable)
+        # For PCA: just dim
+        # For UMAP: dim + n_neighbors + min_dist
+        from collections import defaultdict
+        config_groups = defaultdict(list)
+        
+        for c in matching:
+            if c["method"] == "pca":
+                config_key = (c["dim"],)
+            else:  # umap
+                # Extract UMAP params from run_name (format: ABL1_UMAP_features_2d_nn10_md0p01_rep4)
+                run_name = c["run_name"]
+                import re
+                nn_match = re.search(r'nn(\d+)', run_name)
+                md_match = re.search(r'md([\d.p]+)', run_name)
+                n_neighbors = int(nn_match.group(1)) if nn_match else 50
+                min_dist_str = md_match.group(1).replace('p', '.') if md_match else "0.01"
+                min_dist = float(min_dist_str)
+                config_key = (c["dim"], n_neighbors, min_dist)
+            
+            config_groups[config_key].append(c)
+        
+        # Find best configuration by mean EF@1% across replicates
+        best_config_key = None
+        best_mean_ef1 = -1
+        for config_key, replicate_runs in config_groups.items():
+            mean_ef1 = sum(r["ef1"] for r in replicate_runs) / len(replicate_runs)
+            if mean_ef1 > best_mean_ef1:
+                best_mean_ef1 = mean_ef1
+                best_config_key = config_key
+        
+        # Return ALL replicates of the best configuration
+        best_replicates = config_groups[best_config_key]
+        selected[key] = best_replicates
+        
+        logger.info(
+            f"Selected {key}: config={best_config_key}, mean_EF@1%={best_mean_ef1:.2f}, "
+            f"n_replicates={len(best_replicates)}"
+        )
+        for rep in best_replicates:
+            logger.info(f"  - {rep['run_name']} (EF@1%={rep['ef1']:.2f})")
 
     # Check minimum requirement
-    valid_count = sum(1 for v in selected.values() if v is not None)
+    valid_count = sum(1 for v in selected.values() if len(v) > 0)
     if valid_count < min_required:
         raise RuntimeError(
-            f"Only {valid_count} valid Phase 1 models found; need at least {min_required}. "
+            f"Only {valid_count} valid Phase 1 model families found; need at least {min_required}. "
             f"Complete more Phase 1 runs or reduce min_required."
         )
 
-    logger.info(f"Selected {valid_count}/4 model combos for Phase 2")
+    total_runs = sum(len(v) for v in selected.values())
+    logger.info(f"Selected {valid_count}/4 model families ({total_runs} total runs) for Phase 2")
     return selected

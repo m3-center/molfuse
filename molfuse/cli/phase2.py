@@ -87,26 +87,32 @@ def main() -> None:
         raise
 
     # Save selected models manifest
-    selected_manifest = {
-        k: v["run_name"] if v else None
-        for k, v in selected_models.items()
-    }
+    selected_manifest = {}
+    for k, v_list in selected_models.items():
+        if v_list:
+            selected_manifest[k] = [r["run_name"] for r in v_list]
+        else:
+            selected_manifest[k] = []
     (ws["base"] / "selected_models.json").write_text(json.dumps(selected_manifest, indent=2))
-    logger.info(f"Selected models: {selected_manifest}")
+    logger.info(f"Selected model families ({sum(len(v) for v in selected_models.values())} total runs):")
+    for k, v_list in selected_models.items():
+        if v_list:
+            logger.info(f"  {k}: {len(v_list)} replicates")
 
     # Cutoff list
     cutoff_list = cfg.get("affinity_cutoff_nM_list", [100, 1000, 10000, 100000])
     logger.info(f"Cutoffs to test: {cutoff_list} nM")
 
-    # Process each selected model
-    for model_key, model_info in selected_models.items():
-        if model_info is None:
-            logger.warning(f"Skipping {model_key}: no valid Phase 1 run found")
+    # Process each selected model family (all replicates)
+    for model_key, model_replicate_list in selected_models.items():
+        if not model_replicate_list:
+            logger.warning(f"Skipping {model_key}: no valid Phase 1 runs found")
             continue
 
-        logger.info("=" * 80)
-        logger.info(f"Processing {model_key}: {model_info['run_name']}")
-        logger.info("=" * 80)
+        for model_info in model_replicate_list:
+            logger.info("=" * 80)
+            logger.info(f"Processing {model_key}: {model_info['run_name']} (replicate)")
+            logger.info("=" * 80)
 
         phase1_run_dir = Path(model_info["run_dir"])
 
@@ -135,7 +141,7 @@ def main() -> None:
 
         # Check for affinity column
         if "Standard Value (nM)" not in df_mf_source.columns:
-            logger.warning(f"No 'Standard Value (nM)' column in MF source; cannot apply cutoffs. Skipping {model_key}.")
+            logger.warning(f"No 'Standard Value (nM)' column in MF source; cannot apply cutoffs. Skipping.")
             continue
 
         # Match MF source rows to embedding rows by SMILES (preferred) or Compound ID
