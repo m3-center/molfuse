@@ -168,8 +168,17 @@ def plot_phase3_phase4_overlay_high_potency(
     # Get target_short mapping from aggregated DataFrame
     target_mapping = df_phase4_agg[["target", "target_short", "natural_mf_size"]].drop_duplicates()
     
-    # Merge target_short into stratified data
-    p4_umap_feat = p4_umap_feat.merge(target_mapping, on="target", how="left")
+    # Merge target_short and natural_mf_size into stratified data
+    p4_umap_feat = p4_umap_feat.merge(
+        target_mapping, 
+        on="target", 
+        how="left",
+        suffixes=("", "_agg")  # Keep original columns, add _agg suffix to duplicates
+    )
+    
+    # Use the merged natural_mf_size from aggregated data
+    if "natural_mf_size_agg" in p4_umap_feat.columns:
+        p4_umap_feat["natural_mf_size"] = p4_umap_feat["natural_mf_size_agg"]
     
     # Aggregate Phase 4 by target_short (functional category)
     p4_agg = p4_umap_feat.groupby(["target_short", "natural_mf_size"], dropna=False).agg({
