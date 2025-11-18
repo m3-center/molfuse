@@ -735,11 +735,12 @@ def plot_4metric_comparison(
     metric_configs = [
         ("ef1_mean", "ef1_std", "EF@1%", "Early Enrichment (EF@1%)"),
         ("bedroc_20_mean", "bedroc_20_std", "BEDROC (α=20)", "Robust Early Enrichment (BEDROC α=20)"),
+        ("bedroc_160_mean", "bedroc_160_std", "BEDROC (α=160)", "Late Enrichment (BEDROC α=160)"),
         ("roc_mean", "roc_std", "ROC-AUC", "Overall Discrimination (ROC-AUC)"),
         ("pr_mean", "pr_std", "PR-AUC", "Precision-Recall (PR-AUC)")
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
     axes = axes.flatten()
     
     for idx, (mean_col, std_col, ylabel, title) in enumerate(metric_configs):
@@ -803,11 +804,14 @@ def plot_4metric_comparison(
             # Share y-axis limits with first subplot
             axes[0].get_shared_y_axes().join(axes[0], ax)
     
+    # Hide 6th subplot (2×3 grid, 5 metrics)
+    axes[5].axis('off')
+    
     plt.tight_layout()
     
     # Save outputs
-    output_png = output_dir / "phase1_4metric_comparison.png"
-    output_pdf = output_dir / "phase1_4metric_comparison.pdf"
+    output_png = output_dir / "phase1_5metric_comparison.png"
+    output_pdf = output_dir / "phase1_5metric_comparison.pdf"
     fig.savefig(output_png, dpi=300, bbox_inches='tight')
     fig.savefig(output_pdf, bbox_inches='tight')
     plt.close(fig)
@@ -822,9 +826,9 @@ def plot_4metric_stratified_tiers(
     logger: logging.Logger
 ) -> List[Path]:
     """
-    Create tier-stratified 4-metric comparison (High/Medium/Weak potency tiers).
+    Create tier-stratified 5-metric comparison (High/Medium/Weak potency tiers).
     
-    Generates 4 separate plots (one per metric), each showing 3 tiers.
+    Generates 5 separate plots (one per metric), each showing 3 tiers.
     
     Args:
         df_stratified: DataFrame from phase1_stratified_scores.py (stratified_grouped.csv)
@@ -834,20 +838,21 @@ def plot_4metric_stratified_tiers(
     Returns:
         List of saved file paths
     """
-    logger.info("Generating tier-stratified 4-metric comparisons...")
+    logger.info("Generating tier-stratified 5-metric comparisons...")
     
     _ensure_dir(output_dir)
     
     # Check required columns
     required_cols = ["ef_1%_high_mean", "ef_1%_medium_mean", "ef_1%_weak_mean",
                      "bedroc_20_high_mean", "bedroc_20_medium_mean", "bedroc_20_weak_mean",
+                     "bedroc_160_high_mean", "bedroc_160_medium_mean", "bedroc_160_weak_mean",
                      "roc_high_mean", "roc_medium_mean", "roc_weak_mean",
                      "pr_high_mean", "pr_medium_mean", "pr_weak_mean"]
     
     missing_cols = [c for c in required_cols if c not in df_stratified.columns]
     if missing_cols:
         logger.warning(f"Missing columns for tier stratification: {missing_cols}")
-        logger.warning("Skipping tier-stratified 4-metric plots")
+        logger.warning("Skipping tier-stratified 5-metric plots")
         return []
     
     methods = [
@@ -873,7 +878,8 @@ def plot_4metric_stratified_tiers(
     # Metrics: (metric_base, ylabel, title)
     metrics_config = [
         ("ef_1%", "EF@1%", "Tier-Stratified Early Enrichment (EF@1%)"),
-        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC (α=20)"),
+        ("bedroc_20", "BEDROC (\u03b1=20)", "Tier-Stratified BEDROC (\u03b1=20)"),
+        ("bedroc_160", "BEDROC (\u03b1=160)", "Tier-Stratified BEDROC (\u03b1=160)"),
         ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC"),
         ("pr", "PR-AUC", "Tier-Stratified PR-AUC")
     ]

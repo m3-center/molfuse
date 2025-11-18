@@ -1200,17 +1200,18 @@ def plot_cutoff_bedroc_ief_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -
 
 def plot_4panel_cutoff_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:
     """
-    Create 4-panel cutoff sensitivity curves for core metrics.
+    Create 5-panel cutoff sensitivity curves for core metrics.
     
     Panels:
     1. EF@1% vs cutoff (primary)
     2. BEDROC α=20 vs cutoff (primary)
-    3. ROC-AUC vs cutoff (secondary)
-    4. PR-AUC vs cutoff (secondary)
+    3. BEDROC α=160 vs cutoff (late enrichment)
+    4. ROC-AUC vs cutoff (secondary)
+    5. PR-AUC vs cutoff (secondary)
     
     Each panel shows 4 methods (pca/features, pca/fingerprints, umap/features, umap/fingerprints).
     """
-    print("\nGenerating 4-panel cutoff sensitivity curves...")
+    print("\nGenerating 5-panel cutoff sensitivity curves...")
     
     # Filter for main methods
     methods = [
@@ -1223,12 +1224,13 @@ def plot_4panel_cutoff_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> No
     # Metrics: (column_mean, column_sem, ylabel, title, ylim_min)
     metrics_config = [
         ("ef1_mean", "ef1_sem", "EF@1%", "Early Enrichment vs Affinity Cutoff", 0),
-        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "BEDROC vs Affinity Cutoff", 0),
+        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "BEDROC (α=20) vs Affinity Cutoff", 0),
+        ("bedroc_160_mean", "bedroc_160_sem", "BEDROC (α=160)", "BEDROC (α=160) vs Affinity Cutoff", 0),
         ("roc_auc_mean", "roc_auc_sem", "ROC-AUC", "ROC-AUC vs Affinity Cutoff", 0.5),
         ("pr_auc_mean", "pr_auc_sem", "PR-AUC", "PR-AUC vs Affinity Cutoff", 0)
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(22, 12))
     axes = axes.flatten()
     
     for idx, (mean_col, sem_col, ylabel, title, ylim_min) in enumerate(metrics_config):
@@ -1270,16 +1272,19 @@ def plot_4panel_cutoff_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> No
             current_ylim = ax.get_ylim()
             ax.set_ylim(bottom=max(ylim_min, current_ylim[0]))
     
+    # Hide 6th subplot (2×3 grid, 5 metrics)
+    axes[5].axis('off')
+    
     plt.tight_layout()
     
     # Save
-    output_png = output_dir / "phase2_4panel_cutoff_sensitivity.png"
-    output_pdf = output_dir / "phase2_4panel_cutoff_sensitivity.pdf"
+    output_png = output_dir / "phase2_5panel_cutoff_sensitivity.png"
+    output_pdf = output_dir / "phase2_5panel_cutoff_sensitivity.pdf"
     fig.savefig(output_png, dpi=300, bbox_inches='tight')
     fig.savefig(output_pdf, bbox_inches='tight')
     plt.close(fig)
     
-    print(f"Saved 4-panel cutoff sensitivity: {output_png.name}")
+    print(f"Saved 5-panel cutoff sensitivity: {output_png.name}")
 
 
 def plot_tierstratified_cutoff_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:

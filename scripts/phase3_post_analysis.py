@@ -782,12 +782,12 @@ def plot_4core_metrics_grid(
     logger: logging.Logger
 ) -> None:
     """
-    Compact 2×2 grid for 4 core metrics: EF@1%, BEDROC(α=20), ROC-AUC, PR-AUC.
+    Compact 2×3 grid for 5 core metrics: EF@1%, BEDROC(α=20), BEDROC(α=160), ROC-AUC, PR-AUC.
     
     Each panel shows all 4 methods (pca/features, pca/fingerprints, umap/features, umap/fingerprints).
     More compact and publication-friendly than the full 7-metric grid.
     """
-    logger.info("Generating 4-core-metrics compact grid...")
+    logger.info("Generating 5-core-metrics compact grid...")
     
     df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
     
@@ -803,11 +803,12 @@ def plot_4core_metrics_grid(
     metrics = [
         ("ef_1%_mean", "ef_1%_sem", "EF@1%", "Early Enrichment (EF@1%)"),
         ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "Robust Early Enrichment (BEDROC α=20)"),
+        ("bedroc_160_mean", "bedroc_160_sem", "BEDROC (α=160)", "Late Enrichment (BEDROC α=160)"),
         ("roc_auc_mean", "roc_auc_sem", "ROC-AUC", "Overall Discrimination (ROC-AUC)"),
         ("pr_auc_mean", "pr_auc_sem", "PR-AUC", "Precision-Recall (PR-AUC)")
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(22, 12))
     axes = axes.flatten()
     
     for idx, (mean_col, sem_col, ylabel, title) in enumerate(metrics):
@@ -838,10 +839,13 @@ def plot_4core_metrics_grid(
         ax.legend(loc='best', fontsize=10, framealpha=0.95)
         ax.grid(True, alpha=0.3, linestyle='--')
     
+    # Hide 6th subplot (2×3 grid, 5 metrics)
+    axes[5].axis('off')
+    
     plt.tight_layout()
     
-    output_png = output_dir / "phase3_4core_metrics_grid.png"
-    output_pdf = output_dir / "phase3_4core_metrics_grid.pdf"
+    output_png = output_dir / "phase3_5core_metrics_grid.png"
+    output_pdf = output_dir / "phase3_5core_metrics_grid.pdf"
     fig.savefig(output_png, dpi=300, bbox_inches='tight')
     fig.savefig(output_pdf, bbox_inches='tight')
     plt.close(fig)
@@ -921,14 +925,15 @@ def plot_tierstratified_other_metrics(
     logger: logging.Logger
 ) -> None:
     """
-    Tier-stratified degradation curves for BEDROC, ROC, PR (in addition to existing EF@1%).
+    Tier-stratified degradation curves for BEDROC-20, BEDROC-160, ROC, PR (in addition to existing EF@1%).
     
-    Creates 3 plots (one per metric), each showing High/Medium/Weak tiers for best method.
+    Creates 4 plots (one per metric), each showing High/Medium/Weak tiers for best method.
     """
-    logger.info("Generating tier-stratified degradation curves for BEDROC, ROC, PR...")
+    logger.info("Generating tier-stratified degradation curves for BEDROC-20/160, ROC, PR...")
     
     # Check required columns
     required_cols = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak",
+                     "bedroc_160_high", "bedroc_160_medium", "bedroc_160_weak",
                      "roc_high", "roc_medium", "roc_weak",
                      "pr_high", "pr_medium", "pr_weak"]
     
@@ -954,6 +959,9 @@ def plot_tierstratified_other_metrics(
         "bedroc_20_high": ["mean", "sem"],
         "bedroc_20_medium": ["mean", "sem"],
         "bedroc_20_weak": ["mean", "sem"],
+        "bedroc_160_high": ["mean", "sem"],
+        "bedroc_160_medium": ["mean", "sem"],
+        "bedroc_160_weak": ["mean", "sem"],
         "roc_high": ["mean", "sem"],
         "roc_medium": ["mean", "sem"],
         "roc_weak": ["mean", "sem"],
@@ -981,7 +989,8 @@ def plot_tierstratified_other_metrics(
     
     # Metrics: (base_name, ylabel, title)
     metrics_config = [
-        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC Degradation (UMAP/Features)"),
+        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC (α=20) Degradation (UMAP/Features)"),
+        ("bedroc_160", "BEDROC (α=160)", "Tier-Stratified BEDROC (α=160) Degradation (UMAP/Features)"),
         ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC Degradation (UMAP/Features)"),
         ("pr", "PR-AUC", "Tier-Stratified PR-AUC Degradation (UMAP/Features)")
     ]

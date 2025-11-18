@@ -1228,11 +1228,11 @@ def plot_4metric_cross_target_comparison(
     logger: logging.Logger
 ) -> None:
     """
-    4-panel cross-target comparison for core metrics.
+    5-panel cross-target comparison for core metrics.
     
     Each panel shows 8 targets as bars for one metric.
     """
-    logger.info("Generating 4-metric cross-target comparison...")
+    logger.info("Generating 5-metric cross-target comparison...")
     
     # Filter for best method (umap/features)
     subset = df_agg[
@@ -1241,7 +1241,7 @@ def plot_4metric_cross_target_comparison(
     ].copy()
     
     if subset.empty:
-        logger.warning("No UMAP/features data found. Skipping 4-metric cross-target comparison.")
+        logger.warning("No UMAP/features data found. Skipping 5-metric cross-target comparison.")
         return
     
     # Sort by natural_mf_size for consistent ordering
@@ -1250,12 +1250,13 @@ def plot_4metric_cross_target_comparison(
     # Metrics: (mean_col, sem_col, ylabel, title)
     metrics_config = [
         ("ef_1%_mean", "ef_1%_sem", "EF@1%", "Early Enrichment Across Targets (EF@1%)"),
-        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "BEDROC Across Targets (α=20)"),
+        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "BEDROC (α=20) Across Targets"),
+        ("bedroc_160_mean", "bedroc_160_sem", "BEDROC (α=160)", "BEDROC (α=160) Across Targets"),
         ("roc_auc_mean", "roc_auc_sem", "ROC-AUC", "ROC-AUC Across Targets"),
         ("pr_auc_mean", "pr_auc_sem", "PR-AUC", "PR-AUC Across Targets")
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(22, 12))
     axes = axes.flatten()
     
     # Color by target
