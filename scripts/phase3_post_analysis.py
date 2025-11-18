@@ -776,6 +776,255 @@ def plot_metrics_grid(
     logger.info(f"Saved: {output_path_png.name}")
 
 
+def plot_4core_metrics_grid(
+    df_agg: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Compact 2×2 grid for 4 core metrics: EF@1%, BEDROC(α=20), ROC-AUC, PR-AUC.
+    
+    Each panel shows all 4 methods (pca/features, pca/fingerprints, umap/features, umap/fingerprints).
+    More compact and publication-friendly than the full 7-metric grid.
+    """
+    logger.info("Generating 4-core-metrics compact grid...")
+    
+    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
+    
+    # Define methods and colors
+    methods = [
+        ("pca_features", "PCA/Features", "#2E86AB"),
+        ("pca_fingerprints", "PCA/Fingerprints", "#A23B72"),
+        ("umap_features", "UMAP/Features", "#F18F01"),
+        ("umap_fingerprints", "UMAP/Fingerprints", "#06A77D")
+    ]
+    
+    # Core metrics: (mean_col, sem_col, ylabel, title)
+    metrics = [
+        ("ef_1%_mean", "ef_1%_sem", "EF@1%", "Early Enrichment (EF@1%)"),
+        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "Robust Early Enrichment (BEDROC α=20)"),
+        ("roc_auc_mean", "roc_auc_sem", "ROC-AUC", "Overall Discrimination (ROC-AUC)"),
+        ("pr_auc_mean", "pr_auc_sem", "PR-AUC", "Precision-Recall (PR-AUC)")
+    ]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+    
+    for idx, (mean_col, sem_col, ylabel, title) in enumerate(metrics):
+        ax = axes[idx]
+        
+        for model_key, label, color in methods:
+            subset = df_agg[df_agg["model_key"] == model_key].copy()
+            
+            if subset.empty:
+                continue
+            
+            subset = subset.sort_values("mf_size_target_numeric")
+            
+            x = subset["mf_size_target_numeric"].values
+            y_mean = subset[mean_col].values
+            y_sem = subset[sem_col].values
+            
+            # Plot line with error band
+            ax.plot(x, y_mean, 'o-', color=color, linewidth=2.5, markersize=7,
+                   label=label, alpha=0.9)
+            ax.fill_between(x, y_mean - y_sem, y_mean + y_sem, color=color, alpha=0.2)
+        
+        # Formatting
+        ax.set_xscale('log')
+        ax.set_xlabel("MF Cloud Size (compounds)", fontweight='bold', fontsize=12)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(title, fontweight='bold', fontsize=13)
+        ax.legend(loc='best', fontsize=10, framealpha=0.95)
+        ax.grid(True, alpha=0.3, linestyle='--')
+    
+    plt.tight_layout()
+    
+    output_png = output_dir / "phase3_4core_metrics_grid.png"
+    output_pdf = output_dir / "phase3_4core_metrics_grid.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved 4-core-metrics grid: {output_png.name}")
+
+
+def plot_bedroc_degradation_curves(
+    df_agg: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    BEDROC degradation curves (similar to existing EF@1% degradation curves).
+    
+    Shows how BEDROC(α=20) degrades as MF cloud size decreases.
+    """
+    logger.info("Generating BEDROC degradation curves...")
+    
+    df_agg["model_key"] = df_agg.apply(get_model_key, axis=1)
+    model_keys = sorted(df_agg["model_key"].unique())
+    
+    colors = {
+        "pca_features": "#2E86AB",
+        "pca_fingerprints": "#A23B72",
+        "umap_features": "#F18F01",
+        "umap_fingerprints": "#06A77D"
+    }
+    
+    labels = {
+        "pca_features": "PCA/Features",
+        "pca_fingerprints": "PCA/Fingerprints",
+        "umap_features": "UMAP/Features",
+        "umap_fingerprints": "UMAP/Fingerprints"
+    }
+    
+    # Create one plot with all methods
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    for model_key in model_keys:
+        subset = df_agg[df_agg["model_key"] == model_key].copy()
+        subset = subset.sort_values("mf_size_target_numeric")
+        
+        x = subset["mf_size_target_numeric"].values
+        y_mean = subset["bedroc_20_mean"].values
+        y_sem = subset["bedroc_20_sem"].values
+        
+        # Plot line with error band
+        ax.plot(x, y_mean, 'o-', color=colors.get(model_key, "#333333"),
+               linewidth=2.5, markersize=7, label=labels.get(model_key, model_key),
+               alpha=0.9)
+        ax.fill_between(x, y_mean - y_sem, y_mean + y_sem,
+                        color=colors.get(model_key, "#333333"), alpha=0.2)
+    
+    # Formatting
+    ax.set_xscale('log')
+    ax.set_xlabel("MF Cloud Size (compounds)", fontweight='bold', fontsize=13)
+    ax.set_ylabel("BEDROC (α=20)", fontweight='bold', fontsize=13)
+    ax.set_title("BEDROC Degradation with MF Cloud Subsampling", fontweight='bold', fontsize=14)
+    ax.legend(loc='best', fontsize=11, framealpha=0.95)
+    ax.grid(True, alpha=0.3, linestyle='--')
+    
+    plt.tight_layout()
+    
+    output_png = output_dir / "phase3_bedroc_degradation_curves.png"
+    output_pdf = output_dir / "phase3_bedroc_degradation_curves.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved BEDROC degradation curves: {output_png.name}")
+
+
+def plot_tierstratified_other_metrics(
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Tier-stratified degradation curves for BEDROC, ROC, PR (in addition to existing EF@1%).
+    
+    Creates 3 plots (one per metric), each showing High/Medium/Weak tiers for best method.
+    """
+    logger.info("Generating tier-stratified degradation curves for BEDROC, ROC, PR...")
+    
+    # Check required columns
+    required_cols = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak",
+                     "roc_high", "roc_medium", "roc_weak",
+                     "pr_high", "pr_medium", "pr_weak"]
+    
+    missing_cols = [c for c in required_cols if c not in df_stratified.columns]
+    if missing_cols:
+        logger.warning(f"Missing tier-stratified columns: {missing_cols}")
+        logger.warning("Skipping tier-stratified other metrics plots")
+        return
+    
+    # Filter for best method (umap/features)
+    df_best = df_stratified[
+        (df_stratified["method"] == "umap") &
+        (df_stratified["representation"] == "features")
+    ].copy()
+    
+    if df_best.empty:
+        logger.warning("No UMAP/features data found for tier stratification")
+        return
+    
+    # Aggregate by mf_size_target
+    df_agg = df_best.groupby("mf_size_target", as_index=False).agg({
+        "mf_size_actual": "mean",
+        "bedroc_20_high": ["mean", "sem"],
+        "bedroc_20_medium": ["mean", "sem"],
+        "bedroc_20_weak": ["mean", "sem"],
+        "roc_high": ["mean", "sem"],
+        "roc_medium": ["mean", "sem"],
+        "roc_weak": ["mean", "sem"],
+        "pr_high": ["mean", "sem"],
+        "pr_medium": ["mean", "sem"],
+        "pr_weak": ["mean", "sem"]
+    })
+    
+    # Flatten column names
+    df_agg.columns = ['_'.join(col).strip('_') for col in df_agg.columns.values]
+    
+    # Convert mf_size_target to numeric
+    df_agg["mf_size_numeric"] = df_agg["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    df_agg = df_agg.sort_values("mf_size_numeric")
+    
+    x = df_agg["mf_size_numeric"].values
+    
+    colors = {
+        "High": "#06A77D",
+        "Medium": "#F18F01",
+        "Weak": "#A23B72"
+    }
+    
+    # Metrics: (base_name, ylabel, title)
+    metrics_config = [
+        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC Degradation (UMAP/Features)"),
+        ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC Degradation (UMAP/Features)"),
+        ("pr", "PR-AUC", "Tier-Stratified PR-AUC Degradation (UMAP/Features)")
+    ]
+    
+    for metric_base, ylabel, title in metrics_config:
+        fig, ax = plt.subplots(figsize=(10, 7))
+        
+        for tier in ["High", "Medium", "Weak"]:
+            tier_mean_col = f"{metric_base}_{tier.lower()}_mean"
+            tier_sem_col = f"{metric_base}_{tier.lower()}_sem"
+            
+            if tier_mean_col not in df_agg.columns:
+                logger.warning(f"Column {tier_mean_col} not found")
+                continue
+            
+            y_mean = df_agg[tier_mean_col].values
+            y_sem = df_agg[tier_sem_col].values if tier_sem_col in df_agg.columns else np.zeros(len(df_agg))
+            
+            label = f"{tier} (≤{'100' if tier == 'High' else '1K' if tier == 'Medium' else '100K'} nM)"
+            ax.plot(x, y_mean, 'o-', color=colors[tier], linewidth=2.5, markersize=7,
+                   label=label, alpha=0.9)
+            ax.fill_between(x, y_mean - y_sem, y_mean + y_sem, color=colors[tier], alpha=0.2)
+        
+        # Formatting
+        ax.set_xscale('log')
+        ax.set_xlabel("MF Cloud Size (compounds)", fontweight='bold', fontsize=13)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=13)
+        ax.set_title(title, fontweight='bold', fontsize=14)
+        ax.legend(loc='best', fontsize=11, framealpha=0.95)
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        plt.tight_layout()
+        
+        metric_name = metric_base.replace("_", "")
+        output_png = output_dir / f"phase3_tierstratified_{metric_name}_degradation.png"
+        output_pdf = output_dir / f"phase3_tierstratified_{metric_name}_degradation.pdf"
+        fig.savefig(output_png, dpi=300, bbox_inches='tight')
+        fig.savefig(output_pdf, bbox_inches='tight')
+        plt.close(fig)
+        
+        logger.info(f"  Saved tier-stratified {metric_base}: {output_png.name}")
+
+
 def plot_stratified_degradation_curves(
     df: pd.DataFrame,
     df_stratified: pd.DataFrame,
@@ -1403,6 +1652,12 @@ def main():
         plot_bedroc_ief_comparison_overlay(df_agg, output_dir, logger)
         plot_metrics_grid(df_agg, output_dir, logger)
         
+        # NEW: 4-core-metrics compact grid (EF@1%, BEDROC-20, ROC, PR)
+        plot_4core_metrics_grid(df_agg, output_dir, logger)
+        
+        # NEW: BEDROC degradation curves
+        plot_bedroc_degradation_curves(df_agg, output_dir, logger)
+        
         # 7. Potency-stratified analysis (if enabled)
         if args.stratify:
             logger.info("\n" + "="*80)
@@ -1441,6 +1696,9 @@ def main():
                 plot_stratified_degradation_curves(df, df_stratified, output_dir, logger)
                 plot_bedroc_ief_stratified_curves(df, output_dir, logger)
                 plot_tier_enrichment_ratio(df_stratified, output_dir, logger)
+                
+                # NEW: Tier-stratified BEDROC, ROC, PR degradation curves
+                plot_tierstratified_other_metrics(df_stratified, output_dir, logger)
             else:
                 logger.warning("No stratified metrics computed (missing artifacts?)")
         

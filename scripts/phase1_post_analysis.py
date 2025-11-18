@@ -687,7 +687,267 @@ def _setup_logger(out_dir: Path) -> logging.Logger:
     return logger
 
 
+def plot_4metric_comparison(
+    df_grouped: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger,
+    sharey: bool = False
+) -> List[Path]:
+    """
+    Create 2×2 multi-metric panel comparing 4 methods on core metrics.
+    
+    Metrics (primary → secondary):
+    - EF@1% (early enrichment, primary)
+    - BEDROC α=20 (robust early enrichment, primary)
+    - ROC-AUC (overall discrimination, secondary)
+    - PR-AUC (precision-recall, secondary)
+    
+    Returns:
+        List of saved file paths
+    """
+    logger.info("Generating 4-metric comparison panel...")
+    
+    _ensure_dir(output_dir)
+    
+    # Define methods and colors
+    methods = [
+        ("pca", "features"),
+        ("pca", "fingerprints"),
+        ("umap", "features"),
+        ("umap", "fingerprints")
+    ]
+    
+    colors = {
+        ("pca", "features"): "#2E86AB",
+        ("pca", "fingerprints"): "#A23B72",
+        ("umap", "features"): "#F18F01",
+        ("umap", "fingerprints"): "#06A77D"
+    }
+    
+    labels = {
+        ("pca", "features"): "PCA/Features",
+        ("pca", "fingerprints"): "PCA/Fingerprints",
+        ("umap", "features"): "UMAP/Features",
+        ("umap", "fingerprints"): "UMAP/Fingerprints"
+    }
+    
+    # Metrics configuration: (column_mean, column_std, ylabel, title)
+    metric_configs = [
+        ("ef1_mean", "ef1_std", "EF@1%", "Early Enrichment (EF@1%)"),
+        ("bedroc_20_mean", "bedroc_20_std", "BEDROC (α=20)", "Robust Early Enrichment (BEDROC α=20)"),
+        ("roc_mean", "roc_std", "ROC-AUC", "Overall Discrimination (ROC-AUC)"),
+        ("pr_mean", "pr_std", "PR-AUC", "Precision-Recall (PR-AUC)")
+    ]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
+    
+    for idx, (mean_col, std_col, ylabel, title) in enumerate(metric_configs):
+        ax = axes[idx]
+        
+        # Extract data for each method
+        x_pos = np.arange(len(methods))
+        means = []
+        stds = []
+        
+        for method, representation in methods:
+            subset = df_grouped[
+                (df_grouped["method"] == method) &
+                (df_grouped["representation"] == representation)
+            ]
+            
+            if not subset.empty and mean_col in subset.columns:
+                mean_val = float(subset[mean_col].iloc[0])
+                std_val = float(subset[std_col].iloc[0]) if std_col in subset.columns else 0.0
+            else:
+                mean_val = 0.0
+                std_val = 0.0
+            
+            means.append(mean_val)
+            stds.append(std_val)
+        
+        # Plot bars
+        bars = ax.bar(
+            x_pos,
+            means,
+            yerr=stds,
+            capsize=5,
+            color=[colors[m] for m in methods],
+            edgecolor='black',
+            linewidth=1.5,
+            alpha=0.8,
+            error_kw={'linewidth': 2, 'ecolor': 'black'}
+        )
+        
+        # Formatting
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([labels[m] for m in methods], rotation=45, ha='right', fontsize=10)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=11)
+        ax.set_title(title, fontweight='bold', fontsize=12)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        
+        # Add value labels on bars
+        for i, (bar, mean_val) in enumerate(zip(bars, means)):
+            if mean_val > 0:
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + stds[i],
+                    f'{mean_val:.2f}',
+                    ha='center',
+                    va='bottom',
+                    fontsize=9,
+                    fontweight='bold'
+                )
+        
+        if sharey and idx > 0:
+            # Share y-axis limits with first subplot
+            axes[0].get_shared_y_axes().join(axes[0], ax)
+    
+    plt.tight_layout()
+    
+    # Save outputs
+    output_png = output_dir / "phase1_4metric_comparison.png"
+    output_pdf = output_dir / "phase1_4metric_comparison.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved 4-metric comparison: {output_png.name}")
+    return [output_png, output_pdf]
 
+
+def plot_4metric_stratified_tiers(
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> List[Path]:
+    """
+    Create tier-stratified 4-metric comparison (High/Medium/Weak potency tiers).
+    
+    Generates 4 separate plots (one per metric), each showing 3 tiers.
+    
+    Args:
+        df_stratified: DataFrame from phase1_stratified_scores.py (stratified_grouped.csv)
+        output_dir: Output directory
+        logger: Logger instance
+    
+    Returns:
+        List of saved file paths
+    """
+    logger.info("Generating tier-stratified 4-metric comparisons...")
+    
+    _ensure_dir(output_dir)
+    
+    # Check required columns
+    required_cols = ["ef_1%_high_mean", "ef_1%_medium_mean", "ef_1%_weak_mean",
+                     "bedroc_20_high_mean", "bedroc_20_medium_mean", "bedroc_20_weak_mean",
+                     "roc_high_mean", "roc_medium_mean", "roc_weak_mean",
+                     "pr_high_mean", "pr_medium_mean", "pr_weak_mean"]
+    
+    missing_cols = [c for c in required_cols if c not in df_stratified.columns]
+    if missing_cols:
+        logger.warning(f"Missing columns for tier stratification: {missing_cols}")
+        logger.warning("Skipping tier-stratified 4-metric plots")
+        return []
+    
+    methods = [
+        ("pca", "features"),
+        ("pca", "fingerprints"),
+        ("umap", "features"),
+        ("umap", "fingerprints")
+    ]
+    
+    colors = {
+        "High": "#06A77D",
+        "Medium": "#F18F01",
+        "Weak": "#A23B72"
+    }
+    
+    labels = {
+        ("pca", "features"): "PCA/Feat",
+        ("pca", "fingerprints"): "PCA/FP",
+        ("umap", "features"): "UMAP/Feat",
+        ("umap", "fingerprints"): "UMAP/FP"
+    }
+    
+    # Metrics: (metric_base, ylabel, title)
+    metrics_config = [
+        ("ef_1%", "EF@1%", "Tier-Stratified Early Enrichment (EF@1%)"),
+        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC (α=20)"),
+        ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC"),
+        ("pr", "PR-AUC", "Tier-Stratified PR-AUC")
+    ]
+    
+    saved_files = []
+    
+    for metric_base, ylabel, title in metrics_config:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        x_pos = np.arange(len(methods))
+        width = 0.25
+        
+        # Extract data for each tier
+        for tier_idx, tier in enumerate(["High", "Medium", "Weak"]):
+            tier_col = f"{metric_base}_{tier.lower()}_mean"
+            tier_std_col = f"{metric_base}_{tier.lower()}_std"
+            
+            means = []
+            stds = []
+            
+            for method, representation in methods:
+                subset = df_stratified[
+                    (df_stratified["method"] == method) &
+                    (df_stratified["representation"] == representation)
+                ]
+                
+                if not subset.empty and tier_col in subset.columns:
+                    mean_val = float(subset[tier_col].iloc[0])
+                    std_val = float(subset[tier_std_col].iloc[0]) if tier_std_col in subset.columns else 0.0
+                else:
+                    mean_val = 0.0
+                    std_val = 0.0
+                
+                means.append(mean_val)
+                stds.append(std_val)
+            
+            # Plot grouped bars
+            offset = (tier_idx - 1) * width
+            ax.bar(
+                x_pos + offset,
+                means,
+                width,
+                yerr=stds,
+                label=f"{tier} (≤{'100' if tier == 'High' else '1K' if tier == 'Medium' else '100K'} nM)",
+                color=colors[tier],
+                edgecolor='black',
+                linewidth=1.2,
+                alpha=0.8,
+                capsize=4,
+                error_kw={'linewidth': 1.5, 'ecolor': 'black'}
+            )
+        
+        # Formatting
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels([labels[m] for m in methods], fontsize=11)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(title, fontweight='bold', fontsize=13)
+        ax.legend(loc='best', fontsize=10, framealpha=0.95)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        
+        plt.tight_layout()
+        
+        # Save
+        metric_name = metric_base.replace("_", "").replace("%", "pct")
+        output_png = output_dir / f"phase1_tierstratified_{metric_name}.png"
+        output_pdf = output_dir / f"phase1_tierstratified_{metric_name}.pdf"
+        fig.savefig(output_png, dpi=300, bbox_inches='tight')
+        fig.savefig(output_pdf, bbox_inches='tight')
+        plt.close(fig)
+        
+        logger.info(f"Saved tier-stratified {metric_base}: {output_png.name}")
+        saved_files.extend([output_png, output_pdf])
+    
+    return saved_files
 
 
 def _plot_2d_scatter_embeddings(
@@ -1481,6 +1741,21 @@ def main():
     alpha_vals = [20.0, 160.9]  # Standard and aggressive early recognition
     saved_bedroc_ief = plot_bedroc_ief_bars(df_grouped, plot_dir, alpha_vals, getattr(args, "sharey", True), logger)
     manifest["bedroc_ief_bars"] = [str(p) for p in saved_bedroc_ief]
+    
+    # NEW: 4-metric comparison panel (EF@1%, BEDROC-20, ROC-AUC, PR-AUC)
+    saved_4metric = plot_4metric_comparison(df_grouped, plot_dir, logger, sharey=getattr(args, "sharey", False))
+    manifest["4metric_comparison"] = [str(p) for p in saved_4metric]
+    
+    # NEW: Tier-stratified 4-metric plots (if stratified data available)
+    stratified_grouped_csv = out_dir / "stratified_grouped.csv"
+    if stratified_grouped_csv.exists():
+        logger.info(f"Found stratified data: {stratified_grouped_csv}")
+        df_stratified = pd.read_csv(stratified_grouped_csv)
+        saved_tier_4metric = plot_4metric_stratified_tiers(df_stratified, plot_dir, logger)
+        manifest["4metric_tierstratified"] = [str(p) for p in saved_tier_4metric]
+    else:
+        logger.warning(f"Stratified data not found: {stratified_grouped_csv}")
+        logger.warning("Skipping tier-stratified 4-metric plots. Run phase1_stratified_scores.py first.")
     
     plot_umap_heatmaps(df_grouped, plot_dir)
     manifest.setdefault("heatmaps", []).extend([str(plot_dir/"umap_heatmap_grid.png"), str(plot_dir/"umap_heatmap_grid.pdf")])

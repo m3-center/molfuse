@@ -1222,6 +1222,328 @@ def plot_high_potency_correlation(
     return correlations
 
 
+def plot_4metric_cross_target_comparison(
+    df_agg: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    4-panel cross-target comparison for core metrics.
+    
+    Each panel shows 8 targets as bars for one metric.
+    """
+    logger.info("Generating 4-metric cross-target comparison...")
+    
+    # Filter for best method (umap/features)
+    subset = df_agg[
+        (df_agg["method"] == "umap") &
+        (df_agg["representation"] == "features")
+    ].copy()
+    
+    if subset.empty:
+        logger.warning("No UMAP/features data found. Skipping 4-metric cross-target comparison.")
+        return
+    
+    # Sort by natural_mf_size for consistent ordering
+    subset = subset.sort_values("natural_mf_size")
+    
+    # Metrics: (mean_col, sem_col, ylabel, title)
+    metrics_config = [
+        ("ef_1%_mean", "ef_1%_sem", "EF@1%", "Early Enrichment Across Targets (EF@1%)"),
+        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "BEDROC Across Targets (α=20)"),
+        ("roc_auc_mean", "roc_auc_sem", "ROC-AUC", "ROC-AUC Across Targets"),
+        ("pr_auc_mean", "pr_auc_sem", "PR-AUC", "PR-AUC Across Targets")
+    ]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+    
+    # Color by target
+    targets = subset["target_short"].values
+    colors = plt.cm.tab10(np.linspace(0, 1, len(targets)))
+    
+    for idx, (mean_col, sem_col, ylabel, title) in enumerate(metrics_config):
+        ax = axes[idx]
+        
+        means = subset[mean_col].values
+        sems = subset[sem_col].values if sem_col in subset.columns else np.zeros(len(subset))
+        
+        x_pos = np.arange(len(targets))
+        
+        bars = ax.bar(
+            x_pos,
+            means,
+            yerr=sems,
+            capsize=5,
+            color=colors,
+            edgecolor='black',
+            linewidth=1.5,
+            alpha=0.8,
+            error_kw={'linewidth': 2, 'ecolor': 'black'}
+        )
+        
+        # Formatting
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(targets, rotation=45, ha='right', fontsize=10)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(f"{title} (UMAP/Features)", fontweight='bold', fontsize=13)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        
+        # Add value labels
+        for i, (bar, mean_val) in enumerate(zip(bars, means)):
+            if pd.notna(mean_val):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + sems[i],
+                    f'{mean_val:.2f}',
+                    ha='center',
+                    va='bottom',
+                    fontsize=8,
+                    fontweight='bold'
+                )
+    
+    plt.tight_layout()
+    
+    output_png = output_dir / "phase4_4metric_cross_target.png"
+    output_pdf = output_dir / "phase4_4metric_cross_target.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved 4-metric cross-target comparison: {output_png.name}")
+
+
+def plot_4metric_mf_size_correlation(
+    df_agg: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> Dict[str, Dict[str, Tuple[float, float]]]:
+    """
+    MF size correlation for all 4 core metrics.
+    
+    Creates 2×2 panel showing correlation between natural MF size and each metric.
+    
+    Returns:
+        Dict mapping metric_name → {"overall": (rho, p), "high_potency": (rho, p)}
+    """
+    logger.info("Generating 4-metric MF size correlation plots...")
+    
+    # Filter for best method (umap/features)
+    subset = df_agg[
+        (df_agg["method"] == "umap") &
+        (df_agg["representation"] == "features")
+    ].copy()
+    
+    if subset.empty:
+        logger.warning("No UMAP/features data. Skipping MF size correlation.")
+        return {}
+    
+    # Remove NaN values
+    subset = subset.dropna(subset=["natural_mf_size"])
+    
+    x = subset["natural_mf_size"].values
+    target_labels = subset["target_short"].values
+    
+    # Metrics: (mean_col, ylabel, title, metric_name)
+    metrics_config = [
+        ("ef_1%_mean", "EF@1%", "MF Size vs Early Enrichment", "ef1"),
+        ("bedroc_20_mean", "BEDROC (α=20)", "MF Size vs BEDROC", "bedroc20"),
+        ("roc_auc_mean", "ROC-AUC", "MF Size vs ROC-AUC", "roc"),
+        ("pr_auc_mean", "PR-AUC", "MF Size vs PR-AUC", "pr")
+    ]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+    
+    correlations = {}
+    
+    for idx, (mean_col, ylabel, title, metric_name) in enumerate(metrics_config):
+        ax = axes[idx]
+        
+        y = subset[mean_col].values
+        
+        # Remove NaN
+        valid_mask = ~np.isnan(y)
+        x_valid = x[valid_mask]
+        y_valid = y[valid_mask]
+        labels_valid = target_labels[valid_mask]
+        
+        if len(x_valid) < 3:
+            logger.warning(f"Insufficient data for {metric_name} correlation")
+            continue
+        
+        # Compute correlation
+        rho, p_value = stats.spearmanr(x_valid, y_valid)
+        correlations[metric_name] = {"overall": (rho, p_value)}
+        
+        # Scatter plot with labels
+        scatter = ax.scatter(x_valid, y_valid, s=150, alpha=0.7, edgecolors='black', linewidth=1.5)
+        
+        # Add target labels
+        for xi, yi, label in zip(x_valid, y_valid, labels_valid):
+            ax.annotate(
+                str(label).replace('_', ' '),
+                (xi, yi),
+                fontsize=9,
+                ha='left',
+                va='bottom',
+                xytext=(5, 5),
+                textcoords='offset points',
+                alpha=0.8
+            )
+        
+        # Fit trendline
+        z = np.polyfit(np.log10(x_valid), y_valid, 1)
+        p = np.poly1d(z)
+        x_fit = np.logspace(np.log10(x_valid.min()), np.log10(x_valid.max()), 100)
+        y_fit = p(np.log10(x_fit))
+        
+        ax.plot(x_fit, y_fit, '--', color='red', linewidth=2, alpha=0.8,
+               label=f'ρ={rho:.3f}, p={p_value:.3f}')
+        
+        # Formatting
+        ax.set_xscale('log')
+        ax.set_xlabel("Natural MF Cloud Size (compounds)", fontweight='bold', fontsize=12)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(f"{title}\n(Spearman ρ={rho:.3f}, p={p_value:.3f})",
+                    fontweight='bold', fontsize=13)
+        ax.legend(loc='best', fontsize=10, framealpha=0.95)
+        ax.grid(True, alpha=0.3, linestyle='--')
+    
+    plt.tight_layout()
+    
+    output_png = output_dir / "phase4_4metric_mf_size_correlation.png"
+    output_pdf = output_dir / "phase4_4metric_mf_size_correlation.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved 4-metric MF size correlation: {output_png.name}")
+    
+    # Log correlation results
+    logger.info("\nMF Size Correlation Statistics:")
+    for metric_name, corr_data in correlations.items():
+        rho, p = corr_data["overall"]
+        sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns"
+        logger.info(f"  {metric_name}: ρ={rho:.3f}, p={p:.3e} {sig}")
+    
+    return correlations
+
+
+def plot_tierstratified_cross_target_other_metrics(
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Tier-stratified cross-target comparison for BEDROC, ROC, PR.
+    
+    Creates 3 plots (one per metric), each showing High/Medium/Weak tiers across 8 targets.
+    """
+    logger.info("Generating tier-stratified cross-target plots for BEDROC, ROC, PR...")
+    
+    # Check required columns
+    required_cols_bedroc = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak"]
+    required_cols_roc = ["roc_high", "roc_medium", "roc_weak"]
+    required_cols_pr = ["pr_high", "pr_medium", "pr_weak"]
+    
+    if not all(c in df_stratified.columns for c in required_cols_bedroc):
+        logger.warning("Missing tier-stratified BEDROC columns. Skipping BEDROC tier plot.")
+        return
+    
+    # Filter for best method (umap/features)
+    subset = df_stratified[
+        (df_stratified["method"] == "umap") &
+        (df_stratified["representation"] == "features")
+    ].copy()
+    
+    if subset.empty:
+        logger.warning("No UMAP/features data. Skipping tier-stratified cross-target plots.")
+        return
+    
+    # Aggregate by target
+    agg_cols = {}
+    for tier in ["high", "medium", "weak"]:
+        for metric in ["bedroc_20", "roc", "pr"]:
+            col = f"{metric}_{tier}"
+            if col in subset.columns:
+                agg_cols[col] = ["mean", "sem"]
+    
+    df_agg = subset.groupby("target_short", as_index=False).agg(agg_cols)
+    df_agg.columns = ['_'.join(col).strip('_') for col in df_agg.columns.values]
+    
+    # Sort by target name
+    df_agg = df_agg.sort_values("target_short")
+    
+    targets = df_agg["target_short"].values
+    x_pos = np.arange(len(targets))
+    width = 0.25
+    
+    colors = {
+        "High": "#06A77D",
+        "Medium": "#F18F01",
+        "Weak": "#A23B72"
+    }
+    
+    # Metrics: (base_name, ylabel, title)
+    metrics_config = [
+        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC Across Targets"),
+        ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC Across Targets"),
+        ("pr", "PR-AUC", "Tier-Stratified PR-AUC Across Targets")
+    ]
+    
+    for metric_base, ylabel, title in metrics_config:
+        # Check if columns exist
+        tier_cols = [f"{metric_base}_{tier}_mean" for tier in ["high", "medium", "weak"]]
+        if not all(c in df_agg.columns for c in tier_cols):
+            logger.warning(f"Missing columns for {metric_base}. Skipping.")
+            continue
+        
+        fig, ax = plt.subplots(figsize=(14, 7))
+        
+        for tier_idx, tier in enumerate(["High", "Medium", "Weak"]):
+            tier_mean_col = f"{metric_base}_{tier.lower()}_mean"
+            tier_sem_col = f"{metric_base}_{tier.lower()}_sem"
+            
+            means = df_agg[tier_mean_col].values
+            sems = df_agg[tier_sem_col].values if tier_sem_col in df_agg.columns else np.zeros(len(df_agg))
+            
+            offset = (tier_idx - 1) * width
+            
+            ax.bar(
+                x_pos + offset,
+                means,
+                width,
+                yerr=sems,
+                label=f"{tier} (≤{'100' if tier == 'High' else '1K' if tier == 'Medium' else '100K'} nM)",
+                color=colors[tier],
+                edgecolor='black',
+                linewidth=1.2,
+                alpha=0.8,
+                capsize=4,
+                error_kw={'linewidth': 1.5, 'ecolor': 'black'}
+            )
+        
+        # Formatting
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(targets, rotation=45, ha='right', fontsize=11)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(f"{title} (UMAP/Features)", fontweight='bold', fontsize=13)
+        ax.legend(loc='best', fontsize=11, framealpha=0.95)
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        
+        plt.tight_layout()
+        
+        metric_name = metric_base.replace("_", "")
+        output_png = output_dir / f"phase4_tierstratified_{metric_name}_cross_target.png"
+        output_pdf = output_dir / f"phase4_tierstratified_{metric_name}_cross_target.pdf"
+        fig.savefig(output_png, dpi=300, bbox_inches='tight')
+        fig.savefig(output_pdf, bbox_inches='tight')
+        plt.close(fig)
+        
+        logger.info(f"  Saved tier-stratified {metric_base}: {output_png.name}")
+
+
 # ============================================================================
 # Summary Outputs
 # ============================================================================
@@ -1500,10 +1822,19 @@ def main():
         plot_cross_target_bedroc_ief(df_agg, output_dir, logger)
         correlations = plot_mf_size_correlation(df_agg, output_dir, logger)
         
+        # NEW: 4-metric cross-target comparison
+        plot_4metric_cross_target_comparison(df_agg, output_dir, logger)
+        
+        # NEW: 4-metric MF size correlation
+        correlations_4metric = plot_4metric_mf_size_correlation(df_agg, output_dir, logger)
+        
         # Stratified plots (if enabled and data available)
         if args.stratify and 'df_stratified' in locals() and not df_stratified.empty:
             plot_stratified_cross_target(df_stratified, output_dir, logger)
             high_potency_correlations = plot_high_potency_correlation(df_stratified, output_dir, logger)
+            
+            # NEW: Tier-stratified cross-target for BEDROC, ROC, PR
+            plot_tierstratified_cross_target_other_metrics(df_stratified, output_dir, logger)
             
             # Save correlation results
             if not args.plots_only:

@@ -1198,6 +1198,175 @@ def plot_cutoff_bedroc_ief_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -
             print(f"Saved {filename}.png/pdf")
 
 
+def plot_4panel_cutoff_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:
+    """
+    Create 4-panel cutoff sensitivity curves for core metrics.
+    
+    Panels:
+    1. EF@1% vs cutoff (primary)
+    2. BEDROC α=20 vs cutoff (primary)
+    3. ROC-AUC vs cutoff (secondary)
+    4. PR-AUC vs cutoff (secondary)
+    
+    Each panel shows 4 methods (pca/features, pca/fingerprints, umap/features, umap/fingerprints).
+    """
+    print("\nGenerating 4-panel cutoff sensitivity curves...")
+    
+    # Filter for main methods
+    methods = [
+        ("pca_features", "pca", "features", "#2E86AB"),
+        ("pca_fingerprints", "pca", "fingerprints", "#A23B72"),
+        ("umap_features", "umap", "features", "#F18F01"),
+        ("umap_fingerprints", "umap", "fingerprints", "#06A77D")
+    ]
+    
+    # Metrics: (column_mean, column_sem, ylabel, title, ylim_min)
+    metrics_config = [
+        ("ef1_mean", "ef1_sem", "EF@1%", "Early Enrichment vs Affinity Cutoff", 0),
+        ("bedroc_20_mean", "bedroc_20_sem", "BEDROC (α=20)", "BEDROC vs Affinity Cutoff", 0),
+        ("roc_auc_mean", "roc_auc_sem", "ROC-AUC", "ROC-AUC vs Affinity Cutoff", 0.5),
+        ("pr_auc_mean", "pr_auc_sem", "PR-AUC", "PR-AUC vs Affinity Cutoff", 0)
+    ]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    axes = axes.flatten()
+    
+    for idx, (mean_col, sem_col, ylabel, title, ylim_min) in enumerate(metrics_config):
+        ax = axes[idx]
+        
+        for model_key, method, representation, color in methods:
+            subset = df_agg[
+                (df_agg["method"] == method) &
+                (df_agg["representation"] == representation)
+            ].copy()
+            
+            if subset.empty:
+                continue
+            
+            # Sort by cutoff
+            subset = subset.sort_values("cutoff_nM")
+            
+            # Extract data
+            cutoffs = subset["cutoff_nM"].values
+            means = subset[mean_col].values if mean_col in subset.columns else np.zeros(len(subset))
+            sems = subset[sem_col].values if sem_col in subset.columns else np.zeros(len(subset))
+            
+            # Plot line with error band
+            label = model_key.replace("_", "/").upper()
+            ax.plot(cutoffs, means, 'o-', color=color, linewidth=2.5, markersize=7,
+                   label=label, alpha=0.9)
+            ax.fill_between(cutoffs, means - sems, means + sems, color=color, alpha=0.2)
+        
+        # Formatting
+        ax.set_xscale('log')
+        ax.set_xlabel("Affinity Cutoff (nM)", fontweight='bold', fontsize=12)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(title, fontweight='bold', fontsize=13)
+        ax.legend(loc='best', fontsize=10, framealpha=0.95)
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        # Set y-axis minimum if specified
+        if ylim_min is not None:
+            current_ylim = ax.get_ylim()
+            ax.set_ylim(bottom=max(ylim_min, current_ylim[0]))
+    
+    plt.tight_layout()
+    
+    # Save
+    output_png = output_dir / "phase2_4panel_cutoff_sensitivity.png"
+    output_pdf = output_dir / "phase2_4panel_cutoff_sensitivity.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    print(f"Saved 4-panel cutoff sensitivity: {output_png.name}")
+
+
+def plot_tierstratified_cutoff_sensitivity(df_agg: pd.DataFrame, output_dir: Path) -> None:
+    """
+    Create tier-stratified cutoff sensitivity plots for BEDROC, ROC, PR.
+    
+    Generates 3 plots (one per metric), each showing High/Medium/Weak tiers.
+    EF@1% tier stratification already exists in plot_cutoff_tier_sensitivity().
+    """
+    print("\nGenerating tier-stratified cutoff sensitivity for BEDROC, ROC, PR...")
+    
+    # Check if tier-stratified columns exist
+    required_cols_bedroc = ["bedroc_20_high_mean", "bedroc_20_medium_mean", "bedroc_20_weak_mean"]
+    required_cols_roc = ["roc_high_mean", "roc_medium_mean", "roc_weak_mean"]
+    required_cols_pr = ["pr_high_mean", "pr_medium_mean", "pr_weak_mean"]
+    
+    if not all(c in df_agg.columns for c in required_cols_bedroc):
+        print("  WARNING: Missing tier-stratified BEDROC columns. Skipping BEDROC tier plot.")
+        return
+    
+    # Filter for best method (umap/features)
+    best_method = df_agg[
+        (df_agg["method"] == "umap") &
+        (df_agg["representation"] == "features")
+    ].copy().sort_values("cutoff_nM")
+    
+    if best_method.empty:
+        print("  WARNING: No UMAP/features data found. Skipping tier-stratified plots.")
+        return
+    
+    cutoffs = best_method["cutoff_nM"].values
+    
+    colors = {
+        "High": "#06A77D",
+        "Medium": "#F18F01",
+        "Weak": "#A23B72"
+    }
+    
+    # Metrics: (base_name, ylabel, title)
+    metrics_config = [
+        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC vs Affinity Cutoff"),
+        ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC vs Affinity Cutoff"),
+        ("pr", "PR-AUC", "Tier-Stratified PR-AUC vs Affinity Cutoff")
+    ]
+    
+    for metric_base, ylabel, title in metrics_config:
+        # Check if columns exist
+        tier_cols = [f"{metric_base}_{tier.lower()}_mean" for tier in ["high", "medium", "weak"]]
+        if not all(c in best_method.columns for c in tier_cols):
+            print(f"  WARNING: Missing columns for {metric_base}. Skipping.")
+            continue
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        for tier in ["High", "Medium", "Weak"]:
+            tier_mean_col = f"{metric_base}_{tier.lower()}_mean"
+            tier_sem_col = f"{metric_base}_{tier.lower()}_sem"
+            
+            means = best_method[tier_mean_col].values
+            sems = best_method[tier_sem_col].values if tier_sem_col in best_method.columns else np.zeros(len(best_method))
+            
+            label = f"{tier} (≤{'100' if tier == 'High' else '1K' if tier == 'Medium' else '100K'} nM)"
+            ax.plot(cutoffs, means, 'o-', color=colors[tier], linewidth=2.5, markersize=7,
+                   label=label, alpha=0.9)
+            ax.fill_between(cutoffs, means - sems, means + sems, color=colors[tier], alpha=0.2)
+        
+        # Formatting
+        ax.set_xscale('log')
+        ax.set_xlabel("Affinity Cutoff for MF Scoring (nM)", fontweight='bold', fontsize=12)
+        ax.set_ylabel(ylabel, fontweight='bold', fontsize=12)
+        ax.set_title(f"{title} (UMAP/Features)", fontweight='bold', fontsize=13)
+        ax.legend(loc='best', fontsize=11, framealpha=0.95)
+        ax.grid(True, alpha=0.3, linestyle='--')
+        
+        plt.tight_layout()
+        
+        # Save
+        metric_name = metric_base.replace("_", "")
+        output_png = output_dir / f"phase2_tierstratified_{metric_name}_cutoff.png"
+        output_pdf = output_dir / f"phase2_tierstratified_{metric_name}_cutoff.pdf"
+        fig.savefig(output_png, dpi=300, bbox_inches='tight')
+        fig.savefig(output_pdf, bbox_inches='tight')
+        plt.close(fig)
+        
+        print(f"  Saved tier-stratified {metric_base}: {output_png.name}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -1284,6 +1453,12 @@ def main() -> None:
 
     # BEDROC and IEF cutoff sensitivity (best configs only) - overall only, no tiers
     plot_cutoff_bedroc_ief_sensitivity(df_agg, output_dir)
+    
+    # NEW: 4-panel cutoff sensitivity (EF@1%, BEDROC-20, ROC, PR)
+    plot_4panel_cutoff_sensitivity(df_agg, output_dir)
+    
+    # NEW: Tier-stratified cutoff sensitivity for BEDROC, ROC, PR
+    plot_tierstratified_cutoff_sensitivity(df_agg, output_dir)
 
     # Identify best cutoffs
     identify_best_cutoffs(df_agg, output_dir)
