@@ -694,18 +694,19 @@ def plot_4metric_comparison(
     sharey: bool = False
 ) -> List[Path]:
     """
-    Create 2×2 multi-metric panel comparing 4 methods on core metrics.
+    Create 2×3 multi-metric panel comparing 4 methods on 5 core metrics.
     
     Metrics (primary → secondary):
     - EF@1% (early enrichment, primary)
     - BEDROC α=20 (robust early enrichment, primary)
+    - BEDROC α=160 (late enrichment)
     - ROC-AUC (overall discrimination, secondary)
     - PR-AUC (precision-recall, secondary)
     
     Returns:
         List of saved file paths
     """
-    logger.info("Generating 4-metric comparison panel...")
+    logger.info("Generating 5-metric comparison panel...")
     
     _ensure_dir(output_dir)
     
@@ -816,7 +817,7 @@ def plot_4metric_comparison(
     fig.savefig(output_pdf, bbox_inches='tight')
     plt.close(fig)
     
-    logger.info(f"Saved 4-metric comparison: {output_png.name}")
+    logger.info(f"Saved 5-metric comparison: {output_png.name}")
     return [output_png, output_pdf]
 
 
@@ -1748,20 +1749,20 @@ def main():
     saved_bedroc_ief = plot_bedroc_ief_bars(df_grouped, plot_dir, alpha_vals, getattr(args, "sharey", True), logger)
     manifest["bedroc_ief_bars"] = [str(p) for p in saved_bedroc_ief]
     
-    # NEW: 4-metric comparison panel (EF@1%, BEDROC-20, ROC-AUC, PR-AUC)
-    saved_4metric = plot_4metric_comparison(df_grouped, plot_dir, logger, sharey=getattr(args, "sharey", False))
-    manifest["4metric_comparison"] = [str(p) for p in saved_4metric]
+    # NEW: 5-metric comparison panel (EF@1%, BEDROC-20, BEDROC-160, ROC-AUC, PR-AUC)
+    saved_5metric = plot_4metric_comparison(df_grouped, plot_dir, logger, sharey=getattr(args, "sharey", False))
+    manifest["5metric_comparison"] = [str(p) for p in saved_5metric]
     
-    # NEW: Tier-stratified 4-metric plots (if stratified data available)
+    # NEW: Tier-stratified 5-metric plots (if stratified data available)
     stratified_grouped_csv = out_dir / "stratified_grouped.csv"
     if stratified_grouped_csv.exists():
         logger.info(f"Found stratified data: {stratified_grouped_csv}")
         df_stratified = pd.read_csv(stratified_grouped_csv)
-        saved_tier_4metric = plot_4metric_stratified_tiers(df_stratified, plot_dir, logger)
-        manifest["4metric_tierstratified"] = [str(p) for p in saved_tier_4metric]
+        saved_tier_5metric = plot_4metric_stratified_tiers(df_stratified, plot_dir, logger)
+        manifest["5metric_tierstratified"] = [str(p) for p in saved_tier_5metric]
     else:
         logger.warning(f"Stratified data not found: {stratified_grouped_csv}")
-        logger.warning("Skipping tier-stratified 4-metric plots. Run phase1_stratified_scores.py first.")
+        logger.warning("Skipping tier-stratified 5-metric plots. Run phase1_stratified_scores.py first.")
     
     plot_umap_heatmaps(df_grouped, plot_dir)
     manifest.setdefault("heatmaps", []).extend([str(plot_dir/"umap_heatmap_grid.png"), str(plot_dir/"umap_heatmap_grid.pdf")])
