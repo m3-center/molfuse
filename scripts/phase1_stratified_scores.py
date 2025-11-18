@@ -150,8 +150,20 @@ def load_actives_with_affinity(config: dict, target: str, logger: logging.Logger
     
     p = Path(mf_path)
     if not p.exists():
-        logger.warning(f"MF file not found: {p}")
-        return None
+        # Fallback: Check if this is an old dataset path and try new location
+        old_prefix = "datasets/molecular_function_features_fingerprints/"
+        new_prefix = "output_recalculated_full_datasets/datasets_2d_all/"
+        if old_prefix in str(p):
+            fallback_path = Path(str(p).replace(old_prefix, new_prefix))
+            if fallback_path.exists():
+                logger.info(f"MF file not found at old path {p}, using new location: {fallback_path}")
+                p = fallback_path
+            else:
+                logger.warning(f"MF file not found at old path {p} or new location {fallback_path}")
+                return None
+        else:
+            logger.warning(f"MF file not found: {p}")
+            return None
     
     # Check cache first
     cache_key = str(p.resolve())

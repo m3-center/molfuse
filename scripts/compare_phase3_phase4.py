@@ -393,6 +393,107 @@ def plot_phase3_phase4_overlay_bedroc(
     print(f"Saved: {output_path_png.name}")
 
 
+def plot_phase3_phase4_overlay_bedroc160(
+    df_phase3: pd.DataFrame,
+    df_phase4: pd.DataFrame,
+    output_dir: Path
+) -> None:
+    """
+    Overlay Phase 3 and Phase 4 BEDROC (α=160) curves.
+    """
+    print("\nGenerating Phase 3 vs Phase 4 overlay (BEDROC α=160)...")
+    
+    # Filter for UMAP/features
+    p3_umap_feat = df_phase3[
+        (df_phase3["method"] == "umap") & 
+        (df_phase3["representation"] == "features")
+    ].copy()
+    
+    p4_umap_feat = df_phase4[
+        (df_phase4["method"] == "umap") & 
+        (df_phase4["representation"] == "features")
+    ].copy()
+    
+    # Extract target_short from target_kw if missing
+    if p4_umap_feat["target_short"].isna().all():
+        p4_umap_feat["target_short"] = p4_umap_feat["target_kw"].str.split("_").str[1]
+    
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    # Phase 3: MF ablation curve
+    p3_sorted = p3_umap_feat.sort_values("mf_size_target_numeric")
+    
+    p3_x = np.array(p3_sorted["mf_size_target_numeric"].values, dtype=float)
+    p3_y_mean = np.array(p3_sorted["bedroc_160_mean"].values, dtype=float)
+    p3_y_sem = np.array(p3_sorted["bedroc_160_sem"].values, dtype=float)
+    
+    # Remove NaN
+    valid_mask = ~np.isnan(p3_x) & ~np.isnan(p3_y_mean)
+    p3_x = p3_x[valid_mask]
+    p3_y_mean = p3_y_mean[valid_mask]
+    p3_y_sem = p3_y_sem[valid_mask]
+    
+    # Plot Phase 3 curve
+    ax.plot(p3_x, p3_y_mean, 'o-', color='#2E86AB', linewidth=2.5, markersize=8,
+            label='Phase 3: P00519 (MF ablation)', zorder=3)
+    ax.fill_between(p3_x, p3_y_mean - p3_y_sem, p3_y_mean + p3_y_sem,
+                     color='#2E86AB', alpha=0.2, zorder=2)
+    
+    # Phase 4: Cross-target scatter
+    p4_x = np.array(p4_umap_feat["natural_mf_size"].values, dtype=float)
+    p4_y = np.array(p4_umap_feat["bedroc_160_mean"].values, dtype=float)
+    p4_labels = p4_umap_feat["target_short"].values
+    
+    # Remove NaN
+    valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
+    p4_x_valid = p4_x[valid_mask]
+    p4_y_valid = p4_y[valid_mask]
+    p4_labels_valid = p4_labels[valid_mask]
+    
+    # Plot Phase 4 points with labels
+    scatter = ax.scatter(p4_x_valid, p4_y_valid, s=150, color='#A23B72', alpha=0.7,
+                        edgecolors='black', linewidth=1.5, label='Phase 4: 8 protein functions',
+                        zorder=4)
+    
+    # Add target labels
+    for x, y, label in zip(p4_x_valid, p4_y_valid, p4_labels_valid):
+        display_label = label.replace('_', ' ') if isinstance(label, str) else str(label)
+        ax.annotate(display_label, (x, y), fontsize=8, ha='left', va='bottom',
+                   xytext=(5, 5), textcoords='offset points', alpha=0.8)
+    
+    # Add Phase 4 trendline
+    if len(p4_x_valid) >= 3:
+        rho, p_value = stats.spearmanr(p4_x_valid, p4_y_valid)
+        z = np.polyfit(np.log10(p4_x_valid), p4_y_valid, 1)
+        p = np.poly1d(z)
+        
+        x_min = max(p3_x.min(), p4_x_valid.min())
+        x_max = min(p3_x.max(), p4_x_valid.max())
+        x_fit = np.logspace(np.log10(x_min), np.log10(x_max), 100)
+        y_fit = p(np.log10(x_fit))
+        
+        ax.plot(x_fit, y_fit, '--', color='#A23B72', alpha=0.8, linewidth=2,
+                label=f'Phase 4 trend (ρ={rho:.3f}, p={p_value:.3f})', zorder=3)
+    
+    ax.set_xscale("log")
+    ax.set_xlabel("Natural MF Cloud Size (compounds)", fontweight="bold", fontsize=13)
+    ax.set_ylabel("BEDROC (α=160)", fontweight="bold", fontsize=13)
+    ax.set_title("Phase 3 vs Phase 4: BEDROC-160 Across MF Sizes", 
+                 fontweight="bold", fontsize=15)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", fontsize=11, framealpha=0.95)
+    
+    plt.tight_layout()
+    
+    output_path_png = output_dir / "phase3_phase4_overlay_bedroc160.png"
+    output_path_pdf = output_dir / "phase3_phase4_overlay_bedroc160.pdf"
+    fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path_pdf, bbox_inches="tight")
+    plt.close(fig)
+    
+    print(f"Saved: {output_path_png.name}")
+
+
 def plot_phase3_phase4_overlay_roc_pr(
     df_phase3: pd.DataFrame,
     df_phase4: pd.DataFrame,
@@ -508,11 +609,11 @@ def plot_phase3_phase4_4panel_comparison(
     output_dir: Path
 ) -> None:
     """
-    4-panel comparison: EF@1%, BEDROC, ROC-AUC, PR-AUC (Phase 3 vs Phase 4 overlays).
+    5-panel comparison: EF@1%, BEDROC-20, BEDROC-160, ROC-AUC, PR-AUC (Phase 3 vs Phase 4 overlays).
     
-    Compact multi-metric manuscript figure.
+    Compact multi-metric manuscript figure (2×3 grid with 6th subplot hidden).
     """
-    print("\nGenerating Phase 3 vs Phase 4 4-panel comparison...")
+    print("\nGenerating Phase 3 vs Phase 4 5-panel comparison...")
     
     # Filter for UMAP/features
     p3_umap_feat = df_phase3[
@@ -533,11 +634,12 @@ def plot_phase3_phase4_4panel_comparison(
     metrics = [
         ("ef_1%_mean", "ef_1%_sem", "ef_1%_mean", "EF@1%", "Early Enrichment (EF@1%)"),
         ("bedroc_20_mean", "bedroc_20_sem", "bedroc_20_mean", "BEDROC (α=20)", "BEDROC (α=20)"),
+        ("bedroc_160_mean", "bedroc_160_sem", "bedroc_160_mean", "BEDROC (α=160)", "BEDROC (α=160)"),
         ("roc_auc_mean", "roc_auc_sem", "roc_auc_mean", "ROC-AUC", "ROC-AUC"),
         ("pr_auc_mean", "pr_auc_sem", "pr_auc_mean", "PR-AUC", "PR-AUC")
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+    fig, axes = plt.subplots(2, 3, figsize=(21, 14))
     axes = axes.flatten()
     
     for idx, (p3_mean, p3_sem, p4_mean, ylabel, title) in enumerate(metrics):
@@ -597,10 +699,13 @@ def plot_phase3_phase4_4panel_comparison(
         ax.grid(True, alpha=0.3)
         ax.legend(loc="best", fontsize=10, framealpha=0.95)
     
+    # Hide the 6th subplot (bottom-right)
+    axes[5].axis('off')
+    
     plt.tight_layout()
     
-    output_path_png = output_dir / "phase3_phase4_4panel_comparison.png"
-    output_path_pdf = output_dir / "phase3_phase4_4panel_comparison.pdf"
+    output_path_png = output_dir / "phase3_phase4_5panel_comparison.png"
+    output_path_pdf = output_dir / "phase3_phase4_5panel_comparison.pdf"
     fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
     fig.savefig(output_path_pdf, bbox_inches="tight")
     plt.close(fig)
@@ -653,6 +758,7 @@ def main():
     
     # Generate new comprehensive metric overlays
     plot_phase3_phase4_overlay_bedroc(df_p3, df_p4, output_dir)
+    plot_phase3_phase4_overlay_bedroc160(df_p3, df_p4, output_dir)
     plot_phase3_phase4_overlay_roc_pr(df_p3, df_p4, output_dir)
     plot_phase3_phase4_4panel_comparison(df_p3, df_p4, output_dir)
     

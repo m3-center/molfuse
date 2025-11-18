@@ -1303,15 +1303,18 @@ def plot_4metric_cross_target_comparison(
                     fontweight='bold'
                 )
     
+    # Hide the 6th subplot (bottom-right)
+    axes[5].axis('off')
+    
     plt.tight_layout()
     
-    output_png = output_dir / "phase4_4metric_cross_target.png"
-    output_pdf = output_dir / "phase4_4metric_cross_target.pdf"
+    output_png = output_dir / "phase4_5metric_cross_target.png"
+    output_pdf = output_dir / "phase4_5metric_cross_target.pdf"
     fig.savefig(output_png, dpi=300, bbox_inches='tight')
     fig.savefig(output_pdf, bbox_inches='tight')
     plt.close(fig)
     
-    logger.info(f"Saved 4-metric cross-target comparison: {output_png.name}")
+    logger.info(f"Saved 5-metric cross-target comparison: {output_png.name}")
 
 
 def plot_4metric_mf_size_correlation(
@@ -1348,12 +1351,13 @@ def plot_4metric_mf_size_correlation(
     # Metrics: (mean_col, ylabel, title, metric_name)
     metrics_config = [
         ("ef_1%_mean", "EF@1%", "MF Size vs Early Enrichment", "ef1"),
-        ("bedroc_20_mean", "BEDROC (α=20)", "MF Size vs BEDROC", "bedroc20"),
+        ("bedroc_20_mean", "BEDROC (α=20)", "MF Size vs BEDROC-20", "bedroc20"),
+        ("bedroc_160_mean", "BEDROC (α=160)", "MF Size vs BEDROC-160", "bedroc160"),
         ("roc_auc_mean", "ROC-AUC", "MF Size vs ROC-AUC", "roc"),
         ("pr_auc_mean", "PR-AUC", "MF Size vs PR-AUC", "pr")
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(21, 12))
     axes = axes.flatten()
     
     correlations = {}
@@ -1411,15 +1415,18 @@ def plot_4metric_mf_size_correlation(
         ax.legend(loc='best', fontsize=10, framealpha=0.95)
         ax.grid(True, alpha=0.3, linestyle='--')
     
+    # Hide the 6th subplot (bottom-right)
+    axes[5].axis('off')
+    
     plt.tight_layout()
     
-    output_png = output_dir / "phase4_4metric_mf_size_correlation.png"
-    output_pdf = output_dir / "phase4_4metric_mf_size_correlation.pdf"
+    output_png = output_dir / "phase4_5metric_mf_size_correlation.png"
+    output_pdf = output_dir / "phase4_5metric_mf_size_correlation.pdf"
     fig.savefig(output_png, dpi=300, bbox_inches='tight')
     fig.savefig(output_pdf, bbox_inches='tight')
     plt.close(fig)
     
-    logger.info(f"Saved 4-metric MF size correlation: {output_png.name}")
+    logger.info(f"Saved 5-metric MF size correlation: {output_png.name}")
     
     # Log correlation results
     logger.info("\nMF Size Correlation Statistics:")
@@ -1445,6 +1452,7 @@ def plot_tierstratified_cross_target_other_metrics(
     
     # Check required columns
     required_cols_bedroc = ["bedroc_20_high", "bedroc_20_medium", "bedroc_20_weak"]
+    required_cols_bedroc160 = ["bedroc_160_high", "bedroc_160_medium", "bedroc_160_weak"]
     required_cols_roc = ["roc_high", "roc_medium", "roc_weak"]
     required_cols_pr = ["pr_high", "pr_medium", "pr_weak"]
     
@@ -1465,7 +1473,7 @@ def plot_tierstratified_cross_target_other_metrics(
     # Aggregate by target
     agg_cols = {}
     for tier in ["high", "medium", "weak"]:
-        for metric in ["bedroc_20", "roc", "pr"]:
+        for metric in ["bedroc_20", "bedroc_160", "roc", "pr"]:
             col = f"{metric}_{tier}"
             if col in subset.columns:
                 agg_cols[col] = ["mean", "sem"]
@@ -1488,7 +1496,8 @@ def plot_tierstratified_cross_target_other_metrics(
     
     # Metrics: (base_name, ylabel, title)
     metrics_config = [
-        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC Across Targets"),
+        ("bedroc_20", "BEDROC (α=20)", "Tier-Stratified BEDROC-20 Across Targets"),
+        ("bedroc_160", "BEDROC (α=160)", "Tier-Stratified BEDROC-160 Across Targets"),
         ("roc", "ROC-AUC", "Tier-Stratified ROC-AUC Across Targets"),
         ("pr", "PR-AUC", "Tier-Stratified PR-AUC Across Targets")
     ]
