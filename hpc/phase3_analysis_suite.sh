@@ -5,40 +5,49 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=200G
 #SBATCH --time=0-12:00:00
-#SBATCH --job-name=phase1_analysis
-#SBATCH --output=slurm_logs/phase1_analysis_%j.out
-#SBATCH --error=slurm_logs/phase1_analysis_%j.err
+#SBATCH --job-name=phase3_analysis
+#SBATCH --output=slurm_logs/phase3_analysis_%j.out
+#SBATCH --error=slurm_logs/phase3_analysis_%j.err
 
-# Phase 1 Analysis Suite
-# Runs post-analysis and stratified scores for Phase 1 experiments
+# Phase 3 Analysis Suite
+# Runs post-analysis for Phase 3 experiments (MF Cloud Ablation)
 #
 # Usage:
-#   sbatch hpc/phase1_analysis_suite.sh [WORKSPACE_DIR] [OUTPUT_BASE_DIR]
+#   sbatch hpc/phase3_analysis_suite.sh [WORKSPACE_DIR] [OUTPUT_BASE_DIR] [PHASE3_RUN_NAME] [--stratify]
 #
 # Example:
-#   sbatch hpc/phase1_analysis_suite.sh experiment_workspace_v4 reporting
+#   sbatch hpc/phase3_analysis_suite.sh experiment_workspace_v4 reporting mf_ablation
+#   sbatch hpc/phase3_analysis_suite.sh experiment_workspace_v4 reporting mf_ablation --stratify
 #
 # Output structure:
-#   <OUTPUT_BASE_DIR>/phase1_post_analysis/
-#   <OUTPUT_BASE_DIR>/phase1_stratified/
+#   <OUTPUT_BASE_DIR>/phase3_post_analysis/
 
 WORKSPACE_DIR="${1:-experiment_workspace_v4}"
 OUTPUT_BASE_DIR="${2:-reporting}"
+PHASE3_RUN_NAME="${3:-mf_ablation}"
+
+# Parse optional --stratify flag
+STRATIFY_FLAG=""
+if [[ "$4" == "--stratify" ]] || [[ "$5" == "--stratify" ]]; then
+    STRATIFY_FLAG="--stratify"
+fi
 
 # Ensure slurm_logs directory exists
 mkdir -p slurm_logs || true
 
 # Log startup information
 echo "=========================================="
-echo "Phase 1 Analysis Suite"
+echo "Phase 3 Analysis Suite"
 echo "=========================================="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Start Time: $(date)"
 echo "Workspace: ${WORKSPACE_DIR}"
 echo "Output Base Dir: ${OUTPUT_BASE_DIR}"
+echo "Phase 3 Run Name: ${PHASE3_RUN_NAME}"
+echo "Stratify by potency: ${STRATIFY_FLAG:-disabled}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK}"
-echo "Memory: 128G"
+echo "Memory: 300G"
 echo "=========================================="
 echo ""
 
@@ -52,65 +61,33 @@ echo "Python version: $(python --version)"
 echo ""
 
 # ============================================================================
-# STEP 1: Phase 1 Post-Analysis
+# Phase 3 Post-Analysis (MF Cloud Ablation)
 # ============================================================================
 echo "=========================================="
-echo "STEP 1: Phase 1 Post-Analysis"
+echo "Phase 3 Post-Analysis (MF Cloud Ablation)"
 echo "=========================================="
 echo "Start Time: $(date)"
 echo ""
 
-POST_ANALYSIS_OUTPUT="${OUTPUT_BASE_DIR}/phase1_post_analysis"
+POST_ANALYSIS_OUTPUT="${OUTPUT_BASE_DIR}/phase3_post_analysis"
 
-python scripts/phase1_post_analysis.py \
+python scripts/phase3_post_analysis.py \
     --workspace_dir "${WORKSPACE_DIR}" \
-    --phase phase1 \
+    --phase3_run_name "${PHASE3_RUN_NAME}" \
     --output_dir "${POST_ANALYSIS_OUTPUT}" \
-    --metrics ef1
+    ${STRATIFY_FLAG}
 
 POST_ANALYSIS_EXIT=$?
 
 echo ""
-echo "Phase 1 Post-Analysis Exit Code: ${POST_ANALYSIS_EXIT}"
+echo "Phase 3 Post-Analysis Exit Code: ${POST_ANALYSIS_EXIT}"
 echo "End Time: $(date)"
 echo ""
 
 if [[ ${POST_ANALYSIS_EXIT} -ne 0 ]]; then
-    echo "ERROR: Phase 1 Post-Analysis failed with exit code ${POST_ANALYSIS_EXIT}"
+    echo "ERROR: Phase 3 Post-Analysis failed with exit code ${POST_ANALYSIS_EXIT}"
     echo "Aborting analysis suite."
     exit ${POST_ANALYSIS_EXIT}
-fi
-
-# ============================================================================
-# STEP 2: Phase 1 Stratified Scores
-# ============================================================================
-echo "=========================================="
-echo "STEP 2: Phase 1 Stratified Scores"
-echo "=========================================="
-echo "Start Time: $(date)"
-echo ""
-
-STRATIFIED_OUTPUT="${OUTPUT_BASE_DIR}/phase1_stratified"
-
-# Use conservative worker count to avoid OOM (max 8 workers for memory-intensive operations)
-STRATIFIED_WORKERS=$(( SLURM_CPUS_PER_TASK < 8 ? SLURM_CPUS_PER_TASK : 8 ))
-
-python scripts/phase1_stratified_scores.py \
-    --workspace_dir "${WORKSPACE_DIR}" \
-    --phase phase1 \
-    --output_dir "${STRATIFIED_OUTPUT}" \
-    --n_workers ${STRATIFIED_WORKERS}
-
-STRATIFIED_EXIT=$?
-
-echo ""
-echo "Phase 1 Stratified Scores Exit Code: ${STRATIFIED_EXIT}"
-echo "End Time: $(date)"
-echo ""
-
-if [[ ${STRATIFIED_EXIT} -ne 0 ]]; then
-    echo "ERROR: Phase 1 Stratified Scores failed with exit code ${STRATIFIED_EXIT}"
-    exit ${STRATIFIED_EXIT}
 fi
 
 # ============================================================================
@@ -122,13 +99,14 @@ echo "=========================================="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "End Time: $(date)"
 echo ""
-echo "Output Directories:"
+echo "Output Directory:"
 echo "  - Post-Analysis: ${POST_ANALYSIS_OUTPUT}"
-echo "  - Stratified Scores: ${STRATIFIED_OUTPUT}"
 echo ""
-echo "Exit Codes:"
+echo "Exit Code:"
 echo "  - Post-Analysis: ${POST_ANALYSIS_EXIT}"
-echo "  - Stratified Scores: ${STRATIFIED_EXIT}"
+echo ""
+echo "Generated Files:"
+ls -lh "${POST_ANALYSIS_OUTPUT}"/*.{png,pdf,csv,json} 2>/dev/null | awk '{print "  " $9 " (" $5 ")"}'
 echo "=========================================="
 
 exit 0
