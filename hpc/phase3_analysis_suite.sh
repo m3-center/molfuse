@@ -13,11 +13,10 @@
 # Runs post-analysis for Phase 3 experiments (MF Cloud Ablation)
 #
 # Usage:
-#   sbatch hpc/phase3_analysis_suite.sh [WORKSPACE_DIR] [OUTPUT_BASE_DIR] [PHASE3_RUN_NAME] [--stratify]
+#   sbatch hpc/phase3_analysis_suite.sh [WORKSPACE_DIR] [OUTPUT_BASE_DIR] [PHASE3_RUN_NAME]
 #
 # Example:
 #   sbatch hpc/phase3_analysis_suite.sh experiment_workspace_v4 reporting mf_ablation
-#   sbatch hpc/phase3_analysis_suite.sh experiment_workspace_v4 reporting mf_ablation --stratify
 #
 # Output structure:
 #   <OUTPUT_BASE_DIR>/phase3_post_analysis/
@@ -25,12 +24,6 @@
 WORKSPACE_DIR="${1:-experiment_workspace_v4}"
 OUTPUT_BASE_DIR="${2:-reporting}"
 PHASE3_RUN_NAME="${3:-mf_ablation}"
-
-# Parse optional --stratify flag
-STRATIFY_FLAG=""
-if [[ "$4" == "--stratify" ]] || [[ "$5" == "--stratify" ]]; then
-    STRATIFY_FLAG="--stratify"
-fi
 
 # Ensure slurm_logs directory exists
 mkdir -p slurm_logs || true
@@ -45,9 +38,9 @@ echo "Start Time: $(date)"
 echo "Workspace: ${WORKSPACE_DIR}"
 echo "Output Base Dir: ${OUTPUT_BASE_DIR}"
 echo "Phase 3 Run Name: ${PHASE3_RUN_NAME}"
-echo "Stratify by potency: ${STRATIFY_FLAG:-disabled}"
+echo "Stratify by potency: enabled"
 echo "CPUs: ${SLURM_CPUS_PER_TASK}"
-echo "Memory: 300G"
+echo "Memory: 200G"
 echo "=========================================="
 echo ""
 
@@ -75,7 +68,7 @@ python scripts/phase3_post_analysis.py \
     --workspace_dir "${WORKSPACE_DIR}" \
     --phase3_run_name "${PHASE3_RUN_NAME}" \
     --output_dir "${POST_ANALYSIS_OUTPUT}" \
-    ${STRATIFY_FLAG}
+    --stratify
 
 POST_ANALYSIS_EXIT=$?
 

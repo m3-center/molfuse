@@ -253,7 +253,54 @@ python generate_phase4_configs.py
 bash hpc/submit_v3_phase4.sh
 ```
 
-### 7. Analyze Results with Potency Stratification
+### 7. HPC Post-Analysis (All Phases)
+
+After running experiments, use the HPC analysis suite scripts to aggregate results and generate publication-quality plots:
+
+```bash
+# Phase 1 Analysis (Post-analysis + Stratified Scores)
+sbatch hpc/phase1_analysis_suite.sh experiment_workspace_v4 reporting
+
+# Phase 2 Analysis (Cutoff Sensitivity)
+sbatch hpc/phase2_analysis_suite.sh experiment_workspace_v4 reporting cutoff_sweep
+
+# Phase 3 Analysis (MF Cloud Ablation)
+sbatch hpc/phase3_analysis_suite.sh experiment_workspace_v4 reporting mf_ablation
+
+# Phase 3 with potency stratification
+sbatch hpc/phase3_analysis_suite.sh experiment_workspace_v4 reporting mf_ablation --stratify
+
+# Phase 4 Analysis (Cross-Target Generalization)
+sbatch hpc/phase4_post_analysis.sh
+```
+
+**Analysis Script Features**:
+- **Phase 1**: 
+  - Post-analysis: Method comparison, hyperparameter heatmaps, seed variability
+  - Stratified scores: Tier-stratified enrichment analysis (High/Medium/Weak potency)
+  - Outputs: `reporting/phase1_post_analysis/` and `reporting/phase1_stratified/`
+  
+- **Phase 2**:
+  - Cutoff sensitivity analysis (100 nM, 1 μM, 10 μM, 100 μM)
+  - Reuses Phase 1 similarity spaces (~75% time savings)
+  - Outputs: `reporting/phase2_post_analysis/`
+  
+- **Phase 3**:
+  - MF cloud ablation degradation curves
+  - Optional potency tier stratification with `--stratify`
+  - Outputs: `reporting/phase3_post_analysis/`
+  
+- **Phase 4**:
+  - Cross-target generalization analysis
+  - Natural MF size correlation plots
+  - Outputs: `reporting/phase4_post_analysis/`
+
+**Resource Allocation**:
+- CPUs: 16-64 cores (Phase 1 uses 64 for stratified analysis)
+- Memory: 200-300G
+- Time: 12 hours max
+
+### 8. Analyze Results with Potency Stratification
 
 ```bash
 # Run parallelized potency-stratified enrichment analysis

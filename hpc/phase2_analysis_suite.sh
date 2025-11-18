@@ -39,7 +39,7 @@ echo "Workspace: ${WORKSPACE_DIR}"
 echo "Output Base Dir: ${OUTPUT_BASE_DIR}"
 echo "Phase 2 Run Name: ${PHASE2_RUN_NAME}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK}"
-echo "Memory: 300G"
+echo "Memory: 200G"
 echo "=========================================="
 echo ""
 
