@@ -435,6 +435,7 @@ def aggregate_cutoff_sensitivity(
             record = {
                 "run_name": run_name,
                 "target": row["target"],
+                "target_short": row.get("target_short", None),  # Include MF name
                 "method": row["method"],
                 "representation": row["representation"],
                 "replicate": row["replicate"],
@@ -455,7 +456,7 @@ def aggregate_cutoff_sensitivity(
     logger.info(f"Saved: {cutoff_csv.name} ({len(df_cutoff)} rows)")
     
     # Aggregate by target and cutoff
-    group_keys = ["target", "method", "representation", "cutoff_nM", "natural_mf_size"]
+    group_keys = ["target", "target_short", "method", "representation", "cutoff_nM", "natural_mf_size"]
     agg_dict = {
         "n_mf": "mean",
         "ef_1%": ["mean", "sem", "std"],
