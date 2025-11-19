@@ -1116,6 +1116,34 @@ def plot_comprehensive_stratified_grid(
     elif n_metrics == 1:
         axes = axes.reshape(-1, 1)
     
+    # Compute global y-axis limits for each metric (column)
+    y_limits_per_metric = {}
+    for col_idx, (metric_base, ylabel, title_short) in enumerate(metrics_config):
+        all_y_values = []
+        for model_key, _ in available_methods:
+            subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+            if len(subset) == 0:
+                continue
+            
+            for tier in required_tiers:
+                mean_col = f"{metric_base}_{tier}_mean"
+                sem_col = f"{metric_base}_{tier}_sem"
+                if mean_col in subset.columns and sem_col in subset.columns:
+                    y_mean = subset[mean_col].values
+                    y_sem = subset[sem_col].values
+                    valid_mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
+                    if valid_mask.any():
+                        all_y_values.extend((y_mean[valid_mask] - y_sem[valid_mask]).tolist())
+                        all_y_values.extend((y_mean[valid_mask] + y_sem[valid_mask]).tolist())
+        
+        if all_y_values:
+            y_min = max(0, min(all_y_values))
+            y_max = max(all_y_values)
+            y_margin = (y_max - y_min) * 0.05
+            y_limits_per_metric[col_idx] = (y_min - y_margin, y_max + y_margin)
+        else:
+            y_limits_per_metric[col_idx] = (0, 1)
+    
     # Plot each method × metric combination
     for row_idx, (model_key, method_label) in enumerate(available_methods):
         subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
@@ -1157,6 +1185,10 @@ def plot_comprehensive_stratified_grid(
             # Formatting
             ax.set_xscale('log')
             ax.grid(True, alpha=0.3, linestyle='--')
+            
+            # Apply global y-limits for this metric column
+            if col_idx in y_limits_per_metric:
+                ax.set_ylim(y_limits_per_metric[col_idx])
             
             # X-axis label (only bottom row)
             if row_idx == n_methods - 1:

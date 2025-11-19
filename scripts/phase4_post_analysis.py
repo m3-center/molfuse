@@ -642,6 +642,29 @@ def plot_cutoff_sensitivity_per_target(
         "weak": ":"
     }
     
+    # Compute global y-axis limits across all targets and tiers
+    all_y_values = []
+    for target in targets:
+        subset = df_cutoff_agg[df_cutoff_agg["target"] == target]
+        for tier in ["overall", "high", "medium", "weak"]:
+            tier_col = f"ef_1%_{tier}_mean"
+            tier_sem_col = f"ef_1%_{tier}_sem"
+            if tier_col in subset.columns and tier_sem_col in subset.columns:
+                y_mean = subset[tier_col].values
+                y_sem = subset[tier_sem_col].values
+                valid_mask = ~np.isnan(y_mean)
+                if valid_mask.any():
+                    all_y_values.extend((y_mean[valid_mask] - y_sem[valid_mask]).tolist())
+                    all_y_values.extend((y_mean[valid_mask] + y_sem[valid_mask]).tolist())
+    
+    if all_y_values:
+        y_min_global = max(0, min(all_y_values))
+        y_max_global = max(all_y_values)
+        y_margin = (y_max_global - y_min_global) * 0.05
+        y_lim_global = (y_min_global - y_margin, y_max_global + y_margin)
+    else:
+        y_lim_global = (0, 100)
+    
     for idx, target in enumerate(targets):
         ax = axes[idx]
         
@@ -694,6 +717,7 @@ def plot_cutoff_sensitivity_per_target(
                            alpha=0.15)
         
         ax.set_xscale("log")
+        ax.set_ylim(y_lim_global)
         ax.set_xlabel("Affinity Cutoff (nM)", fontweight="bold")
         ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold")
         # Use MF name for title
