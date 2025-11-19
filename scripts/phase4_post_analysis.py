@@ -197,8 +197,17 @@ def collect_phase4_results(
             continue
     
     df = pd.DataFrame(records)
+    
+    # FALLBACK: Extract target_short from target_kw if missing
+    # target_kw format: "KW-0808_Transferase" -> target_short: "Transferase"
+    if df["target_short"].isna().all() or df["target_short"].isna().any():
+        logger.info("Extracting target_short from target_kw (missing in summary JSONs)...")
+        df["target_short"] = df["target_kw"].str.split("_", n=1).str[1]
+        logger.info(f"  Extracted target_short values: {sorted(df['target_short'].dropna().unique().tolist())}")
+    
     logger.info(f"Loaded {len(df)} Phase 4 results")
     logger.info(f"  Targets: {sorted(df['target'].unique().tolist())}")
+    logger.info(f"  Target MF Names: {sorted(df['target_short'].unique().tolist())}")
     logger.info(f"  Methods: {df['method'].unique().tolist()}")
     logger.info(f"  Representations: {df['representation'].unique().tolist()}")
     
@@ -487,13 +496,17 @@ def plot_cutoff_sensitivity_per_target(
     targets = target_sizes.index.tolist()
     n_targets = len(targets)
     
+    # Get MF names for labeling
+    target_short_map = df_cutoff_agg.groupby("target")["target_short"].first().to_dict()
+    
     # DEBUG: Log target ordering
     logger.info("\n" + "="*80)
     logger.info("DEBUG: Cutoff Sensitivity Target Ordering")
     logger.info("="*80)
     for target in targets:
         mf_size = target_sizes[target]
-        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+        mf_name = target_short_map.get(target, target)
+        logger.info(f"  {target:10s} ({mf_name:15s}): natural_mf_size = {mf_size:>8.0f}")
     logger.info("="*80 + "\n")
     
     # Create subplot grid
@@ -537,7 +550,9 @@ def plot_cutoff_sensitivity_per_target(
         ax.set_ylim(y_lim)
         ax.set_xlabel("Affinity Cutoff (nM)", fontweight="bold")
         ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold")
-        ax.set_title(f"{target}", fontweight="bold")
+        # Use MF name for title
+        mf_name = target_short_map.get(target, target)
+        ax.set_title(f"{mf_name}", fontweight="bold")
         ax.grid(True, alpha=0.3)
         
         if idx == 0:
@@ -764,6 +779,9 @@ def plot_cross_target_comparison(
     # Sort targets by natural MF size
     target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     
+    # Get MF names for labeling
+    target_short_map = df_agg.groupby("target")["target_short"].first().to_dict()
+    
     # DEBUG: Log target ordering
     logger.info("\n" + "="*80)
     logger.info("DEBUG: Cross-Target Comparison Target Ordering")
@@ -771,7 +789,8 @@ def plot_cross_target_comparison(
     target_sizes = df_agg.groupby("target")["natural_mf_size"].first()
     for target in target_order:
         mf_size = target_sizes[target]
-        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+        mf_name = target_short_map.get(target, target)
+        logger.info(f"  {target:10s} ({mf_name:15s}): natural_mf_size = {mf_size:>8.0f}")
     logger.info("="*80 + "\n")
     
     model_keys = sorted(df_agg["model_key"].unique())
@@ -805,11 +824,15 @@ def plot_cross_target_comparison(
             capsize=3
         )
     
-    ax.set_xlabel("Target (sorted by natural MF cloud size)", fontweight="bold", fontsize=12)
+    # Use target_short (MF names) for x-axis labels
+    target_short_labels = df_agg.set_index("target")["target_short"].to_dict()
+    target_labels = [target_short_labels.get(t, t) for t in target_order]
+    
+    ax.set_xlabel("Molecular Function (sorted by natural MF cloud size)", fontweight="bold", fontsize=12)
     ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold", fontsize=12)
     ax.set_title("Phase 4: Cross-Target Generalization", fontweight="bold", fontsize=14)
     ax.set_xticks(x)
-    ax.set_xticklabels(target_order, rotation=45, ha="right")
+    ax.set_xticklabels(target_labels, rotation=45, ha="right")
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(True, alpha=0.3, axis="y")
     
@@ -841,6 +864,9 @@ def plot_cross_target_bedroc_ief(
     target_order = df_agg.groupby("target")["natural_mf_size"].first().sort_values().index.tolist()
     model_keys = sorted(df_agg["model_key"].unique())
     
+    # Get MF names for labeling
+    target_short_labels = df_agg.set_index("target")["target_short"].to_dict()
+    
     # DEBUG: Log target ordering (only once, not per metric)
     logger.info("\n" + "="*80)
     logger.info("DEBUG: Cross-Target BEDROC/IEF Target Ordering")
@@ -848,7 +874,8 @@ def plot_cross_target_bedroc_ief(
     target_sizes = df_agg.groupby("target")["natural_mf_size"].first()
     for target in target_order:
         mf_size = target_sizes[target]
-        logger.info(f"  {target:10s}: natural_mf_size = {mf_size:>8.0f}")
+        mf_name = target_short_labels.get(target, target)
+        logger.info(f"  {target:10s} ({mf_name:15s}): natural_mf_size = {mf_size:>8.0f}")
     logger.info("="*80 + "\n")
     
     colors = {
@@ -888,11 +915,14 @@ def plot_cross_target_bedroc_ief(
                 capsize=3
             )
         
-        ax.set_xlabel("Target (sorted by natural MF cloud size)", fontweight="bold", fontsize=12)
+        # Use MF names for x-axis labels
+        target_labels = [target_short_labels.get(t, t) for t in target_order]
+        
+        ax.set_xlabel("Molecular Function (sorted by natural MF cloud size)", fontweight="bold", fontsize=12)
         ax.set_ylabel(f"{metric_title} (Mean ± SEM)", fontweight="bold", fontsize=12)
         ax.set_title(f"Phase 4: Cross-Target {metric_title}", fontweight="bold", fontsize=14)
         ax.set_xticks(x)
-        ax.set_xticklabels(target_order, rotation=45, ha="right")
+        ax.set_xticklabels(target_labels, rotation=45, ha="right")
         ax.legend(loc="upper left", fontsize=9)
         ax.grid(True, alpha=0.3, axis="y")
         
@@ -1343,10 +1373,10 @@ def plot_4metric_mf_size_correlation(
         return {}
     
     # Remove NaN values
-    subset = subset.dropna(subset=["natural_mf_size"])
+    subset = subset.dropna(subset=["natural_mf_size", "target_short"])
     
     x = subset["natural_mf_size"].values
-    target_labels = subset["target_short"].values
+    target_labels = subset["target_short"].values  # MF names for annotation
     
     # Metrics: (mean_col, ylabel, title, metric_name)
     metrics_config = [
@@ -1384,10 +1414,10 @@ def plot_4metric_mf_size_correlation(
         # Scatter plot with labels
         scatter = ax.scatter(x_valid, y_valid, s=150, alpha=0.7, edgecolors='black', linewidth=1.5)
         
-        # Add target labels
+        # Add MF name labels to scatter points
         for xi, yi, label in zip(x_valid, y_valid, labels_valid):
             ax.annotate(
-                str(label).replace('_', ' '),
+                str(label).replace('_', ' '),  # MF name (e.g., "Transferase")
                 (xi, yi),
                 fontsize=9,
                 ha='left',
