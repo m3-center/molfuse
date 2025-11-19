@@ -307,6 +307,12 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         X_zinc_raw = df_zinc[[c for c in feature_cols if c in df_zinc.columns]].reindex(columns=feature_cols).to_numpy(dtype=float)
         X_act_raw = df_actives[[c for c in feature_cols if c in df_actives.columns]].reindex(columns=feature_cols).to_numpy(dtype=float)
         
+        # Remove infinity values (replace with NaN, then impute)
+        logger.info("  Removing infinity values...")
+        X_mf_raw[~np.isfinite(X_mf_raw)] = np.nan
+        X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
+        X_act_raw[~np.isfinite(X_act_raw)] = np.nan
+        
         # Fit imputer + scaler on MF+ZINC
         X_combined = np.vstack([X_mf_raw, X_zinc_raw])
         imputer.fit(X_combined)
@@ -413,8 +419,16 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         zinc_scores = np.array([])
                     else:
                         df_mf_embed = pd.read_csv(mf_embedding_path)
-                        X_mf_embed = df_mf_embed[[f"dim_{i}" for i in range(cfg["dim"])]].values
-                        logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
+                        # Phase 1 embeddings use z0, z1, z2... column naming
+                        embed_cols = [f"z{i}" for i in range(cfg["dim"])]
+                        if not all(col in df_mf_embed.columns for col in embed_cols):
+                            logger.error(f"  Expected columns {embed_cols} not found in embedding")
+                            logger.error(f"  Available columns: {list(df_mf_embed.columns)}")
+                            act_scores = np.array([])
+                            zinc_scores = np.array([])
+                        else:
+                            X_mf_embed = df_mf_embed[embed_cols].values
+                            logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
                         
                         # Select features and transform receptors through Phase 1 pipeline
                         feature_cols_mf = select_feature_columns(df_mf)
