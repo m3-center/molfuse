@@ -65,9 +65,9 @@ BEST_UMAP_FEATURES = {
 # Optimal affinity cutoff from Phase 2
 AFFINITY_CUTOFF_NM = 100  # 100 nM
 
-# Dataset paths
-BASE_DATA_DIR = Path("datasets/molecular_function_affinity_data")
-BASE_FEATURES_DIR = Path("datasets/molecular_function_features_fingerprints")
+# Dataset paths (HPC paths - NOT local "datasets/" directory)
+BASE_DATA_DIR = Path("output_recalculated_full_datasets/datasets_2d_all")
+ZINC_FEATURES_CSV = "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv"
 
 
 # ============================================================================
@@ -126,12 +126,10 @@ def generate_phase5_configs(output_dir: Path) -> List[Path]:
                 config["fingerprint_type"] = "ECFP4"
                 config["fingerprint_bits"] = 2048
             
-            # Dataset paths (shared)
-            config["mf_affinity_csv"] = str(BASE_DATA_DIR / f"{TARGET_TRANSFERASE[0]}_affinity.csv")
-            config["mf_features_csv"] = str(BASE_FEATURES_DIR / f"{TARGET_TRANSFERASE[0]}_affinity_extracted_features.csv")
-            config["mf_fingerprints_csv"] = str(BASE_FEATURES_DIR / f"{TARGET_TRANSFERASE[0]}_affinity_extracted_fingerprints_ECFP4.csv")
-            config["zinc_features_csv"] = "datasets/zinc_data.csv"  # Placeholder
-            config["zinc_fingerprints_csv"] = "datasets/zinc_data.csv"  # Placeholder
+            # Dataset paths (HPC paths matching Phase 1)
+            # Actives are derived from MF file by filtering for target accession
+            config["mf_features_csv"] = str(BASE_DATA_DIR / f"{TARGET_TRANSFERASE[0]}_affinity_extracted_features.csv")
+            config["zinc_features_csv"] = ZINC_FEATURES_CSV
             
             # Save config
             config_path = output_dir / f"{run_name}.json"
