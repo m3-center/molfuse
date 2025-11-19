@@ -339,6 +339,90 @@ def compute_metrics_for_cutoff(
     }
 
 
+def compute_metrics_for_cutoff_stratified(
+    Z_mf: np.ndarray,
+    Z_eval: np.ndarray,
+    labels: np.ndarray,
+    tiers: np.ndarray,
+    mf_affinity: np.ndarray,
+    cutoff_nM: float,
+    logger: logging.Logger
+) -> Optional[Dict[str, float]]:
+    """
+    Re-score evaluation set using MF filtered by affinity cutoff, computing tier-specific EF@1%.
+    
+    Args:
+        Z_mf: MF embeddings (n_mf, dim)
+        Z_eval: Evaluation embeddings (n_eval, dim) - actives + ZINC
+        labels: Binary labels (1=active, 0=ZINC)
+        tiers: Potency tier labels ("high", "medium", "weak", or "unknown")
+        mf_affinity: MF affinity values (nM)
+        cutoff_nM: Affinity threshold
+        logger: Logger
+    
+    Returns:
+        Dict with overall + tier-specific metrics or None if MF cloud is empty after filtering
+    """
+    # Filter MF by cutoff
+    mask = mf_affinity <= cutoff_nM
+    Z_mf_filtered = Z_mf[mask]
+    
+    if len(Z_mf_filtered) == 0:
+        logger.warning(f"MF cloud empty at cutoff {cutoff_nM} nM")
+        return None
+    
+    # Re-score
+    scores, distances = nn_min_distance_scores(Z_mf_filtered, Z_eval)
+    
+    # Compute overall metrics
+    ef1_overall = ef_at_k_percent(scores, labels, 1.0)
+    roc = roc_auc(labels, scores)
+    pr = pr_auc(labels, scores)
+    bedroc_20 = bedroc(labels, scores, alpha=20.0)
+    bedroc_160 = bedroc(labels, scores, alpha=160.9)
+    ief_20 = ief(labels, scores, alpha=20.0)
+    ief_160 = ief(labels, scores, alpha=160.9)
+    
+    metrics = {
+        "cutoff_nM": float(cutoff_nM),
+        "n_mf": int(len(Z_mf_filtered)),
+        "ef_1%_overall": float(ef1_overall),
+        "roc_auc": float(roc),
+        "pr_auc": float(pr),
+        "bedroc_20": float(bedroc_20),
+        "bedroc_160": float(bedroc_160),
+        "ief_20": float(ief_20),
+        "ief_160": float(ief_160),
+    }
+    
+    # Compute tier-specific EF@1%
+    # Create DataFrame for tier-based ranking
+    n_total = len(labels)
+    cutoff_idx = int(np.ceil(n_total * 0.01))
+    
+    ranked_df = pd.DataFrame({
+        "score": scores,
+        "label": labels,
+        "tier": tiers
+    }).sort_values("score", ascending=False).reset_index(drop=True)
+    
+    for tier in ["high", "medium", "weak"]:
+        tier_actives = ranked_df[(ranked_df["label"] == 1) & (ranked_df["tier"] == tier)]
+        n_tier_actives = len(tier_actives)
+        
+        if n_tier_actives == 0:
+            metrics[f"ef_1%_{tier}"] = None
+            continue
+        
+        top_1pct = ranked_df.head(cutoff_idx)
+        n_tier_found = len(top_1pct[(top_1pct["label"] == 1) & (top_1pct["tier"] == tier)])
+        
+        ef1_tier = (n_tier_found / n_tier_actives) / 0.01
+        metrics[f"ef_1%_{tier}"] = float(ef1_tier)
+    
+    return metrics
+
+
 def run_cutoff_sensitivity_for_run(
     workspace_dir: Path,
     run_name: str,
@@ -348,7 +432,7 @@ def run_cutoff_sensitivity_for_run(
     """
     Run affinity cutoff sensitivity analysis for a single Phase 4 run.
     
-    Loads pre-computed embeddings and re-scores across cutoff range.
+    Loads pre-computed embeddings and re-scores across cutoff range with tier stratification.
     """
     # Phase 4 structure: workspace/phase4/cross_target/{run_name}/artifacts
     artifacts_dir = workspace_dir / "phase4" / "cross_target" / run_name / "artifacts"
@@ -377,11 +461,24 @@ def run_cutoff_sensitivity_for_run(
     Z_zinc = df_zinc[dim_cols].values
     Z_act = df_act[dim_cols].values
     
-    # Build evaluation set
+    # Assign potency tiers to actives
+    if "Standard Value (nM)" not in df_act.columns:
+        logger.warning(f"No affinity column in {actives_path}")
+        return []
+    
+    df_act["tier"] = df_act["Standard Value (nM)"].apply(assign_potency_tier)
+    tiers_act = df_act["tier"].values
+    
+    # Build evaluation set with tier labels
     Z_eval = np.vstack([Z_act, Z_zinc])
     labels = np.concatenate([
         np.ones(len(Z_act), dtype=int),
         np.zeros(len(Z_zinc), dtype=int)
+    ])
+    # ZINC compounds get "unknown" tier
+    tiers = np.concatenate([
+        tiers_act,
+        np.array(["unknown"] * len(Z_zinc))
     ])
     
     # Get MF affinity values
@@ -391,10 +488,12 @@ def run_cutoff_sensitivity_for_run(
     
     mf_affinity = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce").values
     
-    # Run cutoff sweep
+    # Run cutoff sweep with tier stratification
     results = []
     for cutoff in cutoffs:
-        metrics = compute_metrics_for_cutoff(Z_mf, Z_eval, labels, mf_affinity, cutoff, logger)
+        metrics = compute_metrics_for_cutoff_stratified(
+            Z_mf, Z_eval, labels, tiers, mf_affinity, cutoff, logger
+        )
         if metrics is not None:
             results.append(metrics)
     
@@ -459,7 +558,10 @@ def aggregate_cutoff_sensitivity(
     group_keys = ["target", "target_short", "method", "representation", "cutoff_nM", "natural_mf_size"]
     agg_dict = {
         "n_mf": "mean",
-        "ef_1%": ["mean", "sem", "std"],
+        "ef_1%_overall": ["mean", "sem", "std"],
+        "ef_1%_high": ["mean", "sem", "std"],
+        "ef_1%_medium": ["mean", "sem", "std"],
+        "ef_1%_weak": ["mean", "sem", "std"],
         "roc_auc": ["mean", "sem"],
         "pr_auc": ["mean", "sem"],
         "bedroc_20": ["mean", "sem"],
@@ -517,47 +619,90 @@ def plot_cutoff_sensitivity_per_target(
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows), sharex=True, sharey=False)
     axes = axes.flatten() if n_targets > 1 else [axes]
     
-    colors = {
-        "pca_features": "#1f77b4",
-        "pca_fingerprints": "#aec7e8",
-        "umap_features": "#ff7f0e",
-        "umap_fingerprints": "#ffbb78",
+    # Tier colors (consistent with Phase 3)
+    tier_colors = {
+        "overall": "#333333",      # Dark gray
+        "high": "#1976D2",         # Blue
+        "medium": "#F57C00",       # Orange
+        "weak": "#C62828"          # Red
     }
     
-    # Compute global y-axis limits for consistency
-    y_min = df_cutoff_agg["ef_1%_mean"].min() - df_cutoff_agg["ef_1%_sem"].max()
-    y_max = df_cutoff_agg["ef_1%_mean"].max() + df_cutoff_agg["ef_1%_sem"].max()
-    y_margin = (y_max - y_min) * 0.05
-    y_lim = (max(0, y_min - y_margin), y_max + y_margin)
+    tier_labels = {
+        "overall": "Overall",
+        "high": "High (≤100 nM)",
+        "medium": "Medium (100-1K nM)",
+        "weak": "Weak (1K-100K nM)"
+    }
+    
+    # Tier styles (different line styles for each tier)
+    tier_styles = {
+        "overall": "-",
+        "high": "--",
+        "medium": "-.",
+        "weak": ":"
+    }
     
     for idx, target in enumerate(targets):
         ax = axes[idx]
         
         subset = df_cutoff_agg[df_cutoff_agg["target"] == target]
         
-        for model_key in sorted(subset["model_key"].unique()):
-            model_subset = subset[subset["model_key"] == model_key].sort_values("cutoff_nM")
+        # Use only the best-performing model (umap_features) for clarity
+        best_model = "umap_features"
+        
+        if best_model not in subset["model_key"].values:
+            # Fallback to first available model
+            best_model = subset["model_key"].iloc[0]
+        
+        model_subset = subset[subset["model_key"] == best_model].sort_values("cutoff_nM")
+        
+        # Plot each tier
+        for tier in ["overall", "high", "medium", "weak"]:
+            tier_col = f"ef_1%_{tier}_mean"
+            tier_sem_col = f"ef_1%_{tier}_sem"
+            
+            if tier_col not in model_subset.columns:
+                logger.warning(f"Missing column {tier_col} for {target}")
+                continue
             
             x = model_subset["cutoff_nM"].values
-            y_mean = model_subset["ef_1%_mean"].values
-            y_sem = model_subset["ef_1%_sem"].values
+            y_mean = model_subset[tier_col].values
+            y_sem = model_subset[tier_sem_col].values if tier_sem_col in model_subset.columns else np.zeros_like(y_mean)
             
-            ax.plot(x, y_mean, marker="o", label=model_key.replace("_", "/"),
-                   color=colors.get(model_key, "#333333"), linewidth=2, markersize=6)
-            ax.fill_between(x, y_mean - y_sem, y_mean + y_sem,
-                            color=colors.get(model_key, "#333333"), alpha=0.2)
+            # Filter out NaN values
+            valid_mask = ~np.isnan(y_mean)
+            if not valid_mask.any():
+                continue
+            
+            x_valid = x[valid_mask]
+            y_mean_valid = y_mean[valid_mask]
+            y_sem_valid = y_sem[valid_mask]
+            
+            ax.plot(x_valid, y_mean_valid, 
+                   marker="o", 
+                   label=tier_labels[tier],
+                   color=tier_colors[tier], 
+                   linestyle=tier_styles[tier],
+                   linewidth=2, 
+                   markersize=5,
+                   alpha=0.85)
+            
+            ax.fill_between(x_valid, 
+                           y_mean_valid - y_sem_valid, 
+                           y_mean_valid + y_sem_valid,
+                           color=tier_colors[tier], 
+                           alpha=0.15)
         
         ax.set_xscale("log")
-        ax.set_ylim(y_lim)
         ax.set_xlabel("Affinity Cutoff (nM)", fontweight="bold")
         ax.set_ylabel("EF@1% (Mean ± SEM)", fontweight="bold")
         # Use MF name for title
         mf_name = target_short_map.get(target, target)
-        ax.set_title(f"{mf_name}", fontweight="bold")
+        ax.set_title(f"{mf_name} ({best_model.replace('_', '/')})", fontweight="bold", fontsize=10)
         ax.grid(True, alpha=0.3)
         
         if idx == 0:
-            ax.legend(loc="best", fontsize=8)
+            ax.legend(loc="best", fontsize=8, framealpha=0.9)
     
     # Hide unused subplots
     for idx in range(n_targets, len(axes)):
@@ -565,8 +710,8 @@ def plot_cutoff_sensitivity_per_target(
     
     plt.tight_layout()
     
-    output_path_png = output_dir / "phase4_cutoff_sensitivity_per_target_ef1.png"
-    output_path_pdf = output_dir / "phase4_cutoff_sensitivity_per_target_ef1.pdf"
+    output_path_png = output_dir / "phase4_cutoff_sensitivity_per_target_ef1_stratified.png"
+    output_path_pdf = output_dir / "phase4_cutoff_sensitivity_per_target_ef1_stratified.pdf"
     fig.savefig(output_path_png, dpi=300, bbox_inches="tight")
     fig.savefig(output_path_pdf, bbox_inches="tight")
     plt.close(fig)
