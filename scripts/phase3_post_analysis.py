@@ -1228,7 +1228,6 @@ def plot_tierstratified_other_metrics(
     
     # Aggregate by mf_size_target
     df_agg = df_best.groupby("mf_size_target", as_index=False).agg({
-        "mf_size_actual": "mean",
         "bedroc_20_high": ["mean", "sem"],
         "bedroc_20_medium": ["mean", "sem"],
         "bedroc_20_weak": ["mean", "sem"],
