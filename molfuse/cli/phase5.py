@@ -444,6 +444,10 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                             # Extract receptor features
                             X_receptors_raw = df_receptors[[c for c in feature_cols if c in df_receptors.columns]].reindex(columns=feature_cols).to_numpy(dtype=float)
                             
+                            # Remove infinity values (replace with NaN, then impute)
+                            logger.info("    Removing infinity values from receptors...")
+                            X_receptors_raw[~np.isfinite(X_receptors_raw)] = np.nan
+                            
                             # Transform through scaler + UMAP
                             from sklearn.impute import SimpleImputer
                             imputer = SimpleImputer(strategy="median")
