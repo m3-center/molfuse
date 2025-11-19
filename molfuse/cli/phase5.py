@@ -405,19 +405,32 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             else:
                 logger.info(f"    Best features-based Phase 1 run: {best_artifacts_dir.parent.name} (EF@1%: {best_ef1:.2f})")
                 
-                # Load scaler and UMAP model
+                # Load imputer, scaler and UMAP model
+                imputer_path = best_artifacts_dir / "imputer.joblib"
                 scaler_path = best_artifacts_dir / "scaler.joblib"
                 umap_path = best_artifacts_dir / "umap_model.joblib"
                 
-                if not scaler_path.exists() or not umap_path.exists():
-                    logger.error(f"  Model artifacts not found: {scaler_path}, {umap_path}")
+                if not imputer_path.exists() or not scaler_path.exists() or not umap_path.exists():
+                    logger.error(f"  Model artifacts not found: {imputer_path}, {scaler_path}, {umap_path}")
                     logger.info("  Creating empty results to mark as skipped")
                     act_scores = np.array([])
                     zinc_scores = np.array([])
                 else:
+                    phase1_imputer = joblib.load(imputer_path)
                     scaler = joblib.load(scaler_path)
                     umap_model = joblib.load(umap_path)
-                    logger.info("    Loaded scaler + UMAP model")
+                    logger.info("    Loaded imputer + scaler + UMAP model")
+                    
+                    # Get feature names from imputer (exact features used in Phase 1)
+                    phase1_features = None
+                    if hasattr(phase1_imputer, 'feature_names_in_'):
+                        phase1_features = list(phase1_imputer.feature_names_in_)
+                        logger.info(f"    Phase 1 used {len(phase1_features)} features")
+                    else:
+                        logger.error("    Cannot determine Phase 1 feature names from imputer")
+                        logger.info("    Creating empty results to mark as skipped")
+                        act_scores = np.array([])
+                        zinc_scores = np.array([])
                     
                     # Load Phase 1 MF embedding (to use as reference for scoring)
                     mf_embedding_path = best_artifacts_dir / "embedding_mf.csv"
@@ -439,28 +452,29 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                             X_mf_embed = df_mf_embed[embed_cols].values
                             logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
                         
-                            # Select features and transform receptors through Phase 1 pipeline
-                            feature_cols_mf = select_feature_columns(df_mf)
-                            feature_cols_receptors = select_feature_columns(df_receptors)
-                            feature_cols = [c for c in feature_cols_mf if c in feature_cols_receptors]
-                            logger.info(f"    Selected {len(feature_cols)} common feature columns")
-                            
-                            if not feature_cols:
-                                logger.error("  No common features between MF and receptors")
+                            # Use exact Phase 1 features (from imputer.feature_names_in_)
+                            if not phase1_features:
+                                logger.error("  Phase 1 feature list not available")
                                 act_scores = np.array([])
                                 zinc_scores = np.array([])
                             else:
-                                # Extract receptor features
-                                X_receptors_raw = df_receptors[[c for c in feature_cols if c in df_receptors.columns]].reindex(columns=feature_cols).to_numpy(dtype=float)
+                                logger.info(f"    Using Phase 1 features: {len(phase1_features)} columns")
+                                
+                                # Check which Phase 1 features are missing in receptor data
+                                missing_feats = [f for f in phase1_features if f not in df_receptors.columns]
+                                if missing_feats:
+                                    logger.warning(f"    {len(missing_feats)} Phase 1 features missing in receptor data (will be filled with NaN)")
+                                
+                                # Extract receptor features (missing features → NaN)
+                                X_receptors_raw = df_receptors.reindex(columns=phase1_features).to_numpy(dtype=np.float64)
                                 
                                 # Remove infinity values (replace with NaN, then impute)
                                 logger.info("    Removing infinity values from receptors...")
                                 X_receptors_raw[~np.isfinite(X_receptors_raw)] = np.nan
+                                logger.info(f"    Receptor features shape (pre-transform): {X_receptors_raw.shape}")
                                 
-                                # Transform through scaler + UMAP
-                                from sklearn.impute import SimpleImputer
-                                imputer = SimpleImputer(strategy="median")
-                                X_receptors_imputed = imputer.fit_transform(X_receptors_raw)
+                                # Transform through Phase 1 pipeline
+                                X_receptors_imputed = phase1_imputer.transform(X_receptors_raw)
                                 X_receptors_scaled = scaler.transform(X_receptors_imputed)
                                 X_receptors_embed = umap_model.transform(X_receptors_scaled)
                                 logger.info(f"    Transformed receptors: {X_receptors_embed.shape}")
