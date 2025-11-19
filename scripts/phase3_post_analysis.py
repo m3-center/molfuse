@@ -314,6 +314,90 @@ def assign_potency_tier(affinity_nM: float) -> str:
         return "unknown"
 
 
+def compute_tier_metrics(
+    ranked_df: pd.DataFrame,
+    tier: str,
+    logger: logging.Logger
+) -> Dict[str, Optional[float]]:
+    """
+    Compute comprehensive metrics for a specific potency tier.
+    
+    Args:
+        ranked_df: DataFrame with columns ['score', 'label', 'tier']
+        tier: Potency tier ('high', 'medium', 'weak', 'overall')
+        logger: Logger instance
+    
+    Returns:
+        Dict with keys: ef_1%, bedroc_20, bedroc_160, roc, pr
+    """
+    from molfuse.metrics.metrics import bedroc, roc_auc, pr_auc
+    
+    if tier == "overall":
+        # Use all actives
+        tier_mask = ranked_df["label"] == 1
+        tier_actives_mask = tier_mask
+    else:
+        # Filter to specific tier
+        tier_mask = (ranked_df["label"] == 1) & (ranked_df["tier"] == tier)
+        tier_actives_mask = tier_mask
+    
+    n_tier_actives = tier_actives_mask.sum()
+    
+    if n_tier_actives == 0:
+        return {
+            "ef_1%": None,
+            "bedroc_20": None,
+            "bedroc_160": None,
+            "roc": None,
+            "pr": None
+        }
+    
+    # For tier-specific metrics, create binary labels (1 = tier active, 0 = everything else)
+    if tier == "overall":
+        labels = ranked_df["label"].values
+    else:
+        labels = tier_actives_mask.astype(int).values
+    
+    scores = ranked_df["score"].values
+    
+    # Compute EF@1%
+    n_total = len(ranked_df)
+    cutoff_idx = int(np.ceil(n_total * 0.01))
+    n_tier_found = labels[:cutoff_idx].sum()
+    ef1 = (n_tier_found / n_tier_actives) / 0.01
+    
+    # Compute BEDROC (α=20 and α=160)
+    try:
+        bedroc_20 = bedroc(labels, scores, alpha=20.0)
+        bedroc_160 = bedroc(labels, scores, alpha=160.9)
+    except Exception as e:
+        logger.warning(f"BEDROC computation failed for tier {tier}: {e}")
+        bedroc_20 = None
+        bedroc_160 = None
+    
+    # Compute ROC-AUC
+    try:
+        roc = roc_auc(labels, scores)
+    except Exception as e:
+        logger.warning(f"ROC-AUC computation failed for tier {tier}: {e}")
+        roc = None
+    
+    # Compute PR-AUC
+    try:
+        pr = pr_auc(labels, scores)
+    except Exception as e:
+        logger.warning(f"PR-AUC computation failed for tier {tier}: {e}")
+        pr = None
+    
+    return {
+        "ef_1%": float(ef1),
+        "bedroc_20": float(bedroc_20) if bedroc_20 is not None else None,
+        "bedroc_160": float(bedroc_160) if bedroc_160 is not None else None,
+        "roc": float(roc) if roc is not None else None,
+        "pr": float(pr) if pr is not None else None
+    }
+
+
 def compute_tier_ef1(
     ranked_df: pd.DataFrame,
     tier: str,
@@ -392,10 +476,15 @@ def compute_stratified_metrics_for_run(
     logger: logging.Logger
 ) -> Optional[Dict[str, float]]:
     """
-    Compute tier-specific EF@1% for a single Phase 3 run.
+    Compute comprehensive tier-specific metrics for a single Phase 3 run.
     
     Returns:
-        Dict with keys: ef_1%_overall, ef_1%_high, ef_1%_medium, ef_1%_weak
+        Dict with keys for all metrics and tiers:
+        - ef_1%_overall, ef_1%_high, ef_1%_medium, ef_1%_weak
+        - bedroc_20_overall, bedroc_20_high, bedroc_20_medium, bedroc_20_weak
+        - bedroc_160_overall, bedroc_160_high, bedroc_160_medium, bedroc_160_weak
+        - roc_overall, roc_high, roc_medium, roc_weak
+        - pr_overall, pr_high, pr_medium, pr_weak
     """
     artifacts_dir = workspace_dir / "phase3" / "mf_ablation" / run_name / "artifacts"
     
@@ -427,24 +516,18 @@ def compute_stratified_metrics_for_run(
     # Fill NaN tiers (ZINC compounds) with "zinc"
     ranked_df["tier"] = ranked_df["tier"].fillna("zinc")
     
-    # Compute overall EF@1%
-    n_actives = (ranked_df["label"] == 1).sum()
-    n_total = len(ranked_df)
-    cutoff_idx = int(np.ceil(n_total * 0.01))
-    n_found = (ranked_df.head(cutoff_idx)["label"] == 1).sum()
-    ef1_overall = (n_found / n_actives) / 0.01 if n_actives > 0 else None
+    # Compute metrics for each tier
+    results = {}
     
-    # Compute tier-specific EF@1%
-    ef1_high = compute_tier_ef1(ranked_df, "high", logger)
-    ef1_medium = compute_tier_ef1(ranked_df, "medium", logger)
-    ef1_weak = compute_tier_ef1(ranked_df, "weak", logger)
+    for tier in ["overall", "high", "medium", "weak"]:
+        tier_metrics = compute_tier_metrics(ranked_df, tier, logger)
+        
+        # Add to results with tier suffix
+        for metric_name, value in tier_metrics.items():
+            key = f"{metric_name}_{tier}"
+            results[key] = value
     
-    return {
-        "ef_1%_overall": ef1_overall,
-        "ef_1%_high": ef1_high,
-        "ef_1%_medium": ef1_medium,
-        "ef_1%_weak": ef1_weak,
-    }
+    return results
 
 
 # ============================================================================
@@ -917,6 +1000,196 @@ def plot_bedroc_degradation_curves(
     plt.close(fig)
     
     logger.info(f"Saved BEDROC degradation curves: {output_png.name}")
+
+
+def plot_comprehensive_stratified_grid(
+    df_stratified: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger
+) -> None:
+    """
+    Comprehensive tier-stratified grid: 4 methods (rows) × 5 metrics (columns).
+    
+    Each subplot shows degradation curves for all 4 potency tiers:
+    - Overall (all actives)
+    - High potency (≤100 nM)
+    - Medium potency (100-1K nM)
+    - Weak potency (1K-100K nM)
+    
+    Metrics: EF@1%, BEDROC(α=20), BEDROC(α=160), ROC-AUC, PR-AUC
+    Methods: PCA/Features, PCA/Fingerprints, UMAP/Features, UMAP/Fingerprints
+    """
+    logger.info("Generating comprehensive tier-stratified grid (4 methods × 5 metrics)...")
+    
+    # Check if all required stratified columns exist
+    required_base_metrics = ["ef_1%", "bedroc_20", "bedroc_160", "roc", "pr"]
+    required_tiers = ["overall", "high", "medium", "weak"]
+    
+    required_cols = []
+    for metric in required_base_metrics:
+        for tier in required_tiers:
+            required_cols.append(f"{metric}_{tier}")
+    
+    missing_cols = [c for c in required_cols if c not in df_stratified.columns]
+    if missing_cols:
+        logger.warning(f"Missing tier-stratified columns: {missing_cols[:10]}...")
+        logger.warning("Skipping comprehensive stratified grid")
+        return
+    
+    # Aggregate stratified data by (method, representation, mf_size_target)
+    df_stratified["mf_size_target_numeric"] = df_stratified["mf_size_target"].apply(
+        lambda x: 999999 if str(x).lower() == "full" else int(x)
+    )
+    
+    group_keys = ["method", "representation", "mf_size_target_numeric"]
+    
+    # Build aggregation dict for all metrics and tiers
+    agg_dict = {}
+    for metric in required_base_metrics:
+        for tier in required_tiers:
+            col = f"{metric}_{tier}"
+            agg_dict[col] = ["mean", "sem"]
+    
+    df_strat_agg = df_stratified.groupby(group_keys, dropna=False).agg(agg_dict).reset_index()
+    
+    # Flatten column names
+    df_strat_agg.columns = [
+        "_".join(col).strip("_") if isinstance(col, tuple) else col
+        for col in df_strat_agg.columns
+    ]
+    
+    # Create model_key
+    df_strat_agg["model_key"] = df_strat_agg.apply(get_model_key, axis=1)
+    
+    # Define methods in display order
+    method_order = [
+        ("pca_features", "PCA / Features"),
+        ("pca_fingerprints", "PCA / Fingerprints"),
+        ("umap_features", "UMAP / Features"),
+        ("umap_fingerprints", "UMAP / Fingerprints")
+    ]
+    
+    # Filter to only methods that exist in data
+    available_methods = [(k, label) for k, label in method_order if k in df_strat_agg["model_key"].values]
+    
+    if len(available_methods) == 0:
+        logger.warning("No methods found in stratified data")
+        return
+    
+    n_methods = len(available_methods)
+    
+    # Metrics configuration: (base_name, ylabel, title_short)
+    metrics_config = [
+        ("ef_1%", "EF@1%", "Early Enrichment"),
+        ("bedroc_20", "BEDROC (α=20)", "BEDROC-20"),
+        ("bedroc_160", "BEDROC (α=160)", "BEDROC-160"),
+        ("roc", "ROC-AUC", "ROC-AUC"),
+        ("pr", "PR-AUC", "PR-AUC")
+    ]
+    
+    n_metrics = len(metrics_config)
+    
+    # Tier colors and labels
+    tier_colors = {
+        "overall": "#333333",      # Dark gray
+        "high": "#1976D2",         # Blue
+        "medium": "#F57C00",       # Orange
+        "weak": "#C62828"          # Red
+    }
+    
+    tier_labels = {
+        "overall": "Overall",
+        "high": "High (≤100 nM)",
+        "medium": "Medium (100-1K nM)",
+        "weak": "Weak (1K-100K nM)"
+    }
+    
+    # Create large grid: n_methods rows × n_metrics columns
+    fig, axes = plt.subplots(n_methods, n_metrics, figsize=(24, 4.5 * n_methods), 
+                             sharex=True, sharey=False)
+    
+    # Ensure axes is 2D array
+    if n_methods == 1 and n_metrics == 1:
+        axes = np.array([[axes]])
+    elif n_methods == 1:
+        axes = axes.reshape(1, -1)
+    elif n_metrics == 1:
+        axes = axes.reshape(-1, 1)
+    
+    # Plot each method × metric combination
+    for row_idx, (model_key, method_label) in enumerate(available_methods):
+        subset = df_strat_agg[df_strat_agg["model_key"] == model_key].copy()
+        subset = subset.sort_values("mf_size_target_numeric")
+        
+        x = subset["mf_size_target_numeric"].values
+        
+        for col_idx, (metric_base, ylabel, title_short) in enumerate(metrics_config):
+            ax = axes[row_idx, col_idx]
+            
+            # Plot each tier
+            for tier in ["overall", "high", "medium", "weak"]:
+                mean_col = f"{metric_base}_{tier}_mean"
+                sem_col = f"{metric_base}_{tier}_sem"
+                
+                if mean_col not in subset.columns or sem_col not in subset.columns:
+                    continue
+                
+                y_mean = subset[mean_col].values
+                y_sem = subset[sem_col].values
+                
+                # Remove NaN values
+                valid_mask = ~np.isnan(y_mean) & ~np.isnan(y_sem)
+                if not valid_mask.any():
+                    continue
+                
+                x_valid = x[valid_mask]
+                y_mean_valid = y_mean[valid_mask]
+                y_sem_valid = y_sem[valid_mask]
+                
+                # Plot line with error band
+                ax.plot(x_valid, y_mean_valid, marker='o', linewidth=2, markersize=5,
+                       color=tier_colors[tier], label=tier_labels[tier], alpha=0.9)
+                ax.fill_between(x_valid, 
+                               y_mean_valid - y_sem_valid,
+                               y_mean_valid + y_sem_valid,
+                               color=tier_colors[tier], alpha=0.15)
+            
+            # Formatting
+            ax.set_xscale('log')
+            ax.grid(True, alpha=0.3, linestyle='--')
+            
+            # X-axis label (only bottom row)
+            if row_idx == n_methods - 1:
+                ax.set_xlabel("MF Cloud Size (compounds)", fontweight='bold', fontsize=11)
+            
+            # Y-axis label (only left column)
+            if col_idx == 0:
+                ax.set_ylabel(ylabel, fontweight='bold', fontsize=11)
+            
+            # Title (only top row)
+            if row_idx == 0:
+                ax.set_title(title_short, fontweight='bold', fontsize=13)
+            
+            # Method label (only left column)
+            if col_idx == 0:
+                # Add method label on the left side
+                ax.text(-0.35, 0.5, method_label, transform=ax.transAxes,
+                       fontsize=12, fontweight='bold', rotation=90,
+                       verticalalignment='center', horizontalalignment='center')
+            
+            # Legend (only top-right subplot)
+            if row_idx == 0 and col_idx == n_metrics - 1:
+                ax.legend(loc='best', fontsize=9, framealpha=0.95)
+    
+    plt.tight_layout()
+    
+    output_png = output_dir / "phase3_comprehensive_stratified_grid.png"
+    output_pdf = output_dir / "phase3_comprehensive_stratified_grid.pdf"
+    fig.savefig(output_png, dpi=300, bbox_inches='tight')
+    fig.savefig(output_pdf, bbox_inches='tight')
+    plt.close(fig)
+    
+    logger.info(f"Saved comprehensive stratified grid: {output_png.name}")
 
 
 def plot_tierstratified_other_metrics(
@@ -1708,6 +1981,9 @@ def main():
                 
                 # NEW: Tier-stratified BEDROC, ROC, PR degradation curves
                 plot_tierstratified_other_metrics(df_stratified, output_dir, logger)
+                
+                # NEW: Comprehensive stratified grid (4 methods × 5 metrics)
+                plot_comprehensive_stratified_grid(df_stratified, output_dir, logger)
             else:
                 logger.warning("No stratified metrics computed (missing artifacts?)")
         
