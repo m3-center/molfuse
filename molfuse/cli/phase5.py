@@ -373,28 +373,37 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                 logger.info(f"    Sampled receptors: {n_sample:,} rows")
             
             # Load Phase 1 best model (scaler + UMAP)
-            logger.info("  Loading Phase 1 best model artifacts...")
+            logger.info("  Loading Phase 1 best features-based model artifacts...")
             phase1_model_dir = Path(cfg.get("phase1_best_model_dir", "experiment_workspace_v4/phase1"))
             
-            # Find best Phase 1 run by scanning for highest EF@1%
+            # Find best features-based Phase 1 run (not fingerprints) by scanning for highest EF@1%
             best_ef1 = 0
             best_artifacts_dir = None
             for run_dir in phase1_model_dir.glob("*/"):
                 metrics_file = run_dir / "metrics" / "metrics.json"
-                if metrics_file.exists():
-                    with metrics_file.open("r") as f:
-                        metrics = json.load(f)
-                    if metrics.get("ef_1%", 0) > best_ef1:
-                        best_ef1 = metrics["ef_1%"]
-                        best_artifacts_dir = run_dir / "artifacts"
+                scaler_file = run_dir / "artifacts" / "scaler.joblib"
+                if metrics_file.exists() and scaler_file.exists():
+                    # Check if it's a features-based model (not fingerprints)
+                    try:
+                        scaler_test = joblib.load(scaler_file)
+                        is_features = not (isinstance(scaler_test, dict) and scaler_test.get("type") == "passthrough")
+                        if is_features:
+                            with metrics_file.open("r") as f:
+                                metrics = json.load(f)
+                            if metrics.get("ef_1%", 0) > best_ef1:
+                                best_ef1 = metrics["ef_1%"]
+                                best_artifacts_dir = run_dir / "artifacts"
+                    except Exception:
+                        continue
             
             if not best_artifacts_dir or not best_artifacts_dir.exists():
-                logger.error("  Phase 1 best model not found - cannot run negative control")
+                logger.error("  No features-based Phase 1 model found - cannot run negative control")
+                logger.info("  (Negative control requires features, not fingerprints)")
                 logger.info("  Creating empty results to mark as skipped")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
-                logger.info(f"    Best Phase 1 run: {best_artifacts_dir.parent.name} (EF@1%: {best_ef1:.2f})")
+                logger.info(f"    Best features-based Phase 1 run: {best_artifacts_dir.parent.name} (EF@1%: {best_ef1:.2f})")
                 
                 # Load scaler and UMAP model
                 scaler_path = best_artifacts_dir / "scaler.joblib"
@@ -410,74 +419,66 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     umap_model = joblib.load(umap_path)
                     logger.info("    Loaded scaler + UMAP model")
                     
-                    # Check if scaler is a passthrough marker (fingerprints case)
-                    if isinstance(scaler, dict) and scaler.get("type") == "passthrough":
-                        logger.error("  Best Phase 1 run uses fingerprints (passthrough scaler)")
-                        logger.error("  Negative control requires features-based model")
+                    # Load Phase 1 MF embedding (to use as reference for scoring)
+                    mf_embedding_path = best_artifacts_dir / "embedding_mf.csv"
+                    if not mf_embedding_path.exists():
+                        logger.error(f"  MF embedding not found: {mf_embedding_path}")
                         logger.info("  Creating empty results to mark as skipped")
                         act_scores = np.array([])
                         zinc_scores = np.array([])
                     else:
-                        # Load Phase 1 MF embedding (to use as reference for scoring)
-                        mf_embedding_path = best_artifacts_dir / "embedding_mf.csv"
-                        if not mf_embedding_path.exists():
-                            logger.error(f"  MF embedding not found: {mf_embedding_path}")
-                            logger.info("  Creating empty results to mark as skipped")
+                        df_mf_embed = pd.read_csv(mf_embedding_path)
+                        # Phase 1 embeddings use z0, z1, z2... column naming
+                        embed_cols = [f"z{i}" for i in range(cfg["dim"])]
+                        if not all(col in df_mf_embed.columns for col in embed_cols):
+                            logger.error(f"  Expected columns {embed_cols} not found in embedding")
+                            logger.error(f"  Available columns: {list(df_mf_embed.columns)}")
                             act_scores = np.array([])
                             zinc_scores = np.array([])
                         else:
-                            df_mf_embed = pd.read_csv(mf_embedding_path)
-                            # Phase 1 embeddings use z0, z1, z2... column naming
-                            embed_cols = [f"z{i}" for i in range(cfg["dim"])]
-                            if not all(col in df_mf_embed.columns for col in embed_cols):
-                                logger.error(f"  Expected columns {embed_cols} not found in embedding")
-                                logger.error(f"  Available columns: {list(df_mf_embed.columns)}")
+                            X_mf_embed = df_mf_embed[embed_cols].values
+                            logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
+                        
+                            # Select features and transform receptors through Phase 1 pipeline
+                            feature_cols_mf = select_feature_columns(df_mf)
+                            feature_cols_receptors = select_feature_columns(df_receptors)
+                            feature_cols = [c for c in feature_cols_mf if c in feature_cols_receptors]
+                            logger.info(f"    Selected {len(feature_cols)} common feature columns")
+                            
+                            if not feature_cols:
+                                logger.error("  No common features between MF and receptors")
                                 act_scores = np.array([])
                                 zinc_scores = np.array([])
                             else:
-                                X_mf_embed = df_mf_embed[embed_cols].values
-                                logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
-                            
-                                # Select features and transform receptors through Phase 1 pipeline
-                                feature_cols_mf = select_feature_columns(df_mf)
-                                feature_cols_receptors = select_feature_columns(df_receptors)
-                                feature_cols = [c for c in feature_cols_mf if c in feature_cols_receptors]
-                                logger.info(f"    Selected {len(feature_cols)} common feature columns")
+                                # Extract receptor features
+                                X_receptors_raw = df_receptors[[c for c in feature_cols if c in df_receptors.columns]].reindex(columns=feature_cols).to_numpy(dtype=float)
                                 
-                                if not feature_cols:
-                                    logger.error("  No common features between MF and receptors")
-                                    act_scores = np.array([])
-                                    zinc_scores = np.array([])
-                                else:
-                                    # Extract receptor features
-                                    X_receptors_raw = df_receptors[[c for c in feature_cols if c in df_receptors.columns]].reindex(columns=feature_cols).to_numpy(dtype=float)
-                                    
-                                    # Remove infinity values (replace with NaN, then impute)
-                                    logger.info("    Removing infinity values from receptors...")
-                                    X_receptors_raw[~np.isfinite(X_receptors_raw)] = np.nan
-                                    
-                                    # Transform through scaler + UMAP
-                                    from sklearn.impute import SimpleImputer
-                                    imputer = SimpleImputer(strategy="median")
-                                    X_receptors_imputed = imputer.fit_transform(X_receptors_raw)
-                                    X_receptors_scaled = scaler.transform(X_receptors_imputed)
-                                    X_receptors_embed = umap_model.transform(X_receptors_scaled)
-                                    logger.info(f"    Transformed receptors: {X_receptors_embed.shape}")
-                                    
-                                    # Score receptors against kinase MF cloud
-                                    logger.info("  Scoring receptor ligands against kinase model...")
-                                    receptor_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")
-                                    logger.info(f"    Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
-                                    
-                                    # Also score ZINC for comparison
-                                    zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")  # Reuse receptor scores as "decoys"
-                                    
-                                    # For negative control: receptors are the "actives" (should NOT be enriched)
-                                    # ZINC decoys are replaced by a second sample of receptors
-                                    act_scores = receptor_scores[:len(receptor_scores)//2]
-                                    zinc_scores = receptor_scores[len(receptor_scores)//2:]
-                                    logger.info(f"    Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
-                                    logger.info("    Expected: EF@1% should be ~1.0 (no enrichment = random)")
+                                # Remove infinity values (replace with NaN, then impute)
+                                logger.info("    Removing infinity values from receptors...")
+                                X_receptors_raw[~np.isfinite(X_receptors_raw)] = np.nan
+                                
+                                # Transform through scaler + UMAP
+                                from sklearn.impute import SimpleImputer
+                                imputer = SimpleImputer(strategy="median")
+                                X_receptors_imputed = imputer.fit_transform(X_receptors_raw)
+                                X_receptors_scaled = scaler.transform(X_receptors_imputed)
+                                X_receptors_embed = umap_model.transform(X_receptors_scaled)
+                                logger.info(f"    Transformed receptors: {X_receptors_embed.shape}")
+                                
+                                # Score receptors against kinase MF cloud
+                                logger.info("  Scoring receptor ligands against kinase model...")
+                                receptor_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")
+                                logger.info(f"    Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
+                                
+                                # Also score ZINC for comparison
+                                zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")  # Reuse receptor scores as "decoys"
+                                
+                                # For negative control: receptors are the "actives" (should NOT be enriched)
+                                # ZINC decoys are replaced by a second sample of receptors
+                                act_scores = receptor_scores[:len(receptor_scores)//2]
+                                zinc_scores = receptor_scores[len(receptor_scores)//2:]
+                                logger.info(f"    Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
+                                logger.info("    Expected: EF@1% should be ~1.0 (no enrichment = random)")
     
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
