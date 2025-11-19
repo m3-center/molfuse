@@ -27,10 +27,9 @@ from typing import Dict, List
 # ABL1 kinase baseline (from Phase 1)
 TARGET_TRANSFERASE = ("KW-0808_Transferase", "P00519")  # ABL1
 
-# Non-kinase control: Select a GPCR category with sufficient data
-# KW-0297_G-protein_coupled_receptor would be ideal, but if not available:
-# Fall back to a different functional class (Ion Channel, Protease, etc.)
-CONTROL_NON_TRANSFERASE = ("KW-0297_GPCR", "CHEMBL217")  # Dopamine D2 receptor
+# Non-kinase control: KW-0675_Receptor (includes GPCRs, nuclear receptors, ion channels)
+# Use any receptor ligands as negative control (structurally distinct from kinases)
+CONTROL_NON_TRANSFERASE = ("KW-0675_Receptor", "ANY")  # Use all receptor ligands
 
 # Experiments to run
 EXPERIMENTS = [
@@ -107,6 +106,7 @@ def generate_phase5_configs(output_dir: Path) -> List[Path]:
             if exp_name == "negative_control":
                 config["control_target"] = exp["control_target"][1]
                 config["control_target_kw"] = exp["control_target"][0]
+                config["receptor_features_csv"] = str(BASE_DATA_DIR / f"{exp['control_target'][0]}_affinity_extracted_features.csv")
                 config["method"] = "umap"
                 config["representation"] = "features"
                 config["dim"] = BEST_UMAP_FEATURES["dim"]
@@ -114,6 +114,7 @@ def generate_phase5_configs(output_dir: Path) -> List[Path]:
                     "n_neighbors": BEST_UMAP_FEATURES["n_neighbors"],
                     "min_dist": BEST_UMAP_FEATURES["min_dist"],
                 }
+                config["phase1_best_model_dir"] = "experiment_workspace_v4/phase1"  # Directory containing Phase 1 runs
                 
             elif exp_name == "raw_descriptors":
                 config["method"] = "raw"
