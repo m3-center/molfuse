@@ -667,16 +667,24 @@ def plot_phase3_phase4_4panel_comparison(
         # Phase 4 scatter
         p4_x = np.array(p4_umap_feat["natural_mf_size"].values, dtype=float)
         p4_y = np.array(p4_umap_feat[p4_mean].values, dtype=float)
+        p4_labels = p4_umap_feat["target_short"].values
         
         # Remove NaN
         valid_mask = ~np.isnan(p4_x) & ~np.isnan(p4_y)
         p4_x_valid = p4_x[valid_mask]
         p4_y_valid = p4_y[valid_mask]
+        p4_labels_valid = p4_labels[valid_mask]
         
-        # Plot Phase 4 points (no labels to reduce clutter)
+        # Plot Phase 4 points with labels
         ax.scatter(p4_x_valid, p4_y_valid, s=120, color='#A23B72', alpha=0.7,
                   edgecolors='black', linewidth=1.5, label='Phase 4: 8 protein functions',
                   zorder=4)
+        
+        # Add target labels
+        for x, y, label in zip(p4_x_valid, p4_y_valid, p4_labels_valid):
+            display_label = label.replace('_', ' ') if isinstance(label, str) else str(label)
+            ax.annotate(display_label, (x, y), fontsize=8, ha='left', va='bottom',
+                       xytext=(5, 5), textcoords='offset points', alpha=0.8)
         
         # Trendline
         if len(p4_x_valid) >= 3:
