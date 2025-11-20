@@ -92,32 +92,45 @@ def compute_ecfp4_fingerprints(smiles_list: List[str], radius: int = 2, n_bits: 
     return np.vstack(fps)
 
 
-def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray) -> np.ndarray:
+def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray, chunk_size: int = 10000) -> np.ndarray:
     """
     Compute max Tanimoto similarity for each query against reference set.
+    Uses chunking to avoid memory overflow for large query sets.
     
     Tanimoto = |A ∩ B| / |A ∪ B| = (A · B) / (|A| + |B| - A · B)
     
     Args:
         query_fps: Binary fingerprints (n_query, n_bits)
         ref_fps: Binary fingerprints (n_ref, n_bits)
+        chunk_size: Number of queries to process at once (default: 10000)
     
     Returns:
         Max Tanimoto similarity for each query (n_query,)
     """
-    # Compute dot product (intersection)
-    intersect = query_fps @ ref_fps.T  # (n_query, n_ref)
+    n_query = query_fps.shape[0]
+    max_similarities = np.zeros(n_query, dtype=np.float32)
     
-    # Compute union
-    query_popcount = query_fps.sum(axis=1, keepdims=True)  # (n_query, 1)
-    ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
-    union = query_popcount + ref_popcount - intersect
+    # Process in chunks to avoid memory overflow
+    for i in range(0, n_query, chunk_size):
+        logging.info(f"  Processing Tanimoto chunk: {i} to {min(i + chunk_size, n_query)} / {n_query}")
+        end_idx = min(i + chunk_size, n_query)
+        query_chunk = query_fps[i:end_idx]
+        
+        # Compute dot product (intersection)
+        intersect = query_chunk @ ref_fps.T  # (chunk_size, n_ref)
+        
+        # Compute union
+        query_popcount = query_chunk.sum(axis=1, keepdims=True)  # (chunk_size, 1)
+        ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
+        union = query_popcount + ref_popcount - intersect
+        
+        # Tanimoto = intersection / union
+        tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
+        
+        # Store max similarity for this chunk
+        max_similarities[i:end_idx] = tanimoto.max(axis=1)
     
-    # Tanimoto = intersection / union
-    tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
-    
-    # Return max similarity for each query
-    return tanimoto.max(axis=1)
+    return max_similarities
 
 
 # ============================================================================
