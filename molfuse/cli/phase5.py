@@ -655,9 +655,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     labels = np.concatenate([np.ones(len(act_scores)), np.zeros(len(zinc_scores))])
     all_scores = np.concatenate([act_scores, zinc_scores])
     
-    # Compute metrics
-    ef1 = ef_at_k_percent(labels, all_scores, k_percent=1.0)
-    ef5 = ef_at_k_percent(labels, all_scores, k_percent=5.0)
+    # Compute metrics (NOTE: signature is ef_at_k_percent(scores, labels, k) - scores FIRST!)
+    ef1 = ef_at_k_percent(all_scores, labels, k_percent=1.0)
+    ef5 = ef_at_k_percent(all_scores, labels, k_percent=5.0)
     roc = roc_auc(labels, all_scores)
     pr = pr_auc(labels, all_scores)
     
