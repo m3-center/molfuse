@@ -94,32 +94,44 @@ def compute_ecfp4_fingerprints(smiles_list: List[str], radius: int = 2, n_bits: 
     return np.vstack(fps)
 
 
-def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray) -> np.ndarray:
+def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray, chunk_size: int = 10000) -> np.ndarray:
     """
     Compute max Tanimoto similarity for each query against reference set.
+    Uses chunking to avoid memory overflow for large query sets.
     
     Tanimoto = |A ∩ B| / |A ∪ B| = (A · B) / (|A| + |B| - A · B)
     
     Args:
         query_fps: Binary fingerprints (n_query, n_bits)
         ref_fps: Binary fingerprints (n_ref, n_bits)
+        chunk_size: Number of queries to process at once (default: 10000)
     
     Returns:
         Max Tanimoto similarity for each query (n_query,)
     """
-    # Compute dot product (intersection)
-    intersect = query_fps @ ref_fps.T  # (n_query, n_ref)
+    n_query = query_fps.shape[0]
+    max_similarities = np.zeros(n_query, dtype=np.float32)
     
-    # Compute union
-    query_popcount = query_fps.sum(axis=1, keepdims=True)  # (n_query, 1)
-    ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
-    union = query_popcount + ref_popcount - intersect
+    # Process in chunks to avoid memory overflow
+    for i in range(0, n_query, chunk_size):
+        end_idx = min(i + chunk_size, n_query)
+        query_chunk = query_fps[i:end_idx]
+        
+        # Compute dot product (intersection)
+        intersect = query_chunk @ ref_fps.T  # (chunk_size, n_ref)
+        
+        # Compute union
+        query_popcount = query_chunk.sum(axis=1, keepdims=True)  # (chunk_size, 1)
+        ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
+        union = query_popcount + ref_popcount - intersect
+        
+        # Tanimoto = intersection / union
+        tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
+        
+        # Store max similarity for this chunk
+        max_similarities[i:end_idx] = tanimoto.max(axis=1)
     
-    # Tanimoto = intersection / union
-    tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
-    
-    # Return max similarity for each query
-    return tanimoto.max(axis=1)
+    return max_similarities
 
 
 # ============================================================================
@@ -301,12 +313,12 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         zinc_fps = compute_ecfp4_fingerprints(df_zinc[zinc_smiles_col].tolist(), radius=2, n_bits=2048)
         logger.info(f"    Fingerprints generated: MF={mf_fps.shape}, Actives={act_fps.shape}, ZINC={zinc_fps.shape}")
         
-        # Score via max Tanimoto similarity (batched for memory efficiency)
-        logger.info("  Computing Tanimoto scores (batched for large datasets)...")
+        # Score via max Tanimoto similarity (chunked for memory efficiency)
+        logger.info("  Computing Tanimoto scores (chunked for large datasets)...")
         logger.info(f"    Scoring {len(act_fps):,} actives vs {len(mf_fps):,} MF molecules...")
-        act_scores = tanimoto_similarity_max(act_fps, mf_fps, batch_size=10000)
+        act_scores = tanimoto_similarity_max(act_fps, mf_fps, chunk_size=10000)
         logger.info(f"    Scoring {len(zinc_fps):,} ZINC vs {len(mf_fps):,} MF molecules...")
-        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps, batch_size=10000)
+        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps, chunk_size=10000)
         logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
         logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
