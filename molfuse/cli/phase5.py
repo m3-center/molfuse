@@ -545,13 +545,16 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                                     receptor_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")
                                     logger.info(f"      Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
                                     
-                                    # Also score ZINC for comparison
-                                    zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")  # Reuse receptor scores as "decoys"
-                                    
                                     # For negative control: receptors are the "actives" (should NOT be enriched)
                                     # Split receptors: first half as "actives", second half as "decoys"
-                                    act_scores = receptor_scores[:len(receptor_scores)//2]
-                                    zinc_scores = receptor_scores[len(receptor_scores)//2:]
+                                    split_idx = len(receptor_scores) // 2
+                                    act_scores = receptor_scores[:split_idx]
+                                    zinc_scores = receptor_scores[split_idx:]
+                                    
+                                    # Also split the receptor DataFrame for SMILES tracking
+                                    df_actives = df_receptors.iloc[:split_idx].copy()
+                                    df_zinc = df_receptors.iloc[split_idx:].copy()
+                                    
                                     logger.info(f"      Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
                                     logger.info("      Expected: EF@1% should be ~1.0 (no enrichment = random)")
     
