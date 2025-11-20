@@ -206,99 +206,177 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     np.random.seed(random_seed)
     
     # ========================================================================
-    # Load Datasets
+    # Load Datasets (experiment-specific)
     # ========================================================================
     logger.info("\n[1/6] Loading datasets...")
     
-    # Load MF features (contains affinity data embedded)
-    mf_features_csv = Path(cfg["mf_features_csv"])
-    logger.info(f"Loading MF features: {mf_features_csv}")
-    df_mf_all = pd.read_csv(mf_features_csv, low_memory=False)
-    logger.info(f"  Loaded: {len(df_mf_all):,} rows")
+    # Determine which datasets to load based on experiment type
+    if experiment_type == "tanimoto":
+        # Tanimoto needs features CSV for actives/affinity filtering
+        # AND fingerprints CSV for scoring
+        mf_features_csv = Path(cfg["mf_features_csv"])
+        zinc_features_csv = Path(cfg["zinc_features_csv"])
+        mf_fingerprints_csv = Path(cfg["mf_fingerprints_csv"])
+        zinc_fingerprints_csv = Path(cfg["zinc_fingerprints_csv"])
+        logger.info(f"  Experiment type: {experiment_type} (features for filtering + fingerprints for scoring)")
+    elif experiment_type == "raw_descriptors":
+        # Raw descriptors uses features only
+        mf_features_csv = Path(cfg["mf_features_csv"])
+        zinc_features_csv = Path(cfg["zinc_features_csv"])
+        logger.info(f"  Experiment type: {experiment_type} (features)")
+    elif experiment_type == "negative_control":
+        # Negative control loads KW set (not MF), but needs MF for Phase 1 reconstruction
+        # We'll load KW set in the experiment-specific section
+        zinc_features_csv = Path(cfg["zinc_features_csv"])
+        logger.info(f"  Experiment type: {experiment_type} (KW set + ZINC features)")
+    else:
+        raise ValueError(f"Unknown experiment type: {experiment_type}")
     
-    # Extract actives FIRST (before any filtering) to get their SMILES
-    df_actives = df_mf_all[df_mf_all["accession"] == target].copy()
-    logger.info(f"Actives for {target}: {len(df_actives):,} rows")
-    
-    # Deduplicate actives by SMILES
-    smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_all.columns else "SMILES"
-    agg_dict = {}
-    for col in df_actives.columns:
-        if col == smiles_col:
-            continue
-        elif col == "Standard Value (nM)":
-            agg_dict[col] = "median"
+    # Load MF features for actives extraction and affinity filtering
+    # (not for negative_control, which loads KW set instead)
+    if experiment_type != "negative_control":
+        logger.info(f"Loading MF features for actives: {mf_features_csv}")
+        df_mf_features = pd.read_csv(mf_features_csv, low_memory=False)
+        logger.info(f"  Loaded: {len(df_mf_features):,} rows")
+        
+        # Extract actives FIRST (before any filtering) to get their SMILES
+        df_actives = df_mf_features[df_mf_features["accession"] == target].copy()
+        logger.info(f"Actives for {target}: {len(df_actives):,} rows")
+        
+        # Deduplicate actives by SMILES
+        smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_features.columns else "SMILES"
+        agg_dict = {}
+        for col in df_actives.columns:
+            if col == smiles_col:
+                continue
+            elif col == "Standard Value (nM)":
+                agg_dict[col] = "median"
+            else:
+                agg_dict[col] = "first"
+        before_act = len(df_actives)
+        df_actives = df_actives.groupby(smiles_col, as_index=False).agg(agg_dict)
+        logger.info(f"  Deduplicated actives: {before_act:,} -> {len(df_actives):,} (removed {before_act-len(df_actives):,})")
+        
+        # Get active SMILES set for exclusion
+        active_smiles_set = set(df_actives[smiles_col].dropna())
+        logger.info(f"  Active SMILES to exclude: {len(active_smiles_set):,}")
+        
+        # Filter MF: Remove target accession AND remove any molecule that appears in actives
+        # This handles promiscuous binders (same molecule binding multiple kinases)
+        df_mf_filtered = df_mf_features[df_mf_features["accession"] != target].copy()
+        logger.info(f"  After removing target accession {target}: {len(df_mf_filtered):,} rows")
+        
+        # Remove molecules by SMILES (handles multi-target binders)
+        before_smiles = len(df_mf_filtered)
+        df_mf_filtered = df_mf_filtered[~df_mf_filtered[smiles_col].isin(active_smiles_set)].copy()
+        logger.info(f"  After removing active SMILES: {len(df_mf_filtered):,} rows (removed {before_smiles - len(df_mf_filtered):,} promiscuous binders)")
+        
+        # Apply affinity cutoff
+        if "Standard Value (nM)" in df_mf_filtered.columns:
+            mask_cut = pd.to_numeric(df_mf_filtered["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+            df_mf_filtered = df_mf_filtered[mask_cut].copy()
+            logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf_filtered):,} rows")
+        
+        # Deduplicate MF by SMILES (median aggregation)
+        before = len(df_mf_filtered)
+        df_mf_filtered = df_mf_filtered.groupby(smiles_col, as_index=False).agg(agg_dict)
+        logger.info(f"  Deduplicated MF: {before:,} -> {len(df_mf_filtered):,} (removed {before-len(df_mf_filtered):,})")
+        
+        # CRITICAL: Verify actives were actually removed from MF cloud (data leakage check)
+        mf_smiles_set = set(df_mf_filtered[smiles_col].dropna())
+        overlap_mf_actives = active_smiles_set.intersection(mf_smiles_set)
+        if len(overlap_mf_actives) > 0:
+            logger.error(f"  CRITICAL ERROR: {len(overlap_mf_actives)} actives found in MF cloud (DATA LEAKAGE!)")
+            logger.error(f"  This should never happen - actives must be excluded from MF")
+            raise RuntimeError("Data leakage detected: actives found in MF reference set")
+        logger.info(f"  ✓ Verified: Zero overlap between actives and MF cloud (no data leakage)")
+        
+        # For Tanimoto: load fingerprints separately for scoring
+        if experiment_type == "tanimoto":
+            logger.info(f"Loading MF fingerprints for scoring: {mf_fingerprints_csv}")
+            df_mf_fingerprints = pd.read_csv(mf_fingerprints_csv, low_memory=False)
+            logger.info(f"  Loaded: {len(df_mf_fingerprints):,} rows")
+            
+            # Filter fingerprints to match filtered features (by SMILES)
+            mf_smiles_keep = set(df_mf_filtered[smiles_col].values)
+            fp_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_fingerprints.columns else "SMILES"
+            df_mf_fingerprints = df_mf_fingerprints[df_mf_fingerprints[fp_smiles_col].isin(mf_smiles_keep)].copy()
+            logger.info(f"  After filtering to match MF features: {len(df_mf_fingerprints):,} rows")
+            
+            # Load actives fingerprints
+            logger.info(f"Loading actives fingerprints for scoring: {mf_fingerprints_csv}")
+            df_actives_fingerprints = pd.read_csv(mf_fingerprints_csv, low_memory=False)
+            actives_smiles_keep = set(df_actives[smiles_col].values)
+            df_actives_fingerprints = df_actives_fingerprints[df_actives_fingerprints[fp_smiles_col].isin(actives_smiles_keep)].copy()
+            logger.info(f"  Actives fingerprints: {len(df_actives_fingerprints):,} rows")
+            
+            # Load ZINC fingerprints
+            logger.info(f"Loading ZINC fingerprints for scoring: {zinc_fingerprints_csv}")
+            df_zinc_fingerprints = pd.read_csv(zinc_fingerprints_csv, low_memory=False)
+            logger.info(f"  Loaded: {len(df_zinc_fingerprints):,} rows")
+            zinc_fp_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc_fingerprints.columns else "SMILES"
+            
+            # Deduplicate ZINC fingerprints
+            before_zinc_fp = len(df_zinc_fingerprints)
+            df_zinc_fingerprints = df_zinc_fingerprints.drop_duplicates(subset=[zinc_fp_smiles_col], keep="first").copy()
+            logger.info(f"  Deduplicated ZINC fingerprints: {before_zinc_fp:,} -> {len(df_zinc_fingerprints):,}")
+            
+            # Remove MF-ZINC overlap in fingerprints
+            before_overlap = len(df_zinc_fingerprints)
+            df_zinc_fingerprints = df_zinc_fingerprints[~df_zinc_fingerprints[zinc_fp_smiles_col].isin(mf_smiles_keep)].copy()
+            logger.info(f"  Removed MF-ZINC overlap in fingerprints: {before_overlap:,} -> {len(df_zinc_fingerprints):,}")
+            
+            # Remove actives from ZINC fingerprints
+            before_act_overlap = len(df_zinc_fingerprints)
+            df_zinc_fingerprints = df_zinc_fingerprints[~df_zinc_fingerprints[zinc_fp_smiles_col].isin(actives_smiles_keep)].copy()
+            logger.info(f"  Removed actives from ZINC fingerprints: {before_act_overlap:,} -> {len(df_zinc_fingerprints):,}")
+            
+            # CRITICAL: Verify ZINC fingerprints have zero overlap with actives
+            zinc_fp_smiles_set = set(df_zinc_fingerprints[zinc_fp_smiles_col].dropna())
+            overlap_zinc_actives = actives_smiles_keep.intersection(zinc_fp_smiles_set)
+            if len(overlap_zinc_actives) > 0:
+                logger.error(f"  CRITICAL ERROR: {len(overlap_zinc_actives)} actives found in ZINC fingerprints (DATA LEAKAGE!)")
+                raise RuntimeError("Data leakage detected: actives found in ZINC decoy set")
+            logger.info(f"  ✓ Verified: Zero overlap between actives and ZINC fingerprints (no data leakage)")
+            
+            # Assign to standard names for downstream processing
+            df_mf = df_mf_fingerprints
+            df_zinc = df_zinc_fingerprints
+            df_actives = df_actives_fingerprints
         else:
-            agg_dict[col] = "first"
-    before_act = len(df_actives)
-    df_actives = df_actives.groupby(smiles_col, as_index=False).agg(agg_dict)
-    logger.info(f"  Deduplicated actives: {before_act:,} -> {len(df_actives):,} (removed {before_act-len(df_actives):,})")
-    
-    # Get active SMILES set for exclusion
-    active_smiles_set = set(df_actives[smiles_col].dropna())
-    logger.info(f"  Active SMILES to exclude: {len(active_smiles_set):,}")
-    
-    # Filter MF: Remove target accession AND remove any molecule that appears in actives
-    # This handles promiscuous binders (same molecule binding multiple kinases)
-    df_mf = df_mf_all[df_mf_all["accession"] != target].copy()
-    logger.info(f"  After removing target accession {target}: {len(df_mf):,} rows")
-    
-    # Remove molecules by SMILES (handles multi-target binders)
-    before_smiles = len(df_mf)
-    df_mf = df_mf[~df_mf[smiles_col].isin(active_smiles_set)].copy()
-    logger.info(f"  After removing active SMILES: {len(df_mf):,} rows (removed {before_smiles - len(df_mf):,} promiscuous binders)")
-    
-    # Apply affinity cutoff
-    if "Standard Value (nM)" in df_mf.columns:
-        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-        df_mf = df_mf[mask_cut].copy()
-        logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf):,} rows")
-    
-    # Deduplicate MF by SMILES (median aggregation)
-    before = len(df_mf)
-    df_mf = df_mf.groupby(smiles_col, as_index=False).agg(agg_dict)
-    logger.info(f"  Deduplicated MF: {before:,} -> {len(df_mf):,} (removed {before-len(df_mf):,})")
-    
-    # CRITICAL: Verify actives were actually removed from MF cloud (data leakage check)
-    mf_smiles_set = set(df_mf[smiles_col].dropna())
-    overlap_mf_actives = active_smiles_set.intersection(mf_smiles_set)
-    if len(overlap_mf_actives) > 0:
-        logger.error(f"  CRITICAL ERROR: {len(overlap_mf_actives)} actives found in MF cloud (DATA LEAKAGE!)")
-        logger.error(f"  This should never happen - actives must be excluded from MF")
-        raise RuntimeError("Data leakage detected: actives found in MF reference set")
-    logger.info(f"  ✓ Verified: Zero overlap between actives and MF cloud (no data leakage)")
-    
-    # Load ZINC decoys
-    zinc_csv = Path(cfg["zinc_features_csv"])
-    logger.info(f"Loading ZINC: {zinc_csv}")
-    df_zinc = pd.read_csv(zinc_csv, low_memory=False)
-    logger.info(f"  Loaded: {len(df_zinc):,} rows")
-    
-    # Deduplicate ZINC
-    zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
-    before_zinc = len(df_zinc)
-    df_zinc = df_zinc.drop_duplicates(subset=[zinc_smiles_col], keep="first").copy()
-    logger.info(f"  Deduplicated ZINC: {before_zinc:,} -> {len(df_zinc):,} (removed {before_zinc-len(df_zinc):,})")
-    
-    # Remove MF-ZINC overlap
-    mf_smiles = set(df_mf[smiles_col].values)
-    before_overlap = len(df_zinc)
-    df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(mf_smiles)].copy()
-    logger.info(f"  Removed MF-ZINC overlap: {before_overlap:,} -> {len(df_zinc):,} (removed {before_overlap-len(df_zinc):,})")
-    
-    # Remove actives from ZINC
-    act_smiles = set(df_actives[smiles_col].values)
-    before_act_overlap = len(df_zinc)
-    df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(act_smiles)].copy()
-    logger.info(f"  Removed actives from ZINC: {before_act_overlap:,} -> {len(df_zinc):,} (removed {before_act_overlap-len(df_zinc):,})")
-    
-    # CRITICAL: Verify ZINC has zero overlap with actives (data leakage check)
-    zinc_smiles_set = set(df_zinc[zinc_smiles_col].dropna())
-    overlap_zinc_actives = active_smiles_set.intersection(zinc_smiles_set)
-    if len(overlap_zinc_actives) > 0:
-        logger.error(f"  CRITICAL ERROR: {len(overlap_zinc_actives)} actives found in ZINC decoys (DATA LEAKAGE!)")
-        raise RuntimeError("Data leakage detected: actives found in ZINC decoy set")
-    logger.info(f"  ✓ Verified: Zero overlap between actives and ZINC (no data leakage)")
+            # For raw_descriptors: use filtered features directly
+            df_mf = df_mf_filtered
+            
+            # Load ZINC features
+            logger.info(f"Loading ZINC features: {zinc_features_csv}")
+            df_zinc = pd.read_csv(zinc_features_csv, low_memory=False)
+            logger.info(f"  Loaded: {len(df_zinc):,} rows")
+            
+            # Deduplicate ZINC
+            zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+            before_zinc = len(df_zinc)
+            df_zinc = df_zinc.drop_duplicates(subset=[zinc_smiles_col], keep="first").copy()
+            logger.info(f"  Deduplicated ZINC: {before_zinc:,} -> {len(df_zinc):,}")
+            
+            # Remove MF-ZINC overlap
+            mf_smiles = set(df_mf[smiles_col].values)
+            before_overlap = len(df_zinc)
+            df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(mf_smiles)].copy()
+            logger.info(f"  Removed MF-ZINC overlap: {before_overlap:,} -> {len(df_zinc):,}")
+            
+            # Remove actives from ZINC
+            act_smiles = set(df_actives[smiles_col].values)
+            before_act_overlap = len(df_zinc)
+            df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(act_smiles)].copy()
+            logger.info(f"  Removed actives from ZINC: {before_act_overlap:,} -> {len(df_zinc):,}")
+            
+            # CRITICAL: Verify ZINC has zero overlap with actives (data leakage check)
+            zinc_smiles_set = set(df_zinc[zinc_smiles_col].dropna())
+            overlap_zinc_actives = active_smiles_set.intersection(zinc_smiles_set)
+            if len(overlap_zinc_actives) > 0:
+                logger.error(f"  CRITICAL ERROR: {len(overlap_zinc_actives)} actives found in ZINC decoys (DATA LEAKAGE!)")
+                raise RuntimeError("Data leakage detected: actives found in ZINC decoy set")
+            logger.info(f"  ✓ Verified: Zero overlap between actives and ZINC (no data leakage)")
     
     # ========================================================================
     # Experiment-specific scoring

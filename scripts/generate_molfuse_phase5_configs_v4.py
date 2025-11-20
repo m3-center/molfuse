@@ -84,7 +84,10 @@ def generate_tanimoto_configs(output_dir: Path) -> List[Path]:
         run_name = f"tanimoto_rep{rep_idx}"
         
         # Build dataset paths (ABL1/kinase)
+        # Need features CSV for actives/affinity filtering, fingerprints CSV for scoring
+        mf_features_csv = BASE_DATA_DIR / "KW-0808_Transferase_affinity_extracted_features.csv"
         mf_fingerprints_csv = BASE_DATA_DIR / "KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv"
+        zinc_features_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_features.csv"
         zinc_fingerprints_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
         
         config = {
@@ -98,8 +101,10 @@ def generate_tanimoto_configs(output_dir: Path) -> List[Path]:
             "dim": DIM,
             "phase5_run_name": "validation",
             
-            # Dataset paths (fingerprints only for Tanimoto)
+            # Dataset paths (features for filtering, fingerprints for scoring)
+            "mf_features_csv": str(mf_features_csv),
             "mf_fingerprints_csv": str(mf_fingerprints_csv),
+            "zinc_features_csv": str(zinc_features_csv),
             "zinc_fingerprints_csv": str(zinc_fingerprints_csv),
         }
         
