@@ -329,12 +329,19 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info(f"    Actives features: {X_act.shape}")
         logger.info(f"    ZINC features: {X_zinc.shape}")
         
-        # Score via 1-NN in high-D space
+        # Score via 1-NN in high-D space (score = -distance, higher is better)
         logger.info("  Computing 1-NN scores in high-D space...")
         act_scores, _ = nn_min_distance_scores(X_mf, X_act, metric="euclidean")
         zinc_scores, _ = nn_min_distance_scores(X_mf, X_zinc, metric="euclidean")
-        logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
-        logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+        logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}, std={act_scores.std():.4f}")
+        logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}, std={zinc_scores.std():.4f}")
+        
+        # Sanity check: if scores have no variance, something is wrong
+        if act_scores.std() < 1e-10 or zinc_scores.std() < 1e-10:
+            logger.error("  WARNING: Scores have near-zero variance! This will produce meaningless metrics.")
+            logger.error(f"    Active scores std: {act_scores.std():.10f}")
+            logger.error(f"    ZINC scores std: {zinc_scores.std():.10f}")
+            logger.error("    Check: Are all molecules identical? Is the distance metric correct?")
         
     elif experiment_type == "negative_control":
         logger.info("Negative Control: Non-kinase (receptor) ligands vs kinase model")
@@ -546,17 +553,43 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                                     logger.info(f"      Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
                                     
                                     # For negative control: receptors are the "actives" (should NOT be enriched)
-                                    # Split receptors: first half as "actives", second half as "decoys"
-                                    split_idx = len(receptor_scores) // 2
-                                    act_scores = receptor_scores[:split_idx]
-                                    zinc_scores = receptor_scores[split_idx:]
+                                    # Use actual ZINC as decoys (not another receptor split)
+                                    # Transform ZINC through the same pipeline
+                                    logger.info("    Transforming ZINC decoys through Phase 1 pipeline...")
                                     
-                                    # Also split the receptor DataFrame for SMILES tracking
-                                    df_actives = df_receptors.iloc[:split_idx].copy()
-                                    df_zinc = df_receptors.iloc[split_idx:].copy()
+                                    # Check which Phase 1 features are missing in ZINC data
+                                    missing_feats_zinc = [f for f in phase1_features if f not in df_zinc.columns]
+                                    if missing_feats_zinc:
+                                        logger.warning(f"      {len(missing_feats_zinc)} Phase 1 features missing in ZINC data (will be filled with NaN)")
                                     
-                                    logger.info(f"      Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
-                                    logger.info("      Expected: EF@1% should be ~1.0 (no enrichment = random)")
+                                    # Extract ZINC features (missing features → NaN)
+                                    zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+                                    X_zinc_raw = df_zinc.reindex(columns=phase1_features).to_numpy(dtype=np.float64)
+                                    
+                                    # Remove infinity values
+                                    logger.info("      Removing infinity values from ZINC...")
+                                    X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
+                                    logger.info(f"      ZINC features shape (pre-transform): {X_zinc_raw.shape}")
+                                    
+                                    # Transform through Phase 1 pipeline
+                                    X_zinc_imputed = phase1_imputer.transform(X_zinc_raw)
+                                    X_zinc_scaled = scaler.transform(X_zinc_imputed)
+                                    X_zinc_embed = umap_model.transform(X_zinc_scaled)
+                                    logger.info(f"      Transformed ZINC: {X_zinc_embed.shape}")
+                                    
+                                    # Score ZINC against kinase MF cloud
+                                    logger.info("    Scoring ZINC decoys against kinase model...")
+                                    zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_zinc_embed, metric="euclidean")
+                                    logger.info(f"      ZINC scores: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+                                    
+                                    # Receptors are "actives", ZINC are "decoys"
+                                    act_scores = receptor_scores
+                                    df_actives = df_receptors.copy()
+                                    # df_zinc already loaded from earlier
+                                    
+                                    logger.info(f"      Receptors (as actives): {len(act_scores)}")
+                                    logger.info(f"      ZINC (as decoys): {len(zinc_scores)}")
+                                    logger.info("      Expected: EF@1% should be ~1.0 (no enrichment = receptors vs ZINC are both non-kinases)")
     
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
