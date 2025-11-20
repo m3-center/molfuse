@@ -229,6 +229,16 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     df_actives = df_actives.groupby(smiles_col, as_index=False).agg(agg_dict)
     logger.info(f"  Deduplicated actives: {before_act:,} -> {len(df_actives):,} (removed {before_act-len(df_actives):,})")
     
+    # CRITICAL: Verify actives were actually removed from MF cloud (data leakage check)
+    active_smiles_set = set(df_actives[smiles_col].dropna())
+    mf_smiles_set = set(df_mf[smiles_col].dropna())
+    overlap_mf_actives = active_smiles_set.intersection(mf_smiles_set)
+    if len(overlap_mf_actives) > 0:
+        logger.error(f"  CRITICAL ERROR: {len(overlap_mf_actives)} actives found in MF cloud (DATA LEAKAGE!)")
+        logger.error(f"  This should never happen - actives must be excluded from MF")
+        raise RuntimeError("Data leakage detected: actives found in MF reference set")
+    logger.info(f"  ✓ Verified: Zero overlap between actives and MF cloud (no data leakage)")
+    
     # Load ZINC decoys
     zinc_csv = Path(cfg["zinc_features_csv"])
     logger.info(f"Loading ZINC: {zinc_csv}")
@@ -252,6 +262,14 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     before_act_overlap = len(df_zinc)
     df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(act_smiles)].copy()
     logger.info(f"  Removed actives from ZINC: {before_act_overlap:,} -> {len(df_zinc):,} (removed {before_act_overlap-len(df_zinc):,})")
+    
+    # CRITICAL: Verify ZINC has zero overlap with actives (data leakage check)
+    zinc_smiles_set = set(df_zinc[zinc_smiles_col].dropna())
+    overlap_zinc_actives = active_smiles_set.intersection(zinc_smiles_set)
+    if len(overlap_zinc_actives) > 0:
+        logger.error(f"  CRITICAL ERROR: {len(overlap_zinc_actives)} actives found in ZINC decoys (DATA LEAKAGE!)")
+        raise RuntimeError("Data leakage detected: actives found in ZINC decoy set")
+    logger.info(f"  ✓ Verified: Zero overlap between actives and ZINC (no data leakage)")
     
     # ========================================================================
     # Experiment-specific scoring
@@ -457,18 +475,22 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         
                         # Load Phase 1 MF+ZINC data (using Phase 1's affinity cutoff)
                         logger.info("    Loading Phase 1 MF+ZINC for feature reconstruction...")
-                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"])
+                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
                         logger.info(f"      Loaded MF: {len(df_mf_p1):,} rows")
                         
                         # Apply Phase 1's target exclusion and affinity cutoff
-                        phase1_target_col = phase1_cfg["target"].split("_")[-1]  # Extract P00519 from TyrosineProteinKinaseABL1_P00519
-                        if phase1_target_col in df_mf_p1.columns:
-                            df_mf_p1 = df_mf_p1[df_mf_p1[phase1_target_col] != 1].copy()
-                            logger.info(f"      After target exclusion: {len(df_mf_p1):,} rows")
+                        # Phase 1 config uses "accession" column for target filtering
+                        phase1_target = phase1_cfg.get("target", target)  # Fallback to Phase 5 target
+                        if "accession" in df_mf_p1.columns:
+                            df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                            logger.info(f"      After target exclusion ({phase1_target}): {len(df_mf_p1):,} rows")
+                        else:
+                            logger.warning(f"      'accession' column not found - cannot filter by target")
                         
                         if "Standard Value (nM)" in df_mf_p1.columns:
-                            df_mf_p1 = df_mf_p1[df_mf_p1["Standard Value (nM)"] <= phase1_cfg["affinity_cutoff_nM"]].copy()
-                            logger.info(f"      After affinity cutoff: {len(df_mf_p1):,} rows")
+                            mask_affinity = pd.to_numeric(df_mf_p1["Standard Value (nM)"], errors="coerce") <= phase1_cfg["affinity_cutoff_nM"]
+                            df_mf_p1 = df_mf_p1[mask_affinity].copy()
+                            logger.info(f"      After affinity cutoff (≤{phase1_cfg['affinity_cutoff_nM']} nM): {len(df_mf_p1):,} rows")
                         
                         # Deduplicate Phase 1 MF
                         smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
