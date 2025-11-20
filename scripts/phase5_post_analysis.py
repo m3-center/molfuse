@@ -57,21 +57,27 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
     """
     Collect all Phase 5 results from workspace.
     
+    Handles incomplete experiments gracefully by continuing to next experiment.
+    
     Returns:
         Dict mapping experiment_type -> list of result dicts
     """
     phase5_dir = workspace_dir / "phase5" / "validation"
     
     if not phase5_dir.exists():
-        raise FileNotFoundError(f"Phase 5 validation directory not found: {phase5_dir}")
+        print(f"WARNING: Phase 5 validation directory not found: {phase5_dir}")
+        print("Creating empty results structure...")
+        return {exp: [] for exp in EXPERIMENT_ORDER}
     
     results = {exp: [] for exp in EXPERIMENT_ORDER}
+    missing_runs = []
+    error_runs = []
     
     for run_dir in sorted(phase5_dir.glob("phase5_*")):
         summary_path = run_dir / "logs" / "phase5_summary.json"
         
         if not summary_path.exists():
-            print(f"WARNING: Missing summary for {run_dir.name}")
+            missing_runs.append(run_dir.name)
             continue
         
         try:
@@ -82,10 +88,25 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
             if exp_type in results:
                 results[exp_type].append(summary)
             else:
-                print(f"WARNING: Unknown experiment type '{exp_type}' in {run_dir.name}")
+                print(f"WARNING: Unknown experiment type '{exp_type}' in {run_dir.name}, skipping")
         
         except Exception as e:
-            print(f"ERROR: Failed to load {summary_path}: {e}")
+            error_runs.append((run_dir.name, str(e)))
+    
+    # Report missing/error runs
+    if missing_runs:
+        print(f"\nWARNING: {len(missing_runs)} runs missing phase5_summary.json (may still be running):")
+        for run_name in missing_runs[:5]:  # Show first 5
+            print(f"  - {run_name}")
+        if len(missing_runs) > 5:
+            print(f"  ... and {len(missing_runs) - 5} more")
+    
+    if error_runs:
+        print(f"\nWARNING: {len(error_runs)} runs failed to load:")
+        for run_name, error in error_runs[:3]:  # Show first 3
+            print(f"  - {run_name}: {error}")
+        if len(error_runs) > 3:
+            print(f"  ... and {len(error_runs) - 3} more")
     
     return results
 
@@ -217,7 +238,8 @@ def generate_latex_table(summary_stats: Dict[str, Dict], p_values: Dict[str, Dic
     
     # Data rows
     for exp_type in EXPERIMENT_ORDER:
-        if exp_type not in summary_stats:
+        if exp_type not in summary_stats or not summary_stats[exp_type]:
+            # Skip experiments with no data
             continue
         
         exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
@@ -244,6 +266,7 @@ def generate_latex_table(summary_stats: Dict[str, Dict], p_values: Dict[str, Dic
     lines.append("")
     lines.append("% Significance markers: * p < 0.05, ** p < 0.01, *** p < 0.001")
     lines.append("% Comparison: Each experiment vs Tanimoto Baseline")
+    lines.append("% Note: Experiments with no completed runs are excluded from the table")
     
     return "\n".join(lines)
 
@@ -266,7 +289,8 @@ def generate_text_report(
     for exp_type in EXPERIMENT_ORDER:
         exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
         n_reps = len(results_dict.get(exp_type, []))
-        lines.append(f"  {exp_name:30s}: {n_reps} replicates")
+        status = "COMPLETE" if n_reps > 0 else "NOT STARTED / INCOMPLETE"
+        lines.append(f"  {exp_name:30s}: {n_reps} replicates [{status}]")
     lines.append("")
     
     # Summary statistics
@@ -274,7 +298,10 @@ def generate_text_report(
     lines.append("-" * 80)
     
     for exp_type in EXPERIMENT_ORDER:
-        if exp_type not in summary_stats:
+        if exp_type not in summary_stats or not summary_stats[exp_type]:
+            exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
+            lines.append(f"\n{exp_name}:")
+            lines.append("  [No completed runs available]")
             continue
         
         exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
@@ -318,45 +345,63 @@ def generate_text_report(
     lines.append("-" * 80)
     
     # 1. Database bias control
-    if "negative_control" in summary_stats:
+    if "negative_control" in summary_stats and summary_stats["negative_control"]:
         nc_ef1_mean, nc_ef1_std = summary_stats["negative_control"].get("ef_1%", (np.nan, np.nan))
         lines.append("\n1. DATABASE BIAS CONTROL:")
-        lines.append(f"   Non-kinase actives vs kinase model: EF@1% = {format_metric_value(nc_ef1_mean, nc_ef1_std, 'ef_1%')}")
-        if not np.isnan(nc_ef1_mean) and nc_ef1_mean < 2.0:
-            lines.append("   → Result: NO database bias detected (EF@1% ≈ 1.0 indicates random scoring)")
+        if not np.isnan(nc_ef1_mean):
+            lines.append(f"   Non-kinase actives vs kinase model: EF@1% = {format_metric_value(nc_ef1_mean, nc_ef1_std, 'ef_1%')}")
+            if nc_ef1_mean < 2.0:
+                lines.append("   → Result: NO database bias detected (EF@1% ≈ 1.0 indicates random scoring)")
+            else:
+                lines.append("   → Result: Potential database bias detected (EF@1% > 2.0)")
         else:
-            lines.append("   → Result: Potential database bias detected (EF@1% > 2.0)")
+            lines.append("   [Incomplete - waiting for results]")
+    else:
+        lines.append("\n1. DATABASE BIAS CONTROL:")
+        lines.append("   [No completed runs available]")
     
     # 2. Raw descriptor baseline
-    if "raw_descriptors" in summary_stats and "tanimoto" in summary_stats:
+    if "raw_descriptors" in summary_stats and summary_stats["raw_descriptors"] and \
+       "tanimoto" in summary_stats and summary_stats["tanimoto"]:
         rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
         tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         lines.append("\n2. DIMENSIONALITY REDUCTION NECESSITY:")
-        lines.append(f"   Raw descriptors (no UMAP): EF@1% = {format_metric_value(rd_ef1_mean, rd_ef1_std, 'ef_1%')}")
-        lines.append(f"   Tanimoto baseline:         EF@1% = {format_metric_value(tan_ef1_mean, tan_ef1_std, 'ef_1%')}")
-        
-        if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
-            p_val = p_values["raw_descriptors"]["ef_1%"]
-            p_str = format_p_value(p_val)
-            lines.append(f"   Statistical comparison:    p = {p_str}")
+        if not np.isnan(rd_ef1_mean) and not np.isnan(tan_ef1_mean):
+            lines.append(f"   Raw descriptors (no UMAP): EF@1% = {format_metric_value(rd_ef1_mean, rd_ef1_std, 'ef_1%')}")
+            lines.append(f"   Tanimoto baseline:         EF@1% = {format_metric_value(tan_ef1_mean, tan_ef1_std, 'ef_1%')}")
             
-            if not np.isnan(rd_ef1_mean) and not np.isnan(tan_ef1_mean):
+            if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
+                p_val = p_values["raw_descriptors"]["ef_1%"]
+                p_str = format_p_value(p_val)
+                lines.append(f"   Statistical comparison:    p = {p_str}")
+                
                 if rd_ef1_mean < tan_ef1_mean * 0.9:
                     lines.append("   → Result: UMAP improves performance over raw high-D space")
                 elif rd_ef1_mean > tan_ef1_mean * 1.1:
                     lines.append("   → Result: Raw descriptors outperform UMAP (unexpected)")
                 else:
                     lines.append("   → Result: No significant difference (UMAP may not be necessary)")
+        else:
+            lines.append("   [Incomplete - waiting for results]")
+    else:
+        lines.append("\n2. DIMENSIONALITY REDUCTION NECESSITY:")
+        lines.append("   [No completed runs available for comparison]")
     
     # 3. Industry baseline comparison
-    if "tanimoto" in summary_stats:
+    if "tanimoto" in summary_stats and summary_stats["tanimoto"]:
         tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         tan_roc_mean, tan_roc_std = summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
         lines.append("\n3. INDUSTRY-STANDARD BASELINE:")
-        lines.append(f"   Tanimoto ECFP4: EF@1% = {format_metric_value(tan_ef1_mean, tan_ef1_std, 'ef_1%')}, "
-                    f"ROC-AUC = {format_metric_value(tan_roc_mean, tan_roc_std, 'roc_auc')}")
-        lines.append("   → This establishes the minimum performance threshold for MolFuSE")
-        lines.append("   → MolFuSE Phase 1 results should be compared against this baseline")
+        if not np.isnan(tan_ef1_mean):
+            lines.append(f"   Tanimoto ECFP4: EF@1% = {format_metric_value(tan_ef1_mean, tan_ef1_std, 'ef_1%')}, "
+                        f"ROC-AUC = {format_metric_value(tan_roc_mean, tan_roc_std, 'roc_auc')}")
+            lines.append("   → This establishes the minimum performance threshold for MolFuSE")
+            lines.append("   → MolFuSE Phase 1 results should be compared against this baseline")
+        else:
+            lines.append("   [Incomplete - waiting for results]")
+    else:
+        lines.append("\n3. INDUSTRY-STANDARD BASELINE:")
+        lines.append("   [No completed runs available]")
     
     lines.append("")
     lines.append("="*80)
@@ -370,46 +415,67 @@ def generate_latex_text_snippet(summary_stats: Dict[str, Dict], p_values: Dict[s
     
     lines.append("% LaTeX snippet for Results/Bias Analysis section")
     lines.append("% Copy the text below into your paper")
+    lines.append("% Note: Incomplete experiments will show [INCOMPLETE] markers")
     lines.append("")
     lines.append("\\subsection{Validation \\& Baseline Experiments}")
     lines.append("")
     
+    # Check data availability
+    has_negative_control = "negative_control" in summary_stats and summary_stats["negative_control"]
+    has_raw_descriptors = "raw_descriptors" in summary_stats and summary_stats["raw_descriptors"]
+    has_tanimoto = "tanimoto" in summary_stats and summary_stats["tanimoto"]
+    
     # Database bias
-    if "negative_control" in summary_stats:
+    if has_negative_control:
         nc_ef1_mean, nc_ef1_std = summary_stats["negative_control"].get("ef_1%", (np.nan, np.nan))
         nc_roc_mean, nc_roc_std = summary_stats["negative_control"].get("roc_auc", (np.nan, np.nan))
         
-        lines.append("To address potential database bias, we evaluated the model's performance on")
-        lines.append("structurally distinct non-kinase actives (KW-0675\\_Receptor) scored against")
-        lines.append(f"the ABL1 kinase model. The negative control yielded EF@1\\% = {nc_ef1_mean:.1f} $\\pm$ {nc_ef1_std:.1f}")
-        lines.append(f"and ROC-AUC = {nc_roc_mean:.3f} $\\pm$ {nc_roc_std:.3f} (n=5 replicates), indicating")
-        
-        if not np.isnan(nc_ef1_mean) and nc_ef1_mean < 2.0:
-            lines.append("minimal database bias (EF@1\\% $\\approx$ 1.0 represents random scoring).")
+        if not np.isnan(nc_ef1_mean):
+            lines.append("To address potential database bias, we evaluated the model's performance on")
+            lines.append("structurally distinct non-kinase actives (KW-0675\\_Receptor) scored against")
+            lines.append(f"the ABL1 kinase model. The negative control yielded EF@1\\% = {nc_ef1_mean:.1f} $\\pm$ {nc_ef1_std:.1f}")
+            lines.append(f"and ROC-AUC = {nc_roc_mean:.3f} $\\pm$ {nc_roc_std:.3f} (n=5 replicates), indicating")
+            
+            if nc_ef1_mean < 2.0:
+                lines.append("minimal database bias (EF@1\\% $\\approx$ 1.0 represents random scoring).")
+            else:
+                lines.append("potential database bias that warrants further investigation.")
         else:
-            lines.append("potential database bias that warrants further investigation.")
+            lines.append("% [INCOMPLETE: Database bias control experiment not yet finished]")
+    else:
+        lines.append("% [INCOMPLETE: Database bias control experiment not yet started]")
     
     lines.append("")
     
     # Baselines comparison
-    if "raw_descriptors" in summary_stats and "tanimoto" in summary_stats:
+    if has_raw_descriptors and has_tanimoto:
         rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
         tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         
-        lines.append("We compared MolFuSE against two baselines: (1) 1-NN in the raw 2D descriptor space")
-        lines.append("(no dimensionality reduction) and (2) Tanimoto similarity with ECFP4 fingerprints")
-        lines.append(f"(industry standard). Raw descriptors achieved EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f},")
-        lines.append(f"while Tanimoto baseline achieved EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f}.")
-        
-        if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
-            p_val = p_values["raw_descriptors"]["ef_1%"]
-            if not np.isnan(p_val) and p_val < 0.05:
-                lines.append(f"The difference was statistically significant (p = {format_p_value(p_val)}),")
-                if rd_ef1_mean < tan_ef1_mean:
-                    lines.append("demonstrating that dimensionality reduction with UMAP provides a meaningful")
-                    lines.append("improvement over raw high-dimensional similarity scoring.")
-            else:
-                lines.append("The difference was not statistically significant (p > 0.05).")
+        if not np.isnan(rd_ef1_mean) and not np.isnan(tan_ef1_mean):
+            lines.append("We compared MolFuSE against two baselines: (1) 1-NN in the raw 2D descriptor space")
+            lines.append("(no dimensionality reduction) and (2) Tanimoto similarity with ECFP4 fingerprints")
+            lines.append(f"(industry standard). Raw descriptors achieved EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f},")
+            lines.append(f"while Tanimoto baseline achieved EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f}.")
+            
+            if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
+                p_val = p_values["raw_descriptors"]["ef_1%"]
+                if not np.isnan(p_val) and p_val < 0.05:
+                    lines.append(f"The difference was statistically significant (p = {format_p_value(p_val)}),")
+                    if rd_ef1_mean < tan_ef1_mean:
+                        lines.append("demonstrating that dimensionality reduction with UMAP provides a meaningful")
+                        lines.append("improvement over raw high-dimensional similarity scoring.")
+                else:
+                    lines.append("The difference was not statistically significant (p > 0.05).")
+        else:
+            lines.append("% [INCOMPLETE: Baseline comparison experiments not yet finished]")
+    elif has_tanimoto:
+        tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        if not np.isnan(tan_ef1_mean):
+            lines.append(f"We established a Tanimoto ECFP4 baseline (EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f}).")
+            lines.append("% [INCOMPLETE: Raw descriptor baseline not yet finished for comparison]")
+    else:
+        lines.append("% [INCOMPLETE: Baseline experiments not yet started]")
     
     lines.append("")
     
@@ -461,12 +527,18 @@ def main():
     
     for exp_type, runs in results_dict.items():
         exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
-        print(f"  {exp_name:30s}: {len(runs)} replicates")
+        status = "✓" if len(runs) > 0 else "✗"
+        print(f"  {status} {exp_name:30s}: {len(runs)} replicates")
     
     if total_runs == 0:
-        print("\nERROR: No Phase 5 results found")
+        print("\n" + "="*80)
+        print("WARNING: No Phase 5 results found")
+        print("="*80)
+        print("All experiments are either not started or still running.")
         print("Run Phase 5 experiments first:")
         print("  bash hpc/submit_molfuse_phase5.sh")
+        print("")
+        print("Exiting without generating report.")
         return
     
     print("")
@@ -477,10 +549,17 @@ def main():
     for exp_type, runs in results_dict.items():
         if runs:
             summary_stats[exp_type] = compute_summary_stats(runs)
+            print(f"  ✓ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: {len(runs)} replicates")
+        else:
+            print(f"  ✗ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: No data (skipped)")
     
     # Perform significance tests
-    print("Performing statistical tests...")
+    print("\nPerforming statistical tests...")
     p_values = perform_significance_tests(results_dict, baseline_exp="tanimoto")
+    if p_values:
+        print(f"  Computed {sum(len(v) for v in p_values.values())} pairwise comparisons")
+    else:
+        print("  No comparisons (insufficient data or missing baseline)")
     
     print("")
     
@@ -512,12 +591,32 @@ def main():
     print("="*80)
     print("POST-ANALYSIS COMPLETE")
     print("="*80)
+    
+    # Summary of what was generated
+    completed = [exp for exp in EXPERIMENT_ORDER if exp in summary_stats and summary_stats[exp]]
+    incomplete = [exp for exp in EXPERIMENT_ORDER if exp not in summary_stats or not summary_stats[exp]]
+    
+    if completed:
+        print(f"\nCompleted experiments ({len(completed)}/{len(EXPERIMENT_ORDER)}):")
+        for exp in completed:
+            print(f"  ✓ {EXPERIMENT_NAMES.get(exp, exp)}")
+    
+    if incomplete:
+        print(f"\nIncomplete experiments ({len(incomplete)}/{len(EXPERIMENT_ORDER)}):")
+        for exp in incomplete:
+            print(f"  ✗ {EXPERIMENT_NAMES.get(exp, exp)} (still running or not started)")
+        print("\nNote: Report generated with partial results.")
+        print("Re-run this script after remaining experiments complete for full analysis.")
+    
     print("")
     print("Next steps:")
     print("  1. Review the report in:", output_path)
     print("  2. Copy LaTeX table into your paper's Results/Bias Analysis section")
     print("  3. Copy LaTeX text snippet for narrative description")
-    print("  4. Update PUBLICATION.md with key findings")
+    if completed:
+        print("  4. Update PUBLICATION.md with key findings")
+    if incomplete:
+        print("  5. Re-run analysis after remaining experiments finish")
 
 
 if __name__ == "__main__":
