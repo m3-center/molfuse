@@ -80,6 +80,8 @@ def compute_ecfp4_fingerprints(smiles_list: List[str], radius: int = 2, n_bits: 
     Returns:
         Binary fingerprint matrix (n_molecules, n_bits)
     """
+    from rdkit import DataStructs
+    
     fps = []
     for smiles in smiles_list:
         mol = Chem.MolFromSmiles(smiles)
@@ -92,32 +94,49 @@ def compute_ecfp4_fingerprints(smiles_list: List[str], radius: int = 2, n_bits: 
     return np.vstack(fps)
 
 
-def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray) -> np.ndarray:
+def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray, batch_size: int = 10000) -> np.ndarray:
     """
     Compute max Tanimoto similarity for each query against reference set.
+    Uses batched computation to reduce memory footprint for large datasets.
     
     Tanimoto = |A ∩ B| / |A ∪ B| = (A · B) / (|A| + |B| - A · B)
     
     Args:
         query_fps: Binary fingerprints (n_query, n_bits)
         ref_fps: Binary fingerprints (n_ref, n_bits)
+        batch_size: Number of queries to process at once
     
     Returns:
         Max Tanimoto similarity for each query (n_query,)
     """
-    # Compute dot product (intersection)
-    intersect = query_fps @ ref_fps.T  # (n_query, n_ref)
+    n_query = query_fps.shape[0]
+    max_similarities = np.zeros(n_query, dtype=np.float32)
     
-    # Compute union
-    query_popcount = query_fps.sum(axis=1, keepdims=True)  # (n_query, 1)
-    ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
-    union = query_popcount + ref_popcount - intersect
+    # Precompute reference popcounts (reused across batches)
+    ref_popcount = ref_fps.sum(axis=1, dtype=np.int32)  # (n_ref,)
     
-    # Tanimoto = intersection / union
-    tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
+    # Process queries in batches to control memory usage
+    for i in range(0, n_query, batch_size):
+        end_idx = min(i + batch_size, n_query)
+        query_batch = query_fps[i:end_idx]
+        
+        # Compute dot product (intersection) - use int32 to avoid overflow
+        intersect = query_batch.astype(np.int32) @ ref_fps.T.astype(np.int32)  # (batch, n_ref)
+        
+        # Compute union
+        query_popcount = query_batch.sum(axis=1, keepdims=True, dtype=np.int32)  # (batch, 1)
+        union = query_popcount + ref_popcount[np.newaxis, :] - intersect  # (batch, n_ref)
+        
+        # Tanimoto = intersection / union
+        # Avoid division by zero (occurs when both fingerprints are all zeros)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            tanimoto = intersect.astype(np.float32) / union.astype(np.float32)
+            tanimoto = np.nan_to_num(tanimoto, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Get max similarity for this batch
+        max_similarities[i:end_idx] = tanimoto.max(axis=1)
     
-    # Return max similarity for each query
-    return tanimoto.max(axis=1)
+    return max_similarities
 
 
 # ============================================================================
@@ -291,17 +310,20 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         
         # Generate ECFP4 fingerprints
         logger.info("  Computing ECFP4 fingerprints...")
+        logger.info(f"    Processing {len(df_mf):,} MF molecules...")
         mf_fps = compute_ecfp4_fingerprints(df_mf[smiles_col].tolist(), radius=2, n_bits=2048)
+        logger.info(f"    Processing {len(df_actives):,} actives...")
         act_fps = compute_ecfp4_fingerprints(df_actives[smiles_col].tolist(), radius=2, n_bits=2048)
+        logger.info(f"    Processing {len(df_zinc):,} ZINC molecules...")
         zinc_fps = compute_ecfp4_fingerprints(df_zinc[zinc_smiles_col].tolist(), radius=2, n_bits=2048)
-        logger.info(f"    MF: {mf_fps.shape}")
-        logger.info(f"    Actives: {act_fps.shape}")
-        logger.info(f"    ZINC: {zinc_fps.shape}")
+        logger.info(f"    Fingerprints generated: MF={mf_fps.shape}, Actives={act_fps.shape}, ZINC={zinc_fps.shape}")
         
-        # Score via max Tanimoto similarity
-        logger.info("  Computing Tanimoto scores...")
-        act_scores = tanimoto_similarity_max(act_fps, mf_fps)
-        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps)
+        # Score via max Tanimoto similarity (batched for memory efficiency)
+        logger.info("  Computing Tanimoto scores (batched for large datasets)...")
+        logger.info(f"    Scoring {len(act_fps):,} actives vs {len(mf_fps):,} MF molecules...")
+        act_scores = tanimoto_similarity_max(act_fps, mf_fps, batch_size=10000)
+        logger.info(f"    Scoring {len(zinc_fps):,} ZINC vs {len(mf_fps):,} MF molecules...")
+        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps, batch_size=10000)
         logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
         logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
