@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import time
@@ -405,17 +406,18 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             else:
                 logger.info(f"    Best features-based Phase 1 run: {best_artifacts_dir.parent.name} (EF@1%: {best_ef1:.2f})")
                 
-                # Load Phase 1 config to reconstruct feature selection
-                phase1_config_path = best_artifacts_dir.parent / "config.json"
-                if not phase1_config_path.exists():
-                    logger.error(f"  Phase 1 config not found: {phase1_config_path}")
+                # Load Phase 1 config from phase1_summary.json to reconstruct feature selection
+                phase1_summary_path = best_artifacts_dir.parent / "logs" / "phase1_summary.json"
+                if not phase1_summary_path.exists():
+                    logger.error(f"  Phase 1 summary not found: {phase1_summary_path}")
                     logger.info("  Creating empty results to mark as skipped")
                     act_scores = np.array([])
                     zinc_scores = np.array([])
                 else:
-                    with open(phase1_config_path, 'r') as f:
-                        phase1_cfg = json.load(f)
-                    logger.info(f"    Loaded Phase 1 config")
+                    with open(phase1_summary_path, 'r') as f:
+                        phase1_summary = json.load(f)
+                    phase1_cfg = phase1_summary.get("config", {})
+                    logger.info(f"    Loaded Phase 1 config from summary")
                 
                 # Load imputer, scaler and UMAP model
                 imputer_path = best_artifacts_dir / "imputer.joblib"
@@ -433,81 +435,125 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     umap_model = joblib.load(umap_path)
                     logger.info("    Loaded imputer + scaler + UMAP model")
                     
-                    # Reconstruct Phase 1 feature selection pipeline
-                    # Phase 1 does: select_feature_columns(mf) ∩ select_feature_columns(zinc) → zero-variance filter
-                    logger.info("    Reconstructing Phase 1 feature selection...")
-                    feat_cols_mf_p1 = select_feature_columns(df_mf)
-                    feat_cols_zinc_p1 = select_feature_columns(df_zinc)
-                    common_feats_p1 = [c for c in feat_cols_mf_p1 if c in feat_cols_zinc_p1]
-                    logger.info(f"    Common features (before zero-variance filter): {len(common_feats_p1)}")
-                    
-                    # Apply zero-variance filter (same as Phase 1)
-                    df_train_check = pd.concat([df_mf[common_feats_p1], df_zinc[common_feats_p1]], axis=0, ignore_index=True)
-                    phase1_features = remove_zero_variance_features(df_train_check, common_feats_p1, variance_threshold=1e-12)
-                    del df_train_check
-                    logger.info(f"    Phase 1 features (after zero-variance filter): {len(phase1_features)}")
-                    
-                    # Load Phase 1 MF embedding (to use as reference for scoring)
-                    mf_embedding_path = best_artifacts_dir / "embedding_mf.csv"
-                    if not mf_embedding_path.exists():
-                        logger.error(f"  MF embedding not found: {mf_embedding_path}")
-                        logger.info("  Creating empty results to mark as skipped")
+                    # Load Phase 1 config to get exact data loading parameters
+                    phase1_summary_path = best_artifacts_dir.parent / "logs" / "phase1_summary.json"
+                    if not phase1_summary_path.exists():
+                        logger.error(f"    Phase 1 summary not found: {phase1_summary_path}")
+                        logger.info("    Creating empty results to mark as skipped")
                         act_scores = np.array([])
                         zinc_scores = np.array([])
                     else:
-                        df_mf_embed = pd.read_csv(mf_embedding_path)
-                        # Phase 1 embeddings use z0, z1, z2... column naming
-                        embed_cols = [f"z{i}" for i in range(cfg["dim"])]
-                        if not all(col in df_mf_embed.columns for col in embed_cols):
-                            logger.error(f"  Expected columns {embed_cols} not found in embedding")
-                            logger.error(f"  Available columns: {list(df_mf_embed.columns)}")
+                        with open(phase1_summary_path, "r") as f:
+                            phase1_summary = json.load(f)
+                        phase1_cfg = phase1_summary["config"]
+                        logger.info(f"    Phase 1 config: target={phase1_cfg['target']}, affinity_cutoff={phase1_cfg['affinity_cutoff_nM']} nM")
+                        
+                        # Load Phase 1 MF+ZINC data (using Phase 1's affinity cutoff)
+                        logger.info("    Loading Phase 1 MF+ZINC for feature reconstruction...")
+                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"])
+                        logger.info(f"      Loaded MF: {len(df_mf_p1):,} rows")
+                        
+                        # Apply Phase 1's target exclusion and affinity cutoff
+                        phase1_target_col = phase1_cfg["target"].split("_")[-1]  # Extract P00519 from TyrosineProteinKinaseABL1_P00519
+                        if phase1_target_col in df_mf_p1.columns:
+                            df_mf_p1 = df_mf_p1[df_mf_p1[phase1_target_col] != 1].copy()
+                            logger.info(f"      After target exclusion: {len(df_mf_p1):,} rows")
+                        
+                        if "Standard Value (nM)" in df_mf_p1.columns:
+                            df_mf_p1 = df_mf_p1[df_mf_p1["Standard Value (nM)"] <= phase1_cfg["affinity_cutoff_nM"]].copy()
+                            logger.info(f"      After affinity cutoff: {len(df_mf_p1):,} rows")
+                        
+                        # Deduplicate Phase 1 MF
+                        smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
+                        df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col], keep="first").copy()
+                        logger.info(f"      Deduplicated: {len(df_mf_p1):,} rows")
+                        
+                        # Load Phase 1 ZINC (no affinity cutoff, but remove MF overlap)
+                        df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"])
+                        logger.info(f"      Loaded ZINC: {len(df_zinc_p1):,} rows")
+                        smiles_col_zinc = "canonical_smiles" if "canonical_smiles" in df_zinc_p1.columns else "SMILES"
+                        df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_zinc], keep="first").copy()
+                        logger.info(f"      Deduplicated ZINC: {len(df_zinc_p1):,} rows")
+                        
+                        # Remove MF-ZINC overlap
+                        mf_smiles = set(df_mf_p1[smiles_col].dropna())
+                        mask_zinc_overlap = df_zinc_p1[smiles_col_zinc].isin(mf_smiles)
+                        df_zinc_p1 = df_zinc_p1[~mask_zinc_overlap].copy()
+                        logger.info(f"      ZINC after MF overlap removal: {len(df_zinc_p1):,} rows")
+                        
+                        # Reconstruct Phase 1 feature selection pipeline
+                        logger.info("    Reconstructing Phase 1 feature selection...")
+                        feat_cols_mf_p1 = select_feature_columns(df_mf_p1)
+                        feat_cols_zinc_p1 = select_feature_columns(df_zinc_p1)
+                        common_feats_p1 = [c for c in feat_cols_mf_p1 if c in feat_cols_zinc_p1]
+                        logger.info(f"      Common features (before zero-variance filter): {len(common_feats_p1)}")
+                        
+                        # Apply zero-variance filter on Phase 1 MF+ZINC
+                        df_train_check = pd.concat([df_mf_p1[common_feats_p1], df_zinc_p1[common_feats_p1]], axis=0, ignore_index=True)
+                        phase1_features = remove_zero_variance_features(df_train_check, common_feats_p1, variance_threshold=1e-12)
+                        del df_train_check, df_mf_p1, df_zinc_p1
+                        gc.collect()
+                        logger.info(f"      Phase 1 features (after zero-variance filter): {len(phase1_features)}")
+                        
+                        if len(phase1_features) == 0:
+                            logger.error("    Zero features after reconstruction")
                             act_scores = np.array([])
                             zinc_scores = np.array([])
                         else:
-                            X_mf_embed = df_mf_embed[embed_cols].values
-                            logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
-                        
-                            # Use exact Phase 1 features (reconstructed from feature selection pipeline)
-                            if not phase1_features:
-                                logger.error("  Phase 1 feature list reconstruction failed")
+                            # Load Phase 1 MF embedding (to use as reference for scoring)
+                            mf_embedding_path = best_artifacts_dir / "embedding_mf.csv"
+                            if not mf_embedding_path.exists():
+                                logger.error(f"    MF embedding not found: {mf_embedding_path}")
+                                logger.info("    Creating empty results to mark as skipped")
                                 act_scores = np.array([])
                                 zinc_scores = np.array([])
                             else:
-                                logger.info(f"    Using Phase 1 features: {len(phase1_features)} columns")
-                                
-                                # Check which Phase 1 features are missing in receptor data
-                                missing_feats = [f for f in phase1_features if f not in df_receptors.columns]
-                                if missing_feats:
-                                    logger.warning(f"    {len(missing_feats)} Phase 1 features missing in receptor data (will be filled with NaN)")
-                                
-                                # Extract receptor features (missing features → NaN)
-                                X_receptors_raw = df_receptors.reindex(columns=phase1_features).to_numpy(dtype=np.float64)
-                                
-                                # Remove infinity values (replace with NaN, then impute)
-                                logger.info("    Removing infinity values from receptors...")
-                                X_receptors_raw[~np.isfinite(X_receptors_raw)] = np.nan
-                                logger.info(f"    Receptor features shape (pre-transform): {X_receptors_raw.shape}")
-                                
-                                # Transform through Phase 1 pipeline
-                                X_receptors_imputed = phase1_imputer.transform(X_receptors_raw)
-                                X_receptors_scaled = scaler.transform(X_receptors_imputed)
-                                X_receptors_embed = umap_model.transform(X_receptors_scaled)
-                                logger.info(f"    Transformed receptors: {X_receptors_embed.shape}")
-                                
-                                # Score receptors against kinase MF cloud
-                                logger.info("  Scoring receptor ligands against kinase model...")
-                                receptor_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")
-                                logger.info(f"    Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
-                                
-                                # Also score ZINC for comparison
-                                zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")  # Reuse receptor scores as "decoys"
-                                
-                                # For negative control: receptors are the "actives" (should NOT be enriched)
-                                # ZINC decoys are replaced by a second sample of receptors
-                                act_scores = receptor_scores[:len(receptor_scores)//2]
-                                zinc_scores = receptor_scores[len(receptor_scores)//2:]
-                                logger.info(f"    Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
-                                logger.info("    Expected: EF@1% should be ~1.0 (no enrichment = random)")
+                                df_mf_embed = pd.read_csv(mf_embedding_path)
+                                # Phase 1 embeddings use z0, z1, z2... column naming
+                                embed_cols = [f"z{i}" for i in range(cfg["dim"])]
+                                if not all(col in df_mf_embed.columns for col in embed_cols):
+                                    logger.error(f"    Expected columns {embed_cols} not found in embedding")
+                                    logger.error(f"    Available columns: {list(df_mf_embed.columns)}")
+                                    act_scores = np.array([])
+                                    zinc_scores = np.array([])
+                                else:
+                                    X_mf_embed = df_mf_embed[embed_cols].values
+                                    logger.info(f"      Loaded MF embedding: {X_mf_embed.shape}")
+                                    logger.info(f"      Using Phase 1 features: {len(phase1_features)} columns")
+                                    
+                                    # Check which Phase 1 features are missing in receptor data
+                                    missing_feats = [f for f in phase1_features if f not in df_receptors.columns]
+                                    if missing_feats:
+                                        logger.warning(f"      {len(missing_feats)} Phase 1 features missing in receptor data (will be filled with NaN)")
+                                    
+                                    # Extract receptor features (missing features → NaN)
+                                    X_receptors_raw = df_receptors.reindex(columns=phase1_features).to_numpy(dtype=np.float64)
+                                    
+                                    # Remove infinity values (replace with NaN, then impute)
+                                    logger.info("      Removing infinity values from receptors...")
+                                    X_receptors_raw[~np.isfinite(X_receptors_raw)] = np.nan
+                                    logger.info(f"      Receptor features shape (pre-transform): {X_receptors_raw.shape}")
+                                    
+                                    # Transform through Phase 1 pipeline
+                                    X_receptors_imputed = phase1_imputer.transform(X_receptors_raw)
+                                    X_receptors_scaled = scaler.transform(X_receptors_imputed)
+                                    X_receptors_embed = umap_model.transform(X_receptors_scaled)
+                                    logger.info(f"      Transformed receptors: {X_receptors_embed.shape}")
+                                    
+                                    # Score receptors against kinase MF cloud
+                                    logger.info("    Scoring receptor ligands against kinase model...")
+                                    receptor_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")
+                                    logger.info(f"      Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
+                                    
+                                    # Also score ZINC for comparison
+                                    zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_receptors_embed, metric="euclidean")  # Reuse receptor scores as "decoys"
+                                    
+                                    # For negative control: receptors are the "actives" (should NOT be enriched)
+                                    # Split receptors: first half as "actives", second half as "decoys"
+                                    act_scores = receptor_scores[:len(receptor_scores)//2]
+                                    zinc_scores = receptor_scores[len(receptor_scores)//2:]
+                                    logger.info(f"      Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
+                                    logger.info("      Expected: EF@1% should be ~1.0 (no enrichment = random)")
     
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
