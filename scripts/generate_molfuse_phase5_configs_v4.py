@@ -2,13 +2,30 @@
 """
 Generate Phase 5 configs for validation & baseline experiments.
 
-Phase 5: Three Critical Controls for Reviewer Response
-    1. Database Bias Negative Control: Non-transferase (GPCR) scored against kinase model
-    2. Raw Descriptor Baseline: 1-NN in high-D space (no UMAP)
-    3. Tanimoto Baseline: ECFP4 fingerprint similarity
+Creates 17 configs total:
+    1. Tanimoto (ECFP4 similarity baseline): 5 replicates
+    2. Raw descriptors (no UMAP): 5 replicates
+    3. Negative control (7 non-kinase KW sets): 1 per KW set
 
-Target: ABL1 (P00519) - Transferase (kinase baseline from Phase 1/3)
-Reference Set: KW-0808_Transferase @ 100 nM cutoff (optimal from Phase 2)
+Phase 5 tests whether Phase 2's methodology (100 nM cutoff, UMAP preprocessing)
+provides meaningful signal vs. simpler baselines.
+
+Negative Control Rationale:
+    Tests 7 non-kinase functional classes from Phase 4 as cross-validation:
+    - If Phase 2 truly captures kinase-specific chemical space, non-kinase
+      ligands should score ~randomly (EF@1% ≈ 1.0) against kinase MF cloud.
+    - 7 independent tests provide robust evidence of specificity.
+    
+    KW sets (full datasets, no sampling):
+        - KW-0049_Antioxidant (P00441, 39 compounds)
+        - KW-0929_Antimicrobial (P14555, 582 compounds)
+        - KW-0505_Motor_protein (P52732, 1,158 compounds)
+        - KW-0202_Cytokine (P43490, 2,904 compounds)
+        - KW-0358_Heparin-binding (P11362, 4,150 compounds)
+        - KW-0456_Lyase (P00918, 9,685 compounds)
+        - KW-0560_Oxidoreductase (P08684, 6,151 compounds)
+    
+    Excluded: KW-0808_Transferase (contains kinases)
 
 Usage:
     python scripts/generate_molfuse_phase5_configs_v4.py
@@ -17,130 +34,169 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-# ABL1 kinase baseline (from Phase 1)
-TARGET_TRANSFERASE = ("KW-0808_Transferase", "P00519")  # ABL1
+# ABL1 target (kinase baseline from Phase 4)
+TARGET_ACCESSION = "P00519"  # ABL1 - Tyrosine-protein kinase ABL1
 
-# Non-kinase control: KW-0675_Receptor (includes GPCRs, nuclear receptors, ion channels)
-# Use any receptor ligands as negative control (structurally distinct from kinases)
-CONTROL_NON_TRANSFERASE = ("KW-0675_Receptor", "ANY")  # Use all receptor ligands
-
-# Experiments to run
-EXPERIMENTS = [
-    {
-        "name": "negative_control",
-        "description": "Database bias negative control: Non-kinase actives scored against kinase model",
-        "control_target": CONTROL_NON_TRANSFERASE,
-    },
-    {
-        "name": "raw_descriptors",
-        "description": "Raw descriptor baseline: 1-NN in high-D space (no UMAP)",
-        "method": "raw",  # No dimensionality reduction
-    },
-    {
-        "name": "tanimoto",
-        "description": "Tanimoto baseline: ECFP4 fingerprint similarity",
-        "method": "tanimoto",
-        "representation": "fingerprints",
-    },
+# Negative control KW sets (non-kinase functional classes)
+# Using 7 KW sets from Phase 4 (excluding KW-0808_Transferase which contains kinases)
+NEGATIVE_CONTROL_KW_SETS = [
+    ("KW-0049_Antioxidant", "P00441"),        # SOD1
+    ("KW-0929_Antimicrobial", "P14555"),      # PLA2G2A
+    ("KW-0505_Motor_protein", "P52732"),      # KIF11
+    ("KW-0202_Cytokine", "P43490"),           # NAMPT
+    ("KW-0358_Heparin-binding", "P11362"),    # FGFR1
+    ("KW-0456_Lyase", "P00918"),              # CA2
+    ("KW-0560_Oxidoreductase", "P08684"),     # CYP3A4
 ]
 
 N_REPLICATES = 5
 RANDOM_SEEDS = [42, 123, 456, 789, 1011]
 
-# Optimal hyperparameters from Phase 1 (for UMAP baseline comparison)
-BEST_UMAP_FEATURES = {
-    "dim": 2,
-    "n_neighbors": 10,
-    "min_dist": 0.01,
-}
+# Dimension (2D for visualization, consistent with Phase 1-4)
+DIM = 2
 
-# Optimal affinity cutoff from Phase 2
-AFFINITY_CUTOFF_NM = 100  # 100 nM
+# Phase 2 methodology (100 nM affinity cutoff for scoring)
+AFFINITY_CUTOFF_NM = 100
 
-# Dataset paths (HPC paths - NOT local "datasets/" directory)
+# Dataset paths (using Phase 4 recalculated datasets)
 BASE_DATA_DIR = Path("output_recalculated_full_datasets/datasets_2d_all")
-ZINC_FEATURES_CSV = "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv"
+
+# Phase 2 best model directory (auto-detected in phase5.py, but specified here for clarity)
+PHASE2_BEST_MODEL_DIR = "experiment_workspace_v4/phase2"
 
 
 # ============================================================================
 # Config Generator
 # ============================================================================
 
-def generate_phase5_configs(output_dir: Path) -> List[Path]:
-    """
-    Generate Phase 5 config files for validation experiments.
+def generate_tanimoto_configs(output_dir: Path) -> List[Path]:
+    """Generate Tanimoto baseline configs (5 replicates)."""
+    configs = []
     
-    Returns:
-        List of generated config file paths
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    generated_configs = []
-    
-    for exp in EXPERIMENTS:
-        exp_name = exp["name"]
+    for rep_idx, seed in enumerate(RANDOM_SEEDS[:N_REPLICATES], start=1):
+        run_name = f"tanimoto_rep{rep_idx}"
         
-        for rep_idx, seed in enumerate(RANDOM_SEEDS[:N_REPLICATES], start=1):
-            run_name = f"phase5_{exp_name}_rep{rep_idx}"
+        # Build dataset paths (ABL1/kinase)
+        mf_fingerprints_csv = BASE_DATA_DIR / "KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv"
+        zinc_fingerprints_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"
+        
+        config = {
+            "run_name": run_name,
+            "experiment_type": "tanimoto",
+            "description": "Tanimoto ECFP4 similarity baseline (no UMAP, no feature selection)",
+            "target": TARGET_ACCESSION,
+            "affinity_cutoff_nM": AFFINITY_CUTOFF_NM,
+            "replicate": rep_idx,
+            "random_seed": seed,
+            "dim": DIM,
+            "phase5_run_name": "validation",
             
-            config = {
-                "run_name": run_name,
-                "experiment_type": exp_name,
-                "description": exp["description"],
-                "target": TARGET_TRANSFERASE[1],  # P00519 (ABL1)
-                "target_kw": TARGET_TRANSFERASE[0],  # KW-0808_Transferase
-                "affinity_cutoff_nM": AFFINITY_CUTOFF_NM,
-                "replicate": rep_idx,
-                "random_seed": seed,
-                "phase5_run_name": "validation",
-            }
-            
-            # Experiment-specific config
-            if exp_name == "negative_control":
-                config["control_target"] = exp["control_target"][1]
-                config["control_target_kw"] = exp["control_target"][0]
-                config["receptor_features_csv"] = str(BASE_DATA_DIR / f"{exp['control_target'][0]}_affinity_extracted_features.csv")
-                config["method"] = "umap"
-                config["representation"] = "features"
-                config["dim"] = BEST_UMAP_FEATURES["dim"]
-                config["umap_params"] = {
-                    "n_neighbors": BEST_UMAP_FEATURES["n_neighbors"],
-                    "min_dist": BEST_UMAP_FEATURES["min_dist"],
-                }
-                config["phase1_best_model_dir"] = "experiment_workspace_v4/phase1"  # Directory containing Phase 1 runs
-                
-            elif exp_name == "raw_descriptors":
-                config["method"] = "raw"
-                config["representation"] = "features"
-                # No dimensionality reduction - use full feature space
-                
-            elif exp_name == "tanimoto":
-                config["method"] = "tanimoto"
-                config["representation"] = "fingerprints"
-                config["fingerprint_type"] = "ECFP4"
-                config["fingerprint_bits"] = 2048
-            
-            # Dataset paths (HPC paths matching Phase 1)
-            # Actives are derived from MF file by filtering for target accession
-            config["mf_features_csv"] = str(BASE_DATA_DIR / f"{TARGET_TRANSFERASE[0]}_affinity_extracted_features.csv")
-            config["zinc_features_csv"] = ZINC_FEATURES_CSV
-            
-            # Save config
-            config_path = output_dir / f"{run_name}.json"
-            with config_path.open("w") as f:
-                json.dump(config, f, indent=2)
-            
-            generated_configs.append(config_path)
-            print(f"Generated: {config_path.name}")
+            # Dataset paths (fingerprints only for Tanimoto)
+            "mf_fingerprints_csv": str(mf_fingerprints_csv),
+            "zinc_fingerprints_csv": str(zinc_fingerprints_csv),
+        }
+        
+        config_path = output_dir / f"{run_name}.json"
+        with config_path.open("w") as f:
+            json.dump(config, f, indent=2)
+        
+        configs.append(config_path)
+        print(f"Generated: {config_path.name}")
     
-    return generated_configs
+    return configs
+
+
+def generate_raw_descriptors_configs(output_dir: Path) -> List[Path]:
+    """Generate raw descriptor configs (5 replicates, no UMAP)."""
+    configs = []
+    
+    for rep_idx, seed in enumerate(RANDOM_SEEDS[:N_REPLICATES], start=1):
+        run_name = f"raw_descriptors_rep{rep_idx}"
+        
+        # Build dataset paths (ABL1/kinase features)
+        mf_features_csv = BASE_DATA_DIR / "KW-0808_Transferase_affinity_extracted_features.csv"
+        zinc_features_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_features.csv"
+        
+        config = {
+            "run_name": run_name,
+            "experiment_type": "raw_descriptors",
+            "description": "High-D scaled features (no UMAP) - tests if dimensionality reduction is necessary",
+            "target": TARGET_ACCESSION,
+            "affinity_cutoff_nM": AFFINITY_CUTOFF_NM,
+            "replicate": rep_idx,
+            "random_seed": seed,
+            "dim": DIM,
+            "phase5_run_name": "validation",
+            
+            # Phase 2 model artifacts (auto-detected by highest EF@1%)
+            "phase2_best_model_dir": PHASE2_BEST_MODEL_DIR,
+            
+            # Dataset paths (features only)
+            "mf_features_csv": str(mf_features_csv),
+            "zinc_features_csv": str(zinc_features_csv),
+        }
+        
+        config_path = output_dir / f"{run_name}.json"
+        with config_path.open("w") as f:
+            json.dump(config, f, indent=2)
+        
+        configs.append(config_path)
+        print(f"Generated: {config_path.name}")
+    
+    return configs
+
+
+def generate_negative_control_configs(output_dir: Path) -> List[Path]:
+    """Generate negative control configs (7 KW sets, 1 per set)."""
+    configs = []
+    
+    for kw_name, kw_accession in NEGATIVE_CONTROL_KW_SETS:
+        # Extract short name (e.g., "Antioxidant" from "KW-0049_Antioxidant")
+        kw_short = kw_name.split("_", 1)[1]
+        run_name = f"negative_control_{kw_short}"
+        
+        # Build dataset paths
+        kw_features_csv = BASE_DATA_DIR / f"{kw_name}_affinity_extracted_features.csv"
+        zinc_features_csv = BASE_DATA_DIR / "zinc" / "zinc_acquirable_extracted_features.csv"
+        
+        config = {
+            "run_name": run_name,
+            "experiment_type": "negative_control",
+            "description": f"Negative control: {kw_short} ligands (non-kinase) scored against kinase MF cloud. Expected: EF@1% ≈ 1.0 (no enrichment)",
+            "target": TARGET_ACCESSION,  # Kinase target (ABL1) for scoring reference
+            "affinity_cutoff_nM": AFFINITY_CUTOFF_NM,
+            "replicate": 1,  # No replicates for negative control
+            "random_seed": RANDOM_SEEDS[0],  # Use first seed
+            "dim": DIM,
+            "phase5_run_name": "validation",
+            
+            # Phase 2 model artifacts (auto-detected by highest EF@1%)
+            "phase2_best_model_dir": PHASE2_BEST_MODEL_DIR,
+            
+            # Negative control specific fields
+            "negative_control_kw_csv": str(kw_features_csv),
+            "negative_control_kw_name": kw_short,
+            "negative_control_kw_accession": kw_accession,
+            
+            # Dataset paths
+            "zinc_features_csv": str(zinc_features_csv),
+        }
+        
+        config_path = output_dir / f"{run_name}.json"
+        with config_path.open("w") as f:
+            json.dump(config, f, indent=2)
+        
+        configs.append(config_path)
+        print(f"Generated: {config_path.name}")
+    
+    return configs
 
 
 def main():
@@ -149,28 +205,40 @@ def main():
     print("="*80)
     print("PHASE 5 CONFIG GENERATOR: Validation & Baseline Experiments")
     print("="*80)
-    print(f"Experiments: {len(EXPERIMENTS)}")
-    print(f"Replicates per experiment: {N_REPLICATES}")
-    print(f"Total configs: {len(EXPERIMENTS) * N_REPLICATES}")
-    print(f"Target: {TARGET_TRANSFERASE[0]} ({TARGET_TRANSFERASE[1]})")
-    print(f"Affinity cutoff: {AFFINITY_CUTOFF_NM} nM")
+    print(f"Experiment 1: Tanimoto ECFP4 baseline ({N_REPLICATES} replicates)")
+    print(f"Experiment 2: Raw descriptors (no UMAP) ({N_REPLICATES} replicates)")
+    print(f"Experiment 3: Negative control ({len(NEGATIVE_CONTROL_KW_SETS)} KW sets)")
+    print(f"Total configs: {N_REPLICATES * 2 + len(NEGATIVE_CONTROL_KW_SETS)}")
+    print(f"Affinity cutoff: {AFFINITY_CUTOFF_NM} nM (Phase 2 methodology)")
     print("="*80)
     
-    print("\nExperiments:")
-    for exp in EXPERIMENTS:
-        print(f"  {exp['name']:20s}: {exp['description']}")
+    # Generate all configs
+    tanimoto_configs = generate_tanimoto_configs(output_dir)
+    raw_descriptor_configs = generate_raw_descriptors_configs(output_dir)
+    negative_control_configs = generate_negative_control_configs(output_dir)
     
-    generated = generate_phase5_configs(output_dir)
+    all_configs = tanimoto_configs + raw_descriptor_configs + negative_control_configs
     
     print("\n" + "="*80)
-    print(f"SUCCESS: Generated {len(generated)} configs")
+    print(f"SUCCESS: Generated {len(all_configs)} configs")
     print(f"Output directory: {output_dir}")
     print("="*80)
     
+    # Print summary
+    print("\nExperiment breakdown:")
+    print(f"  Tanimoto baseline:       {len(tanimoto_configs)} configs")
+    print(f"  Raw descriptors (no UMAP): {len(raw_descriptor_configs)} configs")
+    print(f"  Negative control (7 KW):   {len(negative_control_configs)} configs")
+    
+    print("\nNegative control KW sets:")
+    for kw_name, kw_accession in NEGATIVE_CONTROL_KW_SETS:
+        kw_short = kw_name.split("_", 1)[1]
+        print(f"  {kw_short:20s} ({kw_accession})")
+    
     print("\nNext steps:")
     print("  1. Review configs in configs/molfuse_phase5_grid/")
-    print("  2. Run Phase 5 experiments: python -m molfuse.cli.phase5 --config <config>.json")
-    print("  3. Run post-analysis: python scripts/phase5_post_analysis.py")
+    print("  2. Local test: python -m molfuse.cli.phase5 --config configs/molfuse_phase5_grid/tanimoto_rep1.json --workspace experiment_workspace_v4")
+    print("  3. Submit to HPC: bash hpc/submit_molfuse_phase5.sh configs/molfuse_phase5_grid experiment_workspace_v4")
 
 
 if __name__ == "__main__":
