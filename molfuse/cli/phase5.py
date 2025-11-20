@@ -197,40 +197,50 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     df_mf_all = pd.read_csv(mf_features_csv, low_memory=False)
     logger.info(f"  Loaded: {len(df_mf_all):,} rows")
     
-    # Filter MF by target and affinity cutoff
-    df_mf = df_mf_all[df_mf_all["accession"] != target].copy()
-    logger.info(f"  After removing target {target}: {len(df_mf):,} rows")
+    # Extract actives FIRST (before any filtering) to get their SMILES
+    df_actives = df_mf_all[df_mf_all["accession"] == target].copy()
+    logger.info(f"Actives for {target}: {len(df_actives):,} rows")
     
-    if "Standard Value (nM)" in df_mf.columns:
-        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-        df_mf = df_mf[mask_cut].copy()
-        logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf):,} rows")
-    
-    # Deduplicate MF by SMILES (median aggregation)
-    smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf.columns else "SMILES"
-    before = len(df_mf)
+    # Deduplicate actives by SMILES
+    smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_all.columns else "SMILES"
     agg_dict = {}
-    for col in df_mf.columns:
+    for col in df_actives.columns:
         if col == smiles_col:
             continue
         elif col == "Standard Value (nM)":
             agg_dict[col] = "median"
         else:
             agg_dict[col] = "first"
-    df_mf = df_mf.groupby(smiles_col, as_index=False).agg(agg_dict)
-    logger.info(f"  Deduplicated MF: {before:,} -> {len(df_mf):,} (removed {before-len(df_mf):,})")
-    
-    # Extract actives (target compounds)
-    df_actives = df_mf_all[df_mf_all["accession"] == target].copy()
-    logger.info(f"Actives for {target}: {len(df_actives):,} rows")
-    
-    # Deduplicate actives
     before_act = len(df_actives)
     df_actives = df_actives.groupby(smiles_col, as_index=False).agg(agg_dict)
     logger.info(f"  Deduplicated actives: {before_act:,} -> {len(df_actives):,} (removed {before_act-len(df_actives):,})")
     
-    # CRITICAL: Verify actives were actually removed from MF cloud (data leakage check)
+    # Get active SMILES set for exclusion
     active_smiles_set = set(df_actives[smiles_col].dropna())
+    logger.info(f"  Active SMILES to exclude: {len(active_smiles_set):,}")
+    
+    # Filter MF: Remove target accession AND remove any molecule that appears in actives
+    # This handles promiscuous binders (same molecule binding multiple kinases)
+    df_mf = df_mf_all[df_mf_all["accession"] != target].copy()
+    logger.info(f"  After removing target accession {target}: {len(df_mf):,} rows")
+    
+    # Remove molecules by SMILES (handles multi-target binders)
+    before_smiles = len(df_mf)
+    df_mf = df_mf[~df_mf[smiles_col].isin(active_smiles_set)].copy()
+    logger.info(f"  After removing active SMILES: {len(df_mf):,} rows (removed {before_smiles - len(df_mf):,} promiscuous binders)")
+    
+    # Apply affinity cutoff
+    if "Standard Value (nM)" in df_mf.columns:
+        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+        df_mf = df_mf[mask_cut].copy()
+        logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf):,} rows")
+    
+    # Deduplicate MF by SMILES (median aggregation)
+    before = len(df_mf)
+    df_mf = df_mf.groupby(smiles_col, as_index=False).agg(agg_dict)
+    logger.info(f"  Deduplicated MF: {before:,} -> {len(df_mf):,} (removed {before-len(df_mf):,})")
+    
+    # CRITICAL: Verify actives were actually removed from MF cloud (data leakage check)
     mf_smiles_set = set(df_mf[smiles_col].dropna())
     overlap_mf_actives = active_smiles_set.intersection(mf_smiles_set)
     if len(overlap_mf_actives) > 0:
