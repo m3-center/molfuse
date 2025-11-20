@@ -557,7 +557,24 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             df_kw = df_kw.drop_duplicates(subset=[kw_smiles_col], keep="first").copy()
             logger.info(f"    Deduplicated: {before_kw:,} -> {len(df_kw):,} (removed {before_kw-len(df_kw):,})")
             
-            # Remove MF overlap
+            # Load kinase MF cloud to get SMILES for overlap removal
+            # (We need to know which compounds are in the kinase reference set)
+            logger.info("  Loading kinase MF features for overlap removal...")
+            mf_features_csv = Path("output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv")
+            df_mf_kinase = pd.read_csv(mf_features_csv, low_memory=False)
+            logger.info(f"    Loaded kinase MF: {len(df_mf_kinase):,} rows")
+            
+            # Apply same filtering as Phase 1 (remove target, apply cutoff, deduplicate)
+            df_mf_kinase = df_mf_kinase[df_mf_kinase["accession"] != target].copy()
+            if "Standard Value (nM)" in df_mf_kinase.columns:
+                mask_cut = pd.to_numeric(df_mf_kinase["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+                df_mf_kinase = df_mf_kinase[mask_cut].copy()
+            mf_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_kinase.columns else "SMILES"
+            df_mf_kinase = df_mf_kinase.drop_duplicates(subset=[mf_smiles_col], keep="first").copy()
+            mf_smiles = set(df_mf_kinase[mf_smiles_col].dropna())
+            logger.info(f"    Kinase MF cloud: {len(mf_smiles):,} unique SMILES")
+            
+            # Remove MF overlap from KW set
             before_mf = len(df_kw)
             df_kw = df_kw[~df_kw[kw_smiles_col].isin(mf_smiles)].copy()
             logger.info(f"    Removed MF overlap: {before_mf:,} -> {len(df_kw):,} (removed {before_mf-len(df_kw):,})")
