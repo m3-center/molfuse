@@ -405,6 +405,18 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             else:
                 logger.info(f"    Best features-based Phase 1 run: {best_artifacts_dir.parent.name} (EF@1%: {best_ef1:.2f})")
                 
+                # Load Phase 1 config to reconstruct feature selection
+                phase1_config_path = best_artifacts_dir.parent / "config.json"
+                if not phase1_config_path.exists():
+                    logger.error(f"  Phase 1 config not found: {phase1_config_path}")
+                    logger.info("  Creating empty results to mark as skipped")
+                    act_scores = np.array([])
+                    zinc_scores = np.array([])
+                else:
+                    with open(phase1_config_path, 'r') as f:
+                        phase1_cfg = json.load(f)
+                    logger.info(f"    Loaded Phase 1 config")
+                
                 # Load imputer, scaler and UMAP model
                 imputer_path = best_artifacts_dir / "imputer.joblib"
                 scaler_path = best_artifacts_dir / "scaler.joblib"
@@ -421,16 +433,19 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     umap_model = joblib.load(umap_path)
                     logger.info("    Loaded imputer + scaler + UMAP model")
                     
-                    # Get feature names from imputer (exact features used in Phase 1)
-                    phase1_features = None
-                    if hasattr(phase1_imputer, 'feature_names_in_'):
-                        phase1_features = list(phase1_imputer.feature_names_in_)
-                        logger.info(f"    Phase 1 used {len(phase1_features)} features")
-                    else:
-                        logger.error("    Cannot determine Phase 1 feature names from imputer")
-                        logger.info("    Creating empty results to mark as skipped")
-                        act_scores = np.array([])
-                        zinc_scores = np.array([])
+                    # Reconstruct Phase 1 feature selection pipeline
+                    # Phase 1 does: select_feature_columns(mf) ∩ select_feature_columns(zinc) → zero-variance filter
+                    logger.info("    Reconstructing Phase 1 feature selection...")
+                    feat_cols_mf_p1 = select_feature_columns(df_mf)
+                    feat_cols_zinc_p1 = select_feature_columns(df_zinc)
+                    common_feats_p1 = [c for c in feat_cols_mf_p1 if c in feat_cols_zinc_p1]
+                    logger.info(f"    Common features (before zero-variance filter): {len(common_feats_p1)}")
+                    
+                    # Apply zero-variance filter (same as Phase 1)
+                    df_train_check = pd.concat([df_mf[common_feats_p1], df_zinc[common_feats_p1]], axis=0, ignore_index=True)
+                    phase1_features = remove_zero_variance_features(df_train_check, common_feats_p1, variance_threshold=1e-12)
+                    del df_train_check
+                    logger.info(f"    Phase 1 features (after zero-variance filter): {len(phase1_features)}")
                     
                     # Load Phase 1 MF embedding (to use as reference for scoring)
                     mf_embedding_path = best_artifacts_dir / "embedding_mf.csv"
@@ -452,9 +467,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                             X_mf_embed = df_mf_embed[embed_cols].values
                             logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
                         
-                            # Use exact Phase 1 features (from imputer.feature_names_in_)
+                            # Use exact Phase 1 features (reconstructed from feature selection pipeline)
                             if not phase1_features:
-                                logger.error("  Phase 1 feature list not available")
+                                logger.error("  Phase 1 feature list reconstruction failed")
                                 act_scores = np.array([])
                                 zinc_scores = np.array([])
                             else:
