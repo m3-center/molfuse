@@ -361,31 +361,40 @@ def generate_text_report(
         lines.append("   [No completed runs available]")
     
     # 2. Raw descriptor baseline
-    if "raw_descriptors" in summary_stats and summary_stats["raw_descriptors"] and \
-       "tanimoto" in summary_stats and summary_stats["tanimoto"]:
+    if "raw_descriptors" in summary_stats and summary_stats["raw_descriptors"]:
         rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
-        tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        rd_roc_mean, rd_roc_std = summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
         lines.append("\n2. DIMENSIONALITY REDUCTION NECESSITY:")
-        if not np.isnan(rd_ef1_mean) and not np.isnan(tan_ef1_mean):
-            lines.append(f"   Raw descriptors (no UMAP): EF@1% = {format_metric_value(rd_ef1_mean, rd_ef1_std, 'ef_1%')}")
-            lines.append(f"   Tanimoto baseline:         EF@1% = {format_metric_value(tan_ef1_mean, tan_ef1_std, 'ef_1%')}")
+        if not np.isnan(rd_ef1_mean):
+            lines.append(f"   Raw descriptors (no UMAP): EF@1% = {format_metric_value(rd_ef1_mean, rd_ef1_std, 'ef_1%')}, "
+                        f"ROC-AUC = {format_metric_value(rd_roc_mean, rd_roc_std, 'roc_auc')}")
             
-            if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
-                p_val = p_values["raw_descriptors"]["ef_1%"]
-                p_str = format_p_value(p_val)
-                lines.append(f"   Statistical comparison:    p = {p_str}")
-                
-                if rd_ef1_mean < tan_ef1_mean * 0.9:
-                    lines.append("   → Result: UMAP improves performance over raw high-D space")
-                elif rd_ef1_mean > tan_ef1_mean * 1.1:
-                    lines.append("   → Result: Raw descriptors outperform UMAP (unexpected)")
-                else:
-                    lines.append("   → Result: No significant difference (UMAP may not be necessary)")
+            # Compare to Tanimoto if available
+            if "tanimoto" in summary_stats and summary_stats["tanimoto"]:
+                tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+                if not np.isnan(tan_ef1_mean):
+                    lines.append(f"   Tanimoto baseline:         EF@1% = {format_metric_value(tan_ef1_mean, tan_ef1_std, 'ef_1%')}")
+                    
+                    if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
+                        p_val = p_values["raw_descriptors"]["ef_1%"]
+                        p_str = format_p_value(p_val)
+                        lines.append(f"   Statistical comparison:    p = {p_str}")
+                        
+                        if rd_ef1_mean < tan_ef1_mean * 0.9:
+                            lines.append("   → Result: UMAP improves performance over raw high-D space")
+                        elif rd_ef1_mean > tan_ef1_mean * 1.1:
+                            lines.append("   → Result: Raw descriptors outperform UMAP (unexpected)")
+                        else:
+                            lines.append("   → Result: No significant difference (UMAP may not be necessary)")
+            else:
+                lines.append("   [Tanimoto baseline not yet complete - cannot compare]")
+                lines.append(f"   → Standalone result: Raw descriptors achieved EF@1% = {rd_ef1_mean:.1f}")
+                lines.append("   → Interpretation pending Tanimoto baseline completion")
         else:
             lines.append("   [Incomplete - waiting for results]")
     else:
         lines.append("\n2. DIMENSIONALITY REDUCTION NECESSITY:")
-        lines.append("   [No completed runs available for comparison]")
+        lines.append("   [No completed runs available]")
     
     # 3. Industry baseline comparison
     if "tanimoto" in summary_stats and summary_stats["tanimoto"]:
@@ -448,25 +457,39 @@ def generate_latex_text_snippet(summary_stats: Dict[str, Dict], p_values: Dict[s
     lines.append("")
     
     # Baselines comparison
-    if has_raw_descriptors and has_tanimoto:
+    if has_raw_descriptors:
         rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
-        tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        rd_roc_mean, rd_roc_std = summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
         
-        if not np.isnan(rd_ef1_mean) and not np.isnan(tan_ef1_mean):
-            lines.append("We compared MolFuSE against two baselines: (1) 1-NN in the raw 2D descriptor space")
-            lines.append("(no dimensionality reduction) and (2) Tanimoto similarity with ECFP4 fingerprints")
-            lines.append(f"(industry standard). Raw descriptors achieved EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f},")
-            lines.append(f"while Tanimoto baseline achieved EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f}.")
-            
-            if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
-                p_val = p_values["raw_descriptors"]["ef_1%"]
-                if not np.isnan(p_val) and p_val < 0.05:
-                    lines.append(f"The difference was statistically significant (p = {format_p_value(p_val)}),")
-                    if rd_ef1_mean < tan_ef1_mean:
-                        lines.append("demonstrating that dimensionality reduction with UMAP provides a meaningful")
-                        lines.append("improvement over raw high-dimensional similarity scoring.")
+        if not np.isnan(rd_ef1_mean):
+            if has_tanimoto:
+                tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+                
+                if not np.isnan(tan_ef1_mean):
+                    lines.append("We compared MolFuSE against two baselines: (1) 1-NN in the raw 2D descriptor space")
+                    lines.append("(no dimensionality reduction) and (2) Tanimoto similarity with ECFP4 fingerprints")
+                    lines.append(f"(industry standard). Raw descriptors achieved EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f},")
+                    lines.append(f"while Tanimoto baseline achieved EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f}.")
+                    
+                    if "raw_descriptors" in p_values and "ef_1%" in p_values["raw_descriptors"]:
+                        p_val = p_values["raw_descriptors"]["ef_1%"]
+                        if not np.isnan(p_val) and p_val < 0.05:
+                            lines.append(f"The difference was statistically significant (p = {format_p_value(p_val)}),")
+                            if rd_ef1_mean < tan_ef1_mean:
+                                lines.append("demonstrating that dimensionality reduction with UMAP provides a meaningful")
+                                lines.append("improvement over raw high-dimensional similarity scoring.")
+                        else:
+                            lines.append("The difference was not statistically significant (p > 0.05).")
                 else:
-                    lines.append("The difference was not statistically significant (p > 0.05).")
+                    lines.append(f"% [INCOMPLETE: Tanimoto baseline still running]")
+                    lines.append(f"% Raw descriptor baseline: EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f}, "
+                                f"ROC-AUC = {rd_roc_mean:.3f} $\\pm$ {rd_roc_std:.3f}")
+            else:
+                # Raw descriptors done, but no Tanimoto yet
+                lines.append(f"We evaluated 1-NN in the raw 2D descriptor space (no dimensionality reduction),")
+                lines.append(f"achieving EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f} and "
+                            f"ROC-AUC = {rd_roc_mean:.3f} $\\pm$ {rd_roc_std:.3f}.")
+                lines.append("% [INCOMPLETE: Tanimoto baseline not yet started - comparison pending]")
         else:
             lines.append("% [INCOMPLETE: Baseline comparison experiments not yet finished]")
     elif has_tanimoto:
