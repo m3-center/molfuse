@@ -80,6 +80,8 @@ def compute_ecfp4_fingerprints(smiles_list: List[str], radius: int = 2, n_bits: 
     Returns:
         Binary fingerprint matrix (n_molecules, n_bits)
     """
+    from rdkit import DataStructs
+    
     fps = []
     for smiles in smiles_list:
         mol = Chem.MolFromSmiles(smiles)
@@ -92,45 +94,32 @@ def compute_ecfp4_fingerprints(smiles_list: List[str], radius: int = 2, n_bits: 
     return np.vstack(fps)
 
 
-def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray, chunk_size: int = 10000) -> np.ndarray:
+def tanimoto_similarity_max(query_fps: np.ndarray, ref_fps: np.ndarray) -> np.ndarray:
     """
     Compute max Tanimoto similarity for each query against reference set.
-    Uses chunking to avoid memory overflow for large query sets.
     
     Tanimoto = |A ∩ B| / |A ∪ B| = (A · B) / (|A| + |B| - A · B)
     
     Args:
         query_fps: Binary fingerprints (n_query, n_bits)
         ref_fps: Binary fingerprints (n_ref, n_bits)
-        chunk_size: Number of queries to process at once (default: 10000)
     
     Returns:
         Max Tanimoto similarity for each query (n_query,)
     """
-    n_query = query_fps.shape[0]
-    max_similarities = np.zeros(n_query, dtype=np.float32)
+    # Compute dot product (intersection)
+    intersect = query_fps @ ref_fps.T  # (n_query, n_ref)
     
-    # Process in chunks to avoid memory overflow
-    for i in range(0, n_query, chunk_size):
-        logging.info(f"  Processing Tanimoto chunk: {i} to {min(i + chunk_size, n_query)} / {n_query}")
-        end_idx = min(i + chunk_size, n_query)
-        query_chunk = query_fps[i:end_idx]
-        
-        # Compute dot product (intersection)
-        intersect = query_chunk @ ref_fps.T  # (chunk_size, n_ref)
-        
-        # Compute union
-        query_popcount = query_chunk.sum(axis=1, keepdims=True)  # (chunk_size, 1)
-        ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
-        union = query_popcount + ref_popcount - intersect
-        
-        # Tanimoto = intersection / union
-        tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
-        
-        # Store max similarity for this chunk
-        max_similarities[i:end_idx] = tanimoto.max(axis=1)
+    # Compute union
+    query_popcount = query_fps.sum(axis=1, keepdims=True)  # (n_query, 1)
+    ref_popcount = ref_fps.sum(axis=1, keepdims=True).T  # (1, n_ref)
+    union = query_popcount + ref_popcount - intersect
     
-    return max_similarities
+    # Tanimoto = intersection / union
+    tanimoto = intersect / (union + 1e-10)  # Add epsilon to avoid division by zero
+    
+    # Return max similarity for each query
+    return tanimoto.max(axis=1)
 
 
 # ============================================================================
@@ -210,37 +199,57 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     df_mf_all = pd.read_csv(mf_features_csv, low_memory=False)
     logger.info(f"  Loaded: {len(df_mf_all):,} rows")
     
-    # Filter MF by target and affinity cutoff
-    df_mf = df_mf_all[df_mf_all["accession"] != target].copy()
-    logger.info(f"  After removing target {target}: {len(df_mf):,} rows")
+    # Extract actives FIRST (before any filtering) to get their SMILES
+    df_actives = df_mf_all[df_mf_all["accession"] == target].copy()
+    logger.info(f"Actives for {target}: {len(df_actives):,} rows")
     
-    if "Standard Value (nM)" in df_mf.columns:
-        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-        df_mf = df_mf[mask_cut].copy()
-        logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf):,} rows")
-    
-    # Deduplicate MF by SMILES (median aggregation)
-    smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf.columns else "SMILES"
-    before = len(df_mf)
+    # Deduplicate actives by SMILES
+    smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_all.columns else "SMILES"
     agg_dict = {}
-    for col in df_mf.columns:
+    for col in df_actives.columns:
         if col == smiles_col:
             continue
         elif col == "Standard Value (nM)":
             agg_dict[col] = "median"
         else:
             agg_dict[col] = "first"
-    df_mf = df_mf.groupby(smiles_col, as_index=False).agg(agg_dict)
-    logger.info(f"  Deduplicated MF: {before:,} -> {len(df_mf):,} (removed {before-len(df_mf):,})")
-    
-    # Extract actives (target compounds)
-    df_actives = df_mf_all[df_mf_all["accession"] == target].copy()
-    logger.info(f"Actives for {target}: {len(df_actives):,} rows")
-    
-    # Deduplicate actives
     before_act = len(df_actives)
     df_actives = df_actives.groupby(smiles_col, as_index=False).agg(agg_dict)
     logger.info(f"  Deduplicated actives: {before_act:,} -> {len(df_actives):,} (removed {before_act-len(df_actives):,})")
+    
+    # Get active SMILES set for exclusion
+    active_smiles_set = set(df_actives[smiles_col].dropna())
+    logger.info(f"  Active SMILES to exclude: {len(active_smiles_set):,}")
+    
+    # Filter MF: Remove target accession AND remove any molecule that appears in actives
+    # This handles promiscuous binders (same molecule binding multiple kinases)
+    df_mf = df_mf_all[df_mf_all["accession"] != target].copy()
+    logger.info(f"  After removing target accession {target}: {len(df_mf):,} rows")
+    
+    # Remove molecules by SMILES (handles multi-target binders)
+    before_smiles = len(df_mf)
+    df_mf = df_mf[~df_mf[smiles_col].isin(active_smiles_set)].copy()
+    logger.info(f"  After removing active SMILES: {len(df_mf):,} rows (removed {before_smiles - len(df_mf):,} promiscuous binders)")
+    
+    # Apply affinity cutoff
+    if "Standard Value (nM)" in df_mf.columns:
+        mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+        df_mf = df_mf[mask_cut].copy()
+        logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf):,} rows")
+    
+    # Deduplicate MF by SMILES (median aggregation)
+    before = len(df_mf)
+    df_mf = df_mf.groupby(smiles_col, as_index=False).agg(agg_dict)
+    logger.info(f"  Deduplicated MF: {before:,} -> {len(df_mf):,} (removed {before-len(df_mf):,})")
+    
+    # CRITICAL: Verify actives were actually removed from MF cloud (data leakage check)
+    mf_smiles_set = set(df_mf[smiles_col].dropna())
+    overlap_mf_actives = active_smiles_set.intersection(mf_smiles_set)
+    if len(overlap_mf_actives) > 0:
+        logger.error(f"  CRITICAL ERROR: {len(overlap_mf_actives)} actives found in MF cloud (DATA LEAKAGE!)")
+        logger.error(f"  This should never happen - actives must be excluded from MF")
+        raise RuntimeError("Data leakage detected: actives found in MF reference set")
+    logger.info(f"  ✓ Verified: Zero overlap between actives and MF cloud (no data leakage)")
     
     # Load ZINC decoys
     zinc_csv = Path(cfg["zinc_features_csv"])
@@ -266,6 +275,14 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(act_smiles)].copy()
     logger.info(f"  Removed actives from ZINC: {before_act_overlap:,} -> {len(df_zinc):,} (removed {before_act_overlap-len(df_zinc):,})")
     
+    # CRITICAL: Verify ZINC has zero overlap with actives (data leakage check)
+    zinc_smiles_set = set(df_zinc[zinc_smiles_col].dropna())
+    overlap_zinc_actives = active_smiles_set.intersection(zinc_smiles_set)
+    if len(overlap_zinc_actives) > 0:
+        logger.error(f"  CRITICAL ERROR: {len(overlap_zinc_actives)} actives found in ZINC decoys (DATA LEAKAGE!)")
+        raise RuntimeError("Data leakage detected: actives found in ZINC decoy set")
+    logger.info(f"  ✓ Verified: Zero overlap between actives and ZINC (no data leakage)")
+    
     # ========================================================================
     # Experiment-specific scoring
     # ========================================================================
@@ -276,17 +293,20 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         
         # Generate ECFP4 fingerprints
         logger.info("  Computing ECFP4 fingerprints...")
+        logger.info(f"    Processing {len(df_mf):,} MF molecules...")
         mf_fps = compute_ecfp4_fingerprints(df_mf[smiles_col].tolist(), radius=2, n_bits=2048)
+        logger.info(f"    Processing {len(df_actives):,} actives...")
         act_fps = compute_ecfp4_fingerprints(df_actives[smiles_col].tolist(), radius=2, n_bits=2048)
+        logger.info(f"    Processing {len(df_zinc):,} ZINC molecules...")
         zinc_fps = compute_ecfp4_fingerprints(df_zinc[zinc_smiles_col].tolist(), radius=2, n_bits=2048)
-        logger.info(f"    MF: {mf_fps.shape}")
-        logger.info(f"    Actives: {act_fps.shape}")
-        logger.info(f"    ZINC: {zinc_fps.shape}")
+        logger.info(f"    Fingerprints generated: MF={mf_fps.shape}, Actives={act_fps.shape}, ZINC={zinc_fps.shape}")
         
-        # Score via max Tanimoto similarity
-        logger.info("  Computing Tanimoto scores...")
-        act_scores = tanimoto_similarity_max(act_fps, mf_fps)
-        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps)
+        # Score via max Tanimoto similarity (batched for memory efficiency)
+        logger.info("  Computing Tanimoto scores (batched for large datasets)...")
+        logger.info(f"    Scoring {len(act_fps):,} actives vs {len(mf_fps):,} MF molecules...")
+        act_scores = tanimoto_similarity_max(act_fps, mf_fps, batch_size=10000)
+        logger.info(f"    Scoring {len(zinc_fps):,} ZINC vs {len(mf_fps):,} MF molecules...")
+        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps, batch_size=10000)
         logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
         logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
@@ -342,12 +362,19 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info(f"    Actives features: {X_act.shape}")
         logger.info(f"    ZINC features: {X_zinc.shape}")
         
-        # Score via 1-NN in high-D space
+        # Score via 1-NN in high-D space (score = -distance, higher is better)
         logger.info("  Computing 1-NN scores in high-D space...")
         act_scores, _ = nn_min_distance_scores(X_mf, X_act, metric="euclidean")
         zinc_scores, _ = nn_min_distance_scores(X_mf, X_zinc, metric="euclidean")
-        logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
-        logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+        logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}, std={act_scores.std():.4f}")
+        logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}, std={zinc_scores.std():.4f}")
+        
+        # Sanity check: if scores have no variance, something is wrong
+        if act_scores.std() < 1e-10 or zinc_scores.std() < 1e-10:
+            logger.error("  WARNING: Scores have near-zero variance! This will produce meaningless metrics.")
+            logger.error(f"    Active scores std: {act_scores.std():.10f}")
+            logger.error(f"    ZINC scores std: {zinc_scores.std():.10f}")
+            logger.error("    Check: Are all molecules identical? Is the distance metric correct?")
         
     elif experiment_type == "negative_control":
         logger.info("Negative Control: Non-kinase (receptor) ligands vs kinase model")
@@ -463,18 +490,22 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         
                         # Load Phase 1 MF+ZINC data (using Phase 1's affinity cutoff)
                         logger.info("    Loading Phase 1 MF+ZINC for feature reconstruction...")
-                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"])
+                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
                         logger.info(f"      Loaded MF: {len(df_mf_p1):,} rows")
                         
                         # Apply Phase 1's target exclusion and affinity cutoff
-                        phase1_target_col = phase1_cfg["target"].split("_")[-1]  # Extract P00519 from TyrosineProteinKinaseABL1_P00519
-                        if phase1_target_col in df_mf_p1.columns:
-                            df_mf_p1 = df_mf_p1[df_mf_p1[phase1_target_col] != 1].copy()
-                            logger.info(f"      After target exclusion: {len(df_mf_p1):,} rows")
+                        # Phase 1 config uses "accession" column for target filtering
+                        phase1_target = phase1_cfg.get("target", target)  # Fallback to Phase 5 target
+                        if "accession" in df_mf_p1.columns:
+                            df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                            logger.info(f"      After target exclusion ({phase1_target}): {len(df_mf_p1):,} rows")
+                        else:
+                            logger.warning(f"      'accession' column not found - cannot filter by target")
                         
                         if "Standard Value (nM)" in df_mf_p1.columns:
-                            df_mf_p1 = df_mf_p1[df_mf_p1["Standard Value (nM)"] <= phase1_cfg["affinity_cutoff_nM"]].copy()
-                            logger.info(f"      After affinity cutoff: {len(df_mf_p1):,} rows")
+                            mask_affinity = pd.to_numeric(df_mf_p1["Standard Value (nM)"], errors="coerce") <= phase1_cfg["affinity_cutoff_nM"]
+                            df_mf_p1 = df_mf_p1[mask_affinity].copy()
+                            logger.info(f"      After affinity cutoff (≤{phase1_cfg['affinity_cutoff_nM']} nM): {len(df_mf_p1):,} rows")
                         
                         # Deduplicate Phase 1 MF
                         smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
@@ -559,17 +590,43 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                                     logger.info(f"      Receptor scores: min={receptor_scores.min():.4f}, max={receptor_scores.max():.4f}, mean={receptor_scores.mean():.4f}")
                                     
                                     # For negative control: receptors are the "actives" (should NOT be enriched)
-                                    # Split receptors: first half as "actives", second half as "decoys"
-                                    split_idx = len(receptor_scores) // 2
-                                    act_scores = receptor_scores[:split_idx]
-                                    zinc_scores = receptor_scores[split_idx:]
+                                    # Use actual ZINC as decoys (not another receptor split)
+                                    # Transform ZINC through the same pipeline
+                                    logger.info("    Transforming ZINC decoys through Phase 1 pipeline...")
                                     
-                                    # Also split the receptor DataFrame for SMILES tracking
-                                    df_actives = df_receptors.iloc[:split_idx].copy()
-                                    df_zinc = df_receptors.iloc[split_idx:].copy()
+                                    # Check which Phase 1 features are missing in ZINC data
+                                    missing_feats_zinc = [f for f in phase1_features if f not in df_zinc.columns]
+                                    if missing_feats_zinc:
+                                        logger.warning(f"      {len(missing_feats_zinc)} Phase 1 features missing in ZINC data (will be filled with NaN)")
                                     
-                                    logger.info(f"      Split receptors: {len(act_scores)} test, {len(zinc_scores)} decoy")
-                                    logger.info("      Expected: EF@1% should be ~1.0 (no enrichment = random)")
+                                    # Extract ZINC features (missing features → NaN)
+                                    zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+                                    X_zinc_raw = df_zinc.reindex(columns=phase1_features).to_numpy(dtype=np.float64)
+                                    
+                                    # Remove infinity values
+                                    logger.info("      Removing infinity values from ZINC...")
+                                    X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
+                                    logger.info(f"      ZINC features shape (pre-transform): {X_zinc_raw.shape}")
+                                    
+                                    # Transform through Phase 1 pipeline
+                                    X_zinc_imputed = phase1_imputer.transform(X_zinc_raw)
+                                    X_zinc_scaled = scaler.transform(X_zinc_imputed)
+                                    X_zinc_embed = umap_model.transform(X_zinc_scaled)
+                                    logger.info(f"      Transformed ZINC: {X_zinc_embed.shape}")
+                                    
+                                    # Score ZINC against kinase MF cloud
+                                    logger.info("    Scoring ZINC decoys against kinase model...")
+                                    zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_zinc_embed, metric="euclidean")
+                                    logger.info(f"      ZINC scores: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+                                    
+                                    # Receptors are "actives", ZINC are "decoys"
+                                    act_scores = receptor_scores
+                                    df_actives = df_receptors.copy()
+                                    # df_zinc already loaded from earlier
+                                    
+                                    logger.info(f"      Receptors (as actives): {len(act_scores)}")
+                                    logger.info(f"      ZINC (as decoys): {len(zinc_scores)}")
+                                    logger.info("      Expected: EF@1% should be ~1.0 (no enrichment = receptors vs ZINC are both non-kinases)")
     
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
@@ -603,9 +660,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     labels = np.concatenate([np.ones(len(act_scores)), np.zeros(len(zinc_scores))])
     all_scores = np.concatenate([act_scores, zinc_scores])
     
-    # Compute metrics
-    ef1 = ef_at_k_percent(labels, all_scores, k_percent=1.0)
-    ef5 = ef_at_k_percent(labels, all_scores, k_percent=5.0)
+    # Compute metrics (NOTE: signature is ef_at_k_percent(scores, labels, k) - scores FIRST!)
+    ef1 = ef_at_k_percent(all_scores, labels, k_percent=1.0)
+    ef5 = ef_at_k_percent(all_scores, labels, k_percent=5.0)
     roc = roc_auc(labels, all_scores)
     pr = pr_auc(labels, all_scores)
     
