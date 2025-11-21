@@ -403,22 +403,25 @@ def format_p_value(p_val: float) -> str:
         return f"{p_val:.3f}"
 
 
-def generate_latex_table(summary_stats: Dict[str, Dict], p_values: Dict[str, Dict]) -> str:
-    """Generate LaTeX table for Phase 5 results."""
+def generate_latex_table(
+    summary_stats: Dict[str, Dict],
+    p_values: Dict[str, Dict],
+    stratified_stats: Dict[str, Dict[str, Tuple[float, float]]],
+) -> str:
+    """Generate LaTeX table for Phase 5 results with stratified potency tiers."""
     lines = []
     
     lines.append("\\begin{table}[htbp]")
     lines.append("\\centering")
-    lines.append("\\caption{Phase 5 Validation \\& Baseline Experiments: Bias Analysis}")
+    lines.append("\\caption{Phase 5 Validation \\& Baseline Experiments: Overall and Stratified Metrics}")
     lines.append("\\label{tab:phase5_bias}")
-    lines.append("\\begin{tabular}{l" + "c" * len(METRICS) + "}")
+    # Columns: Experiment | Overall EF@1% | Overall ROC-AUC | High Tier EF@1% | Medium Tier EF@1% | Low Tier EF@1%
+    lines.append("\\begin{tabular}{lccccc}")
     lines.append("\\hline")
     
     # Header
-    header = "Experiment"
-    for metric in METRICS:
-        header += f" & {METRIC_NAMES[metric]}"
-    lines.append(header + " \\\\")
+    lines.append("Experiment & EF@1\\% & ROC-AUC & High (<100) & Medium (100-1K) & Low (1-100K) \\\\")
+    lines.append(" & (Overall) & (Overall) & EF@1\\% & EF@1\\% & EF@1\\% \\\\")
     lines.append("\\hline")
     
     # Data rows
@@ -430,18 +433,35 @@ def generate_latex_table(summary_stats: Dict[str, Dict], p_values: Dict[str, Dic
         exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
         row = exp_name
         
-        for metric in METRICS:
-            mean, std = summary_stats[exp_type].get(metric, (np.nan, np.nan))
-            value_str = format_metric_value(mean, std, metric)
-            
-            # Add significance marker if available
-            if exp_type in p_values and metric in p_values[exp_type]:
-                p_val = p_values[exp_type][metric]
-                if not np.isnan(p_val) and p_val < 0.05:
-                    sig_marker = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
-                    value_str += f"$^{{{sig_marker}}}$"
-            
-            row += f" & {value_str}"
+        # Overall EF@1%
+        ef1_mean, ef1_std = summary_stats[exp_type].get("ef_1%", (np.nan, np.nan))
+        ef1_str = format_metric_value(ef1_mean, ef1_std, "ef_1%")
+        if exp_type in p_values and "ef_1%" in p_values[exp_type]:
+            p_val = p_values[exp_type]["ef_1%"]
+            if not np.isnan(p_val) and p_val < 0.05:
+                sig_marker = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
+                ef1_str += f"$^{{{sig_marker}}}$"
+        row += f" & {ef1_str}"
+        
+        # Overall ROC-AUC
+        roc_mean, roc_std = summary_stats[exp_type].get("roc_auc", (np.nan, np.nan))
+        roc_str = format_metric_value(roc_mean, roc_std, "roc_auc")
+        if exp_type in p_values and "roc_auc" in p_values[exp_type]:
+            p_val = p_values[exp_type]["roc_auc"]
+            if not np.isnan(p_val) and p_val < 0.05:
+                sig_marker = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
+                roc_str += f"$^{{{sig_marker}}}$"
+        row += f" & {roc_str}"
+        
+        # Stratified tier EF@1%
+        if exp_type in stratified_stats:
+            tier_stats = stratified_stats[exp_type]
+            for tier in TIER_ORDER:
+                tier_mean, tier_std = tier_stats.get(tier, (np.nan, np.nan))
+                tier_str = format_metric_value(tier_mean, tier_std, "ef_1%")
+                row += f" & {tier_str}"
+        else:
+            row += " & N/A & N/A & N/A"
         
         lines.append(row + " \\\\")
     
@@ -451,6 +471,7 @@ def generate_latex_table(summary_stats: Dict[str, Dict], p_values: Dict[str, Dic
     lines.append("")
     lines.append("% Significance markers: * p < 0.05, ** p < 0.01, *** p < 0.001")
     lines.append("% Comparison: Each experiment vs Tanimoto Baseline")
+    lines.append("% Potency tiers in nM: High <100, Medium 100-1000, Low 1000-100000")
     lines.append("% Note: Experiments with no completed runs are excluded from the table")
     
     return "\n".join(lines)
@@ -718,8 +739,57 @@ def generate_latex_text_snippet(
             lines.append("and fingerprint-based baselines.")
     
     elif has_raw_descriptors or has_tanimoto:
-        # Partial data
-        lines.append("% [INCOMPLETE: Waiting for both baseline experiments to complete for full comparison]")
+        # Partial data - show what we have
+        if has_raw_descriptors:
+            rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
+            
+            if not np.isnan(rd_ef1_mean):
+                lines.append("We evaluated 1-NN in the raw 2D descriptor space (no dimensionality reduction),")
+                lines.append(f"achieving overall EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f}")
+                lines.append(f"compared to MolFuSE (Phase 2) EF@1\\% = {phase2_ef1_mean:.1f}.")
+                
+                # Add stratified tiers if available
+                if "raw_descriptors" in stratified_stats:
+                    rd_tiers = stratified_stats["raw_descriptors"]
+                    rd_high_mean, rd_high_std = rd_tiers.get("high", (np.nan, np.nan))
+                    rd_med_mean, rd_med_std = rd_tiers.get("medium", (np.nan, np.nan))
+                    rd_low_mean, rd_low_std = rd_tiers.get("low", (np.nan, np.nan))
+                    
+                    if not np.isnan(rd_high_mean):
+                        lines.append("")
+                        lines.append("Stratified by potency tier:")
+                        lines.append(f"Raw descriptors: High (<100 nM): {rd_high_mean:.1f} $\\pm$ {rd_high_std:.1f}, "
+                                   f"Medium (100-1000 nM): {rd_med_mean:.1f} $\\pm$ {rd_med_std:.1f}, "
+                                   f"Low (1-100K nM): {rd_low_mean:.1f} $\\pm$ {rd_low_std:.1f}.")
+                        lines.append(f"MolFuSE (Phase 2): High: {phase2_tier_high:.1f}, "
+                                   f"Medium: {phase2_tier_medium:.1f}, Low: {phase2_tier_low:.1f}.")
+                
+                lines.append("% [INCOMPLETE: Tanimoto baseline not yet complete for full comparison]")
+        
+        elif has_tanimoto:
+            tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+            
+            if not np.isnan(tan_ef1_mean):
+                lines.append(f"We established a Tanimoto ECFP4 baseline (EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f})")
+                lines.append(f"compared to MolFuSE (Phase 2) EF@1\\% = {phase2_ef1_mean:.1f}.")
+                
+                # Add stratified tiers if available
+                if "tanimoto" in stratified_stats:
+                    tan_tiers = stratified_stats["tanimoto"]
+                    tan_high_mean, tan_high_std = tan_tiers.get("high", (np.nan, np.nan))
+                    tan_med_mean, tan_med_std = tan_tiers.get("medium", (np.nan, np.nan))
+                    tan_low_mean, tan_low_std = tan_tiers.get("low", (np.nan, np.nan))
+                    
+                    if not np.isnan(tan_high_mean):
+                        lines.append("")
+                        lines.append("Stratified by potency tier:")
+                        lines.append(f"Tanimoto: High (<100 nM): {tan_high_mean:.1f} $\\pm$ {tan_high_std:.1f}, "
+                                   f"Medium (100-1000 nM): {tan_med_mean:.1f} $\\pm$ {tan_med_std:.1f}, "
+                                   f"Low (1-100K nM): {tan_low_mean:.1f} $\\pm$ {tan_low_std:.1f}.")
+                        lines.append(f"MolFuSE (Phase 2): High: {phase2_tier_high:.1f}, "
+                                   f"Medium: {phase2_tier_medium:.1f}, Low: {phase2_tier_low:.1f}.")
+                
+                lines.append("% [INCOMPLETE: Raw descriptor baseline not yet complete for full comparison]")
     else:
         lines.append("% [INCOMPLETE: Baseline experiments not yet started]")
     
@@ -824,7 +894,7 @@ def main():
     print("Generating reports...")
     
     text_report = generate_text_report(summary_stats, p_values, results_dict)
-    latex_table = generate_latex_table(summary_stats, p_values)
+    latex_table = generate_latex_table(summary_stats, p_values, stratified_stats)
     latex_snippet = generate_latex_text_snippet(summary_stats, p_values, stratified_stats)
     
     # Write output
