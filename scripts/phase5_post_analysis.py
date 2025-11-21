@@ -619,11 +619,10 @@ def generate_latex_text_snippet(
     lines.append("")
     
     # Phase 2 reference values (from best ABL1 model results)
-    # TODO: Load these from Phase 2 results or specify as constants
-    phase2_ef1_mean = 28.0  # Placeholder - update with actual Phase 2 ABL1 best model EF@1%
-    phase2_tier_high = 32.5  # Placeholder - update with actual Tier 1 (high potency) EF@1%
-    phase2_tier_medium = 24.2  # Placeholder - update with actual Tier 2 (medium potency) EF@1%
-    phase2_tier_low = 18.7  # Placeholder - update with actual Tier 3 (low potency) EF@1%
+    phase2_ef1_mean = 39.7  # Placeholder - update with actual Phase 2 ABL1 best model EF@1%
+    phase2_tier_high = 45.7  # Placeholder - update with actual Tier 1 (high potency) EF@1%
+    phase2_tier_medium = 39.5  # Placeholder - update with actual Tier 2 (medium potency) EF@1%
+    phase2_tier_low = 31.0  # Placeholder - update with actual Tier 3 (low potency) EF@1%
     
     lines.append("% Phase 2 Reference (MolFuSE with UMAP, 100 nM cutoff, ABL1):")
     lines.append(f"% Overall EF@1\\%: {phase2_ef1_mean:.1f}")
