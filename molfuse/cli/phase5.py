@@ -417,10 +417,13 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  Loading Phase 1 best ABL1 model artifacts...")
         phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Randomly select one of the 5 replicates of the best model configuration
-        replicate = np.random.randint(1, 6)  # Random integer from 1 to 5
+        # Select replicate deterministically based on run-specific seed
+        # This ensures different Phase 5 runs get different replicates even when started simultaneously
+        rng = np.random.RandomState(random_seed)
+        replicate = rng.randint(1, 6)  # Random integer from 1 to 5
         best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
         best_phase1_dir = phase1_model_dir / best_model_name
+        logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
         
         if not best_phase1_dir.exists():
             logger.error(f"  Phase 1 model not found: {best_phase1_dir}")
@@ -599,10 +602,13 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             logger.info("  Loading Phase 1 best ABL1 model...")
             phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
             
-            # Randomly select one of the 5 replicates of the best model configuration
-            replicate = np.random.randint(1, 6)  # Random integer from 1 to 5
+            # Select replicate deterministically based on run-specific seed
+            # This ensures different Phase 5 runs get different replicates even when started simultaneously
+            rng = np.random.RandomState(random_seed)
+            replicate = rng.randint(1, 6)  # Random integer from 1 to 5
             best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
             best_phase1_dir = phase1_model_dir / best_model_name
+            logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
             
             if not best_phase1_dir.exists():
                 logger.error("  No Phase 1 ABL1 model found")
