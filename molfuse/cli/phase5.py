@@ -417,8 +417,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  Loading Phase 1 best ABL1 model artifacts...")
         phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Use the pre-determined best Phase 1 ABL1 model
-        best_model_name = "ABL1_UMAP_features_2d_nn10_md0p01_rep2"
+        # Randomly select one of the 5 replicates of the best model configuration
+        replicate = np.random.randint(1, 6)  # Random integer from 1 to 5
+        best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
         best_phase1_dir = phase1_model_dir / best_model_name
         
         if not best_phase1_dir.exists():
@@ -598,30 +599,12 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             logger.info("  Loading Phase 1 best ABL1 model...")
             phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
             
-            # Auto-detect best Phase 1 ABL1 model by highest EF@1%
-            # Only consider features models (with imputer.joblib), not fingerprints models
-            best_ef1 = 0
-            best_phase1_dir = None
-            for run_dir in phase1_model_dir.glob("ABL1_*/"):
-                metrics_file = run_dir / "metrics" / "metrics.json"
-                phase1_check_artifacts = run_dir / "artifacts"
-                imputer_path = phase1_check_artifacts / "imputer.joblib"
-                
-                # Skip if no imputer (fingerprints model)
-                if not imputer_path.exists():
-                    continue
-                    
-                if metrics_file.exists():
-                    try:
-                        with metrics_file.open("r") as f:
-                            metrics = json.load(f)
-                        if metrics.get("ef_1%", 0) > best_ef1:
-                            best_ef1 = metrics["ef_1%"]
-                            best_phase1_dir = run_dir
-                    except Exception:
-                        continue
+            # Randomly select one of the 5 replicates of the best model configuration
+            replicate = np.random.randint(1, 6)  # Random integer from 1 to 5
+            best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
+            best_phase1_dir = phase1_model_dir / best_model_name
             
-            if not best_phase1_dir:
+            if not best_phase1_dir.exists():
                 logger.error("  No Phase 1 ABL1 model found")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
@@ -791,7 +774,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         "affinity_cutoff_nM": affinity_cutoff_nM,
         "n_actives": int(len(act_scores)),
         "n_decoys": int(len(zinc_scores)),
-        "n_mf_reference": int(len(df_mf)),
+        "n_mf_reference": int(len(df_mf)) if 'df_mf' in locals() else 0,
         "ef_1%": float(ef1),
         "ef_5%": float(ef5),
         "roc_auc": float(roc),
