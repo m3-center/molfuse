@@ -545,10 +545,16 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         phase2_imputer = None
                     
                     # Reconstruct Phase 1's feature list (same preprocessing as Phase 1/2)
-                    # Load Phase 1 config to get exact preprocessing
+                    # Load Phase 1/4 config to get exact preprocessing
                     phase1_summary_path = phase1_artifacts_dir.parent / "logs" / "phase1_summary.json"
+                    phase4_summary_path = phase1_artifacts_dir.parent / "logs" / "phase4_summary.json"
+                    
+                    # Check for either phase1 or phase4 summary
+                    if phase4_summary_path.exists():
+                        phase1_summary_path = phase4_summary_path
+                    
                     if not phase1_summary_path.exists():
-                        logger.error(f"    Phase 1 summary not found: {phase1_summary_path}")
+                        logger.error(f"    Phase 1/4 summary not found: {phase1_summary_path}")
                         act_scores = np.array([])
                         zinc_scores = np.array([])
                     else:
@@ -660,12 +666,17 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         else:
             logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
             
-            # Load Phase 1 artifacts
+            # Load Phase 1/4 artifacts
             phase1_artifacts_dir = best_phase1_dir / "artifacts"
             phase1_summary_path = best_phase1_dir / "logs" / "phase1_summary.json"
+            phase4_summary_path = best_phase1_dir / "logs" / "phase4_summary.json"
+            
+            # Check for either phase1 or phase4 summary
+            if phase4_summary_path.exists():
+                phase1_summary_path = phase4_summary_path
             
             if not phase1_artifacts_dir.exists() or not phase1_summary_path.exists():
-                logger.error(f"    Phase 1 artifacts or summary not found: {best_phase1_dir}")
+                logger.error(f"    Phase 1/4 artifacts or summary not found: {best_phase1_dir}")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
