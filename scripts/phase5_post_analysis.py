@@ -213,11 +213,10 @@ def compute_tier_ef1(
     """
     Compute EF@1% stratified by potency tiers from ranked scores.
     
-    For each tier, compute EF@1% on a dataset containing ONLY:
-    - Actives from that tier (positives)
-    - All decoys (negatives)
-    
-    Actives from other tiers are EXCLUDED from the calculation.
+    Uses the Phase 2 tier stratification approach:
+    - For each tier, count only that tier's actives as "hits"
+    - Compute EF using full ranked list (all tiers + decoys) as denominator
+    - This answers: "How well does the model enrich THIS tier in the full dataset?"
     
     Args:
         ranked_scores_path: Path to ranked_scores.csv (SMILES, score, label)
@@ -238,44 +237,44 @@ def compute_tier_ef1(
     # Merge scores with activity
     df_merged = df_scores.merge(df_actives, left_on="SMILES", right_on=smiles_col, how="left")
     
-    # Stratify actives by tier
+    # Assign tiers to all actives
+    def assign_tier(affinity_nM):
+        if pd.isna(affinity_nM):
+            return None
+        for tier_name in TIER_ORDER:
+            min_val, max_val = TIER_THRESHOLDS[tier_name]
+            if min_val <= affinity_nM < max_val:
+                return tier_name
+        return None
+    
+    df_merged["potency_tier"] = df_merged[activity_col].apply(assign_tier)
+    
+    # Stratify by tier (Phase 2 approach)
     tier_ef1 = {}
+    N_total = len(df_merged)  # Full dataset size (all actives + decoys)
+    k_percent = 1.0
+    n_top_k = int(np.ceil(N_total * k_percent / 100.0))
+    
+    # Sort by score (descending)
+    df_sorted = df_merged.sort_values("score", ascending=False).reset_index(drop=True)
+    top_k = df_sorted.head(n_top_k)
+    
     for tier_name in TIER_ORDER:
-        min_val, max_val = TIER_THRESHOLDS[tier_name]
-        
-        # Filter actives in this tier
-        tier_active_mask = (df_merged["label"] == 1) & (df_merged[activity_col] >= min_val) & (df_merged[activity_col] < max_val)
-        n_tier_actives = tier_active_mask.sum()
+        # Count tier actives in full dataset
+        tier_mask_all = (df_sorted["label"] == 1) & (df_sorted["potency_tier"] == tier_name)
+        n_tier_actives = tier_mask_all.sum()
         
         if n_tier_actives == 0:
             tier_ef1[tier_name] = np.nan
             continue
         
-        # Get all decoys (label == 0)
-        decoy_mask = df_merged["label"] == 0
-        n_decoys = decoy_mask.sum()
+        # Count tier hits in top k
+        tier_mask_top = (top_k["label"] == 1) & (top_k["potency_tier"] == tier_name)
+        n_hits = tier_mask_top.sum()
         
-        # Create subset: ONLY this tier's actives + decoys (exclude other tiers' actives)
-        tier_subset_mask = tier_active_mask | decoy_mask
-        df_tier = df_merged[tier_subset_mask].copy()
-        
-        # Binary labels for this subset: tier actives = 1, decoys = 0
-        tier_labels = tier_active_mask[tier_subset_mask].astype(int)
-        
-        # Compute EF@1% for this tier
-        # EF@1% = (hits in top 1%) / (expected hits if random)
-        k_percent = 1.0
-        n_total = n_tier_actives + n_decoys
-        n_top_k = int(np.ceil(n_total * k_percent / 100.0))
-        
-        # Sort by score (descending) and get top k%
-        sorted_indices = df_tier["score"].argsort()[::-1].to_numpy()
-        top_k_indices = sorted_indices[:n_top_k]
-        top_k_labels = tier_labels.to_numpy()[top_k_indices]
-        
-        n_hits = top_k_labels.sum()
+        # EF@1% = (hits / N_tier_actives) / (k / N_total)
+        # This is equivalent to: (n_hits / n_top_k) / (n_tier_actives / N_total)
         expected_hits = n_tier_actives * (k_percent / 100.0)
-        
         ef1 = n_hits / expected_hits if expected_hits > 0 else 0.0
         tier_ef1[tier_name] = ef1
     
