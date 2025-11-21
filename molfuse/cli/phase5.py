@@ -453,7 +453,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                 fp_col = "ECFP4" if "ECFP4" in df_mf_fp.columns else "Fingerprint"
                 
                 # Replicate Phase 1's fingerprint parser
-                def parse_fp_series_local(series: pd.Series) -> np.ndarray:
+                def parse_fp_series_local(series: pd.Series) -> Tuple[np.ndarray, pd.Index]:
                     """Parse fingerprint strings to binary arrays."""
                     import re
                     ser = series.astype(str).str.strip().str.replace('"', '', regex=False)
@@ -461,8 +461,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     ser = ser[mask_nonempty]
                     
                     parsed_list = []
+                    valid_idx = []
                     expected_len = None
-                    for s in ser:
+                    for idx, s in ser.items():
                         try:
                             ss = s.replace(" ", "").strip()
                             if ss.startswith("[") and ss.endswith("]"):
@@ -477,14 +478,18 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                             if arr.shape[0] != expected_len or expected_len == 0:
                                 continue
                             parsed_list.append(arr)
+                            valid_idx.append(idx)
                         except Exception:
                             continue
                     if not parsed_list:
                         raise RuntimeError("Could not parse any fingerprints")
-                    return np.vstack(parsed_list).astype(np.float32)
+                    return np.vstack(parsed_list).astype(np.float32), pd.Index(valid_idx)
                 
-                FP_mf_full = parse_fp_series_local(df_mf_fp[fp_col])
-                FP_zinc = parse_fp_series_local(df_zinc_fp[fp_col])
+                FP_mf_full, idx_mf = parse_fp_series_local(df_mf_fp[fp_col])
+                # CRITICAL: Align DataFrame with parsed fingerprints to ensure mask_cut matches
+                df_mf_fp = df_mf_fp.loc[idx_mf].copy()
+                
+                FP_zinc, _ = parse_fp_series_local(df_zinc_fp[fp_col])
                 logger.info(f"    Parsed fingerprints: MF={FP_mf_full.shape}, ZINC={FP_zinc.shape}")
                 
                 # Parse actives fingerprints (from Phase 5's actives, matched to Phase 1 source)
@@ -498,7 +503,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     logger.warning("    No actives found in Phase 1 fingerprint dataset")
                     FP_actives = np.zeros((0, FP_mf_full.shape[1]), dtype=np.float32)
                 else:
-                    FP_actives = parse_fp_series_local(df_actives_fp[fp_col])
+                    FP_actives, _ = parse_fp_series_local(df_actives_fp[fp_col])
                 logger.info(f"    Parsed actives fingerprints: {FP_actives.shape}")
                 
                 # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
