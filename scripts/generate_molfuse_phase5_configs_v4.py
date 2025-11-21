@@ -68,8 +68,8 @@ AFFINITY_CUTOFF_NM = 100
 # Dataset paths (using Phase 4 recalculated datasets)
 BASE_DATA_DIR = Path("output_recalculated_full_datasets/datasets_2d_all")
 
-# Phase 2 best model directory (auto-detected in phase5.py, but specified here for clarity)
-PHASE2_BEST_MODEL_DIR = "experiment_workspace_v4/phase2"
+# Phase 1 best model directory (Phase 2 reused Phase 1 models, so we look in phase1/)
+PHASE1_BEST_MODEL_DIR = "experiment_workspace_v4/phase1"
 
 
 # ============================================================================
@@ -140,8 +140,8 @@ def generate_raw_descriptors_configs(output_dir: Path) -> List[Path]:
             "dim": DIM,
             "phase5_run_name": "validation",
             
-            # Phase 2 model artifacts (auto-detected by highest EF@1%)
-            "phase2_best_model_dir": PHASE2_BEST_MODEL_DIR,
+            # Phase 1 model artifacts (auto-detected by highest EF@1%)
+            "phase2_best_model_dir": PHASE1_BEST_MODEL_DIR,
             
             # Dataset paths (features only)
             "mf_features_csv": str(mf_features_csv),
@@ -182,8 +182,8 @@ def generate_negative_control_configs(output_dir: Path) -> List[Path]:
             "dim": DIM,
             "phase5_run_name": "validation",
             
-            # Phase 2 model artifacts (auto-detected by highest EF@1%)
-            "phase2_best_model_dir": PHASE2_BEST_MODEL_DIR,
+            # Phase 1 model artifacts (auto-detected by highest EF@1%)
+            "phase2_best_model_dir": PHASE1_BEST_MODEL_DIR,
             
             # Negative control specific fields
             "negative_control_kw_csv": str(kw_features_csv),

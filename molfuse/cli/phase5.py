@@ -408,40 +408,37 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     elif experiment_type == "raw_descriptors":
         logger.info("Raw Descriptor Baseline: 1-NN in high-D scaled space (no UMAP)")
         logger.info("  This tests whether dimensionality reduction (UMAP) is necessary")
-        logger.info("  Uses Phase 2's best ABL1 model preprocessing, scores in high-D feature space")
+        logger.info("  Uses Phase 1's best ABL1 model preprocessing, scores in high-D feature space")
         
-        # Load Phase 2's best ABL1 model artifacts (imputer + scaler, NOT UMAP)
-        logger.info("  Loading Phase 2 best ABL1 model artifacts...")
-        phase2_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase2"))
+        # Load Phase 1's best ABL1 model artifacts (imputer + scaler, NOT UMAP)
+        logger.info("  Loading Phase 1 best ABL1 model artifacts...")
+        phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Auto-detect best Phase 2 ABL1 model by highest EF@1%
+        # Auto-detect best Phase 1 ABL1 model by highest EF@1%
         best_ef1 = 0
-        best_phase2_dir = None
-        for run_dir in phase2_model_dir.glob("**/"):
+        best_phase1_dir = None
+        for run_dir in phase1_model_dir.glob("ABL1_*/"):
             metrics_file = run_dir / "metrics" / "metrics.json"
-            if metrics_file.exists() and "ABL1" in run_dir.name:
+            if metrics_file.exists():
                 try:
                     with metrics_file.open("r") as f:
                         metrics = json.load(f)
                     if metrics.get("ef_1%", 0) > best_ef1:
                         best_ef1 = metrics["ef_1%"]
-                        best_phase2_dir = run_dir
+                        best_phase1_dir = run_dir
                 except Exception:
                     continue
         
-        if not best_phase2_dir:
-            logger.error("  No Phase 2 ABL1 model found - cannot run raw_descriptors baseline")
+        if not best_phase1_dir:
+            logger.error("  No Phase 1 ABL1 model found - cannot run raw_descriptors baseline")
             logger.info("  Creating empty results to mark as skipped")
             act_scores = np.array([])
             zinc_scores = np.array([])
         else:
-            logger.info(f"    Best Phase 2 ABL1 model: {best_phase2_dir.name} (EF@1%: {best_ef1:.2f})")
+            logger.info(f"    Best Phase 1 ABL1 model: {best_phase1_dir.name} (EF@1%: {best_ef1:.2f})")
             
-            # Load Phase 2 artifacts (but we need to go back to Phase 1 for the actual artifacts)
-            # Phase 2 just re-scored, so artifacts are in the corresponding Phase 1 run
-            # Parse Phase 2 run name to find Phase 1 source
-            phase1_run_name = best_phase2_dir.name.replace("cutoff_", "").split("_cutoff")[0]
-            phase1_artifacts_dir = Path("experiment_workspace_v4/phase1") / phase1_run_name / "artifacts"
+            # Load Phase 1 artifacts directly
+            phase1_artifacts_dir = best_phase1_dir / "artifacts"
             
             if not phase1_artifacts_dir.exists():
                 logger.error(f"    Phase 1 artifacts not found: {phase1_artifacts_dir}")
@@ -462,9 +459,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                 else:
                     phase2_imputer = joblib.load(imputer_path)
                     phase2_scaler = joblib.load(scaler_path)
-                    logger.info("    Loaded imputer + scaler from Phase 1/2 pipeline")
+                    logger.info("    Loaded imputer + scaler from Phase 1 pipeline")
                     
-                    # Reconstruct Phase 2's feature list (same as Phase 1, but with Phase 2 cutoff for scoring)
+                    # Reconstruct Phase 1's feature list (same preprocessing as Phase 1/2)
                     # Load Phase 1 config to get exact preprocessing
                     phase1_summary_path = phase1_artifacts_dir.parent / "logs" / "phase1_summary.json"
                     if not phase1_summary_path.exists():
@@ -582,157 +579,122 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             # Use FULL KW set (no sampling) for robust cross-validation
             logger.info(f"    Using full KW set: {len(df_kw):,} compounds (no sampling)")
             
-            # Load Phase 2 best ABL1 model artifacts
-            logger.info("  Loading Phase 2 best ABL1 model artifacts...")
-            phase2_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase2"))
+            # Load Phase 1 best ABL1 model (Phase 2 reused Phase 1 models)
+            logger.info("  Loading Phase 1 best ABL1 model...")
+            phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
             
-            # Phase 2 structure: phase2/cutoff_sweep/<run_name>/
-            if not phase2_model_dir.exists():
-                logger.error(f"  Phase 2 directory not found: {phase2_model_dir}")
+            # Auto-detect best Phase 1 ABL1 model by highest EF@1%
+            best_ef1 = 0
+            best_phase1_dir = None
+            for run_dir in phase1_model_dir.glob("ABL1_*/"):
+                metrics_file = run_dir / "metrics" / "metrics.json"
+                if metrics_file.exists():
+                    try:
+                        with metrics_file.open("r") as f:
+                            metrics = json.load(f)
+                        if metrics.get("ef_1%", 0) > best_ef1:
+                            best_ef1 = metrics["ef_1%"]
+                            best_phase1_dir = run_dir
+                    except Exception:
+                        continue
+            
+            if not best_phase1_dir:
+                logger.error("  No Phase 1 ABL1 model found")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
-                # Check for cutoff_sweep subdirectory
-                cutoff_sweep_dir = phase2_model_dir / "cutoff_sweep"
-                if cutoff_sweep_dir.exists():
-                    search_dir = cutoff_sweep_dir
-                    logger.info(f"    Searching in: {search_dir}")
-                else:
-                    search_dir = phase2_model_dir
-                    logger.info(f"    Searching in: {search_dir}")
+                logger.info(f"    Best Phase 1 ABL1 model: {best_phase1_dir.name} (EF@1%: {best_ef1:.2f})")
                 
-                # Auto-detect best Phase 2 ABL1 model by scanning all subdirectories
-                best_ef1 = 0
-                best_phase2_dir = None
-                searched_count = 0
-                for run_dir in search_dir.rglob("*/"):
-                    searched_count += 1
-                    metrics_file = run_dir / "metrics" / "metrics.json"
-                    if metrics_file.exists():
-                        try:
-                            with metrics_file.open("r") as f:
-                                metrics = json.load(f)
-                            # Phase 2 runs contain "umap_features" in name
-                            if "umap_features" in run_dir.name and metrics.get("ef_1%", 0) > best_ef1:
-                                best_ef1 = metrics["ef_1%"]
-                                best_phase2_dir = run_dir
-                                logger.info(f"    Found candidate: {run_dir.name} (EF@1%: {best_ef1:.2f})")
-                        except Exception as e:
-                            logger.debug(f"    Could not read {metrics_file}: {e}")
-                            continue
+                # Load Phase 1 artifacts
+                phase1_artifacts_dir = best_phase1_dir / "artifacts"
                 
-                logger.info(f"    Searched {searched_count} directories")
-                
-                if not best_phase2_dir:
-                    logger.error("  No Phase 2 ABL1 model found with umap_features in name")
+                if not phase1_artifacts_dir.exists():
+                    logger.error(f"    Phase 1 artifacts not found: {phase1_artifacts_dir}")
                     act_scores = np.array([])
                     zinc_scores = np.array([])
                 else:
-                    logger.info(f"    Best Phase 2 ABL1 model: {best_phase2_dir.name} (EF@1%: {best_ef1:.2f})")
+                    # Load imputer, scaler, UMAP model
+                    imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                    scaler_path = phase1_artifacts_dir / "scaler.joblib"
+                    umap_path = phase1_artifacts_dir / "umap_model.joblib"
                     
-                    # Load Phase 1 artifacts (Phase 2 used Phase 1 models)
-                    # Phase 2 run names: umap_features_cutoff_<nM>_rep<N>
-                    # Phase 1 run names: umap_features_rep<N>
-                    # Extract replicate number from Phase 2 name
-                    import re
-                    match = re.search(r'rep(\d+)', best_phase2_dir.name)
-                    if match:
-                        rep_num = match.group(1)
-                        phase1_run_name = f"umap_features_rep{rep_num}"
-                    else:
-                        # Fallback: try to infer from cutoff pattern
-                        phase1_run_name = best_phase2_dir.name.replace("_cutoff_100", "").replace("_cutoff_1000", "").replace("_cutoff_10000", "").replace("_cutoff_100000", "")
-                    
-                    phase1_artifacts_dir = Path("experiment_workspace_v4/phase1") / phase1_run_name / "artifacts"
-                    logger.info(f"    Looking for Phase 1 artifacts: {phase1_artifacts_dir}")
-                    
-                    if not phase1_artifacts_dir.exists():
-                        logger.error(f"    Phase 1 artifacts not found: {phase1_artifacts_dir}")
+                    if not all([p.exists() for p in [imputer_path, scaler_path, umap_path]]):
+                        logger.error(f"    Missing artifacts in {phase1_artifacts_dir}")
                         act_scores = np.array([])
                         zinc_scores = np.array([])
                     else:
-                        # Load imputer, scaler, UMAP model
-                        imputer_path = phase1_artifacts_dir / "imputer.joblib"
-                        scaler_path = phase1_artifacts_dir / "scaler.joblib"
-                        umap_path = phase1_artifacts_dir / "umap_model.joblib"
+                        phase2_imputer = joblib.load(imputer_path)
+                        phase2_scaler = joblib.load(scaler_path)
+                        phase2_umap = joblib.load(umap_path)
+                        logger.info("    Loaded imputer + scaler + UMAP from Phase 1 pipeline")
                         
-                        if not all([p.exists() for p in [imputer_path, scaler_path, umap_path]]):
-                            logger.error(f"    Missing artifacts in {phase1_artifacts_dir}")
-                            act_scores = np.array([])
-                            zinc_scores = np.array([])
-                        else:
-                            phase2_imputer = joblib.load(imputer_path)
-                            phase2_scaler = joblib.load(scaler_path)
-                            phase2_umap = joblib.load(umap_path)
-                            logger.info("    Loaded imputer + scaler + UMAP from Phase 1/2 pipeline")
-                            
-                            # Reconstruct Phase 2 feature list (same process as raw_descriptors)
-                            phase1_summary_path = phase1_artifacts_dir.parent / "logs" / "phase1_summary.json"
-                            with open(phase1_summary_path, "r") as f:
-                                phase1_summary = json.load(f)
-                            phase1_cfg = phase1_summary["config"]
-                            
-                            logger.info("    Reconstructing Phase 2 feature selection...")
-                            df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
-                            df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
-                            
-                            phase1_target = phase1_cfg.get("target", target)
-                            if "accession" in df_mf_p1.columns:
-                                df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
-                            
-                            smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
-                            df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
-                            df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
-                            
-                            feat_cols_mf = select_feature_columns(df_mf_p1)
-                            feat_cols_zinc = select_feature_columns(df_zinc_p1)
-                            common_feats = [c for c in feat_cols_mf if c in feat_cols_zinc]
-                            
-                            df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
-                            phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
-                            del df_train_check, df_mf_p1, df_zinc_p1
-                            gc.collect()
-                            logger.info(f"    Phase 2 features: {len(phase2_features)}")
-                            
-                            # Load Phase 2 MF embedding (100 nM cutoff)
-                            mf_embedding_path = phase1_artifacts_dir / "embedding_mf.csv"
-                            df_mf_embed = pd.read_csv(mf_embedding_path)
-                            embed_cols = [f"z{i}" for i in range(cfg["dim"])]
-                            X_mf_embed = df_mf_embed[embed_cols].values
-                            logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
-                            
-                            # Transform KW set through Phase 2 pipeline
-                            logger.info("    Transforming KW set through Phase 2 pipeline...")
-                            X_kw_raw = df_kw.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
-                            X_kw_raw[~np.isfinite(X_kw_raw)] = np.nan
-                            X_kw_scaled = phase2_scaler.transform(phase2_imputer.transform(X_kw_raw))
-                            X_kw_embed = phase2_umap.transform(X_kw_scaled)
-                            logger.info(f"    KW embedding: {X_kw_embed.shape}")
-                            
-                            # Transform ZINC through Phase 2 pipeline
-                            logger.info("    Transforming ZINC through Phase 2 pipeline...")
-                            X_zinc_raw = df_zinc.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
-                            X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
-                            X_zinc_scaled = phase2_scaler.transform(phase2_imputer.transform(X_zinc_raw))
-                            X_zinc_embed = phase2_umap.transform(X_zinc_scaled)
-                            logger.info(f"    ZINC embedding: {X_zinc_embed.shape}")
-                            
-                            # Score KW (as "actives") and ZINC (as decoys) against kinase MF
-                            logger.info("  Scoring KW set against kinase model...")
-                            kw_scores, _ = nn_min_distance_scores(X_mf_embed, X_kw_embed, metric="euclidean")
-                            zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_zinc_embed, metric="euclidean")
-                            logger.info(f"    KW scores: min={kw_scores.min():.4f}, max={kw_scores.max():.4f}, mean={kw_scores.mean():.4f}")
-                            logger.info(f"    ZINC scores: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
-                            
-                            # KW set acts as "actives", ZINC as decoys
-                            act_scores = kw_scores
-                            df_actives = df_kw.copy()
-                            smiles_col = kw_smiles_col
-                            zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
-                            
-                            logger.info(f"    {kw_name}: {len(act_scores):,} compounds")
-                            logger.info(f"    ZINC decoys: {len(zinc_scores):,} compounds")
-                            logger.info("    Expected: EF@1% ≈ 1.0 (random performance = no database bias)")
+                        # Reconstruct Phase 2 feature list (same process as raw_descriptors)
+                        phase1_summary_path = phase1_artifacts_dir.parent / "logs" / "phase1_summary.json"
+                        with open(phase1_summary_path, "r") as f:
+                            phase1_summary = json.load(f)
+                        phase1_cfg = phase1_summary["config"]
+                        
+                        logger.info("    Reconstructing Phase 2 feature selection...")
+                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
+                        df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
+                        
+                        phase1_target = phase1_cfg.get("target", target)
+                        if "accession" in df_mf_p1.columns:
+                            df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                        
+                        smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
+                        df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                        df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                        
+                        feat_cols_mf = select_feature_columns(df_mf_p1)
+                        feat_cols_zinc = select_feature_columns(df_zinc_p1)
+                        common_feats = [c for c in feat_cols_mf if c in feat_cols_zinc]
+                        
+                        df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
+                        phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
+                        del df_train_check, df_mf_p1, df_zinc_p1
+                        gc.collect()
+                        logger.info(f"    Phase 2 features: {len(phase2_features)}")
+                        
+                        # Load Phase 2 MF embedding (100 nM cutoff)
+                        mf_embedding_path = phase1_artifacts_dir / "embedding_mf.csv"
+                        df_mf_embed = pd.read_csv(mf_embedding_path)
+                        embed_cols = [f"z{i}" for i in range(cfg["dim"])]
+                        X_mf_embed = df_mf_embed[embed_cols].values
+                        logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
+                        
+                        # Transform KW set through Phase 2 pipeline
+                        logger.info("    Transforming KW set through Phase 2 pipeline...")
+                        X_kw_raw = df_kw.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
+                        X_kw_raw[~np.isfinite(X_kw_raw)] = np.nan
+                        X_kw_scaled = phase2_scaler.transform(phase2_imputer.transform(X_kw_raw))
+                        X_kw_embed = phase2_umap.transform(X_kw_scaled)
+                        logger.info(f"    KW embedding: {X_kw_embed.shape}")
+                        
+                        # Transform ZINC through Phase 2 pipeline
+                        logger.info("    Transforming ZINC through Phase 2 pipeline...")
+                        X_zinc_raw = df_zinc.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
+                        X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
+                        X_zinc_scaled = phase2_scaler.transform(phase2_imputer.transform(X_zinc_raw))
+                        X_zinc_embed = phase2_umap.transform(X_zinc_scaled)
+                        logger.info(f"    ZINC embedding: {X_zinc_embed.shape}")
+                        
+                        # Score KW (as "actives") and ZINC (as decoys) against kinase MF
+                        logger.info("  Scoring KW set against kinase model...")
+                        kw_scores, _ = nn_min_distance_scores(X_mf_embed, X_kw_embed, metric="euclidean")
+                        zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_zinc_embed, metric="euclidean")
+                        logger.info(f"    KW scores: min={kw_scores.min():.4f}, max={kw_scores.max():.4f}, mean={kw_scores.mean():.4f}")
+                        logger.info(f"    ZINC scores: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+                        
+                        # KW set acts as "actives", ZINC as decoys
+                        act_scores = kw_scores
+                        df_actives = df_kw.copy()
+                        smiles_col = kw_smiles_col
+                        zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+                        
+                        logger.info(f"    {kw_name}: {len(act_scores):,} compounds")
+                        logger.info(f"    ZINC decoys: {len(zinc_scores):,} compounds")
+                        logger.info("    Expected: EF@1% ≈ 1.0 (random performance = no database bias)")
     
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
