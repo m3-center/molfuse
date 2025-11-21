@@ -73,7 +73,11 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
     missing_runs = []
     error_runs = []
     
-    for run_dir in sorted(phase5_dir.glob("phase5_*")):
+    # Match any run directory (e.g., tanimoto_rep1, raw_descriptors_rep2, etc.)
+    for run_dir in sorted(phase5_dir.glob("*")):
+        if not run_dir.is_dir():
+            continue
+        
         summary_path = run_dir / "logs" / "phase5_summary.json"
         
         if not summary_path.exists():
