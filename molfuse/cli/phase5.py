@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
+from sklearn.impute import SimpleImputer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from molfuse.data.prep import (
@@ -523,18 +524,25 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             else:
                 logger.info(f"    Loading Phase 1 artifacts from: {phase1_artifacts_dir.parent.name}")
                 
-                # Load imputer + scaler (NOT UMAP)
-                imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                # Load scaler (required)
                 scaler_path = phase1_artifacts_dir / "scaler.joblib"
                 
-                if not imputer_path.exists() or not scaler_path.exists():
-                    logger.error(f"    Artifacts not found: {imputer_path}, {scaler_path}")
+                if not scaler_path.exists():
+                    logger.error(f"    Scaler not found: {scaler_path}")
                     act_scores = np.array([])
                     zinc_scores = np.array([])
                 else:
-                    phase2_imputer = joblib.load(imputer_path)
                     phase2_scaler = joblib.load(scaler_path)
-                    logger.info("    Loaded imputer + scaler from Phase 1 pipeline")
+                    
+                    # Load or reconstruct imputer
+                    imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                    if imputer_path.exists():
+                        phase2_imputer = joblib.load(imputer_path)
+                        logger.info("    Loaded imputer + scaler from Phase 1 pipeline")
+                    else:
+                        logger.warning(f"    Imputer not found at {imputer_path} - will reconstruct from Phase 1/4 data")
+                        # Set to None; will reconstruct below after loading Phase 1 data
+                        phase2_imputer = None
                     
                     # Reconstruct Phase 1's feature list (same preprocessing as Phase 1/2)
                     # Load Phase 1 config to get exact preprocessing
@@ -569,6 +577,15 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         
                         df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
                         phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
+                        
+                        # Reconstruct imputer if it was missing (Phase 4 didn't save it)
+                        if phase2_imputer is None:
+                            logger.info("    Reconstructing imputer from Phase 1/4 MF+ZINC data (median strategy)...")
+                            X_train_for_imputer = df_train_check[phase2_features].to_numpy(dtype=np.float64)
+                            phase2_imputer = SimpleImputer(strategy='median', copy=True)
+                            phase2_imputer.fit(X_train_for_imputer)
+                            logger.info("    ✓ Imputer reconstructed successfully")
+                        
                         del df_train_check, df_mf_p1, df_zinc_p1
                         gc.collect()
                         logger.info(f"    Phase 1/2 features (after zero-variance filter): {len(phase2_features)}")
@@ -730,20 +747,27 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(kw_smiles)].copy()
                         logger.info(f"    Removed KW overlap from ZINC: {before_kw_overlap:,} -> {len(df_zinc):,}")
                         
-                        # Load imputer, scaler, UMAP model
-                        imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                        # Load scaler and UMAP (required)
                         scaler_path = phase1_artifacts_dir / "scaler.joblib"
                         umap_path = phase1_artifacts_dir / "umap_model.joblib"
                         
-                        if not all([p.exists() for p in [imputer_path, scaler_path, umap_path]]):
+                        if not all([p.exists() for p in [scaler_path, umap_path]]):
                             logger.error(f"    Missing artifacts in {phase1_artifacts_dir}")
                             act_scores = np.array([])
                             zinc_scores = np.array([])
                         else:
-                            phase2_imputer = joblib.load(imputer_path)
                             phase2_scaler = joblib.load(scaler_path)
                             phase2_umap = joblib.load(umap_path)
-                            logger.info("    Loaded imputer + scaler + UMAP from Phase 1 pipeline")
+                            
+                            # Load or reconstruct imputer
+                            imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                            if imputer_path.exists():
+                                phase2_imputer = joblib.load(imputer_path)
+                                logger.info("    Loaded imputer + scaler + UMAP from Phase 1 pipeline")
+                            else:
+                                logger.warning(f"    Imputer not found at {imputer_path} - will reconstruct from Phase 1/4 data")
+                                # Set to None; will reconstruct below after loading Phase 1 data
+                                phase2_imputer = None
                             
                             # Reconstruct Phase 2 feature selection
                             logger.info("    Reconstructing Phase 2 feature selection...")
@@ -764,6 +788,15 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                             
                             df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
                             phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
+                            
+                            # Reconstruct imputer if it was missing (Phase 4 didn't save it)
+                            if phase2_imputer is None:
+                                logger.info("    Reconstructing imputer from Phase 1/4 MF+ZINC data (median strategy)...")
+                                X_train_for_imputer = df_train_check[phase2_features].to_numpy(dtype=np.float64)
+                                phase2_imputer = SimpleImputer(strategy='median', copy=True)
+                                phase2_imputer.fit(X_train_for_imputer)
+                                logger.info("    ✓ Imputer reconstructed successfully")
+                            
                             del df_train_check, df_mf_p1, df_zinc_p1
                             gc.collect()
                             logger.info(f"    Phase 2 features: {len(phase2_features)}")
