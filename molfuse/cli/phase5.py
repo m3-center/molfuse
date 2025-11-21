@@ -343,6 +343,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             df_mf = df_mf_fingerprints
             df_zinc = df_zinc_fingerprints
             df_actives = df_actives_fingerprints
+            # Preserve SMILES column names for Tanimoto
+            smiles_col = fp_smiles_col
+            zinc_smiles_col = zinc_fp_smiles_col
         else:
             # For raw_descriptors: use filtered features directly
             df_mf = df_mf_filtered
