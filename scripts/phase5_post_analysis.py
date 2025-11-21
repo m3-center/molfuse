@@ -48,11 +48,11 @@ METRIC_NAMES = {
     "pr_auc": "PR-AUC",
 }
 
-# Potency tier thresholds (nM)
+# Potency tier thresholds (nM) - INCLUSIVE on both ends to match Phase 2
 TIER_THRESHOLDS = {
-    "high": (0, 100),       # < 100 nM
-    "medium": (100, 1000),  # 100-1000 nM
-    "low": (1000, 100000),  # 1000-100,000 nM
+    "high": (0.1, 100.0),       # 0.1 ≤ affinity ≤ 100 nM (drug-like)
+    "medium": (100.0, 1000.0),  # 100 < affinity ≤ 1000 nM (moderate)
+    "low": (1000.0, 100000.0),  # 1000 < affinity ≤ 100000 nM (marginal)
 }
 
 TIER_ORDER = ["high", "medium", "low"]
@@ -237,14 +237,29 @@ def compute_tier_ef1(
     # Merge scores with activity
     df_merged = df_scores.merge(df_actives, left_on="SMILES", right_on=smiles_col, how="left")
     
-    # Assign tiers to all actives
+    # Assign tiers to all actives (INCLUSIVE boundaries to match Phase 2)
     def assign_tier(affinity_nM):
         if pd.isna(affinity_nM):
             return None
-        for tier_name in TIER_ORDER:
-            min_val, max_val = TIER_THRESHOLDS[tier_name]
-            if min_val <= affinity_nM < max_val:
-                return tier_name
+        try:
+            val = float(affinity_nM)
+        except (ValueError, TypeError):
+            return None
+        
+        if val < 0.1 or val > 100000:
+            return None
+        
+        # Check each tier with INCLUSIVE boundaries
+        # High: 0.1 ≤ val ≤ 100
+        if 0.1 <= val <= 100.0:
+            return "high"
+        # Medium: 100 < val ≤ 1000
+        elif 100.0 < val <= 1000.0:
+            return "medium"
+        # Low: 1000 < val ≤ 100000
+        elif 1000.0 < val <= 100000.0:
+            return "low"
+        
         return None
     
     df_merged["potency_tier"] = df_merged[activity_col].apply(assign_tier)
