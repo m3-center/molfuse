@@ -213,6 +213,12 @@ def compute_tier_ef1(
     """
     Compute EF@1% stratified by potency tiers from ranked scores.
     
+    For each tier, compute EF@1% on a dataset containing ONLY:
+    - Actives from that tier (positives)
+    - All decoys (negatives)
+    
+    Actives from other tiers are EXCLUDED from the calculation.
+    
     Args:
         ranked_scores_path: Path to ranked_scores.csv (SMILES, score, label)
         actives_df: DataFrame with actives and their activity values
@@ -238,8 +244,8 @@ def compute_tier_ef1(
         min_val, max_val = TIER_THRESHOLDS[tier_name]
         
         # Filter actives in this tier
-        tier_mask = (df_merged["label"] == 1) & (df_merged[activity_col] >= min_val) & (df_merged[activity_col] < max_val)
-        n_tier_actives = tier_mask.sum()
+        tier_active_mask = (df_merged["label"] == 1) & (df_merged[activity_col] >= min_val) & (df_merged[activity_col] < max_val)
+        n_tier_actives = tier_active_mask.sum()
         
         if n_tier_actives == 0:
             tier_ef1[tier_name] = np.nan
@@ -249,8 +255,12 @@ def compute_tier_ef1(
         decoy_mask = df_merged["label"] == 0
         n_decoys = decoy_mask.sum()
         
-        # Create binary labels: tier actives = 1, everything else = 0
-        tier_labels = tier_mask.astype(int)
+        # Create subset: ONLY this tier's actives + decoys (exclude other tiers' actives)
+        tier_subset_mask = tier_active_mask | decoy_mask
+        df_tier = df_merged[tier_subset_mask].copy()
+        
+        # Binary labels for this subset: tier actives = 1, decoys = 0
+        tier_labels = tier_active_mask[tier_subset_mask].astype(int)
         
         # Compute EF@1% for this tier
         # EF@1% = (hits in top 1%) / (expected hits if random)
@@ -259,7 +269,7 @@ def compute_tier_ef1(
         n_top_k = int(np.ceil(n_total * k_percent / 100.0))
         
         # Sort by score (descending) and get top k%
-        sorted_indices = df_merged["score"].argsort()[::-1].to_numpy()
+        sorted_indices = df_tier["score"].argsort()[::-1].to_numpy()
         top_k_indices = sorted_indices[:n_top_k]
         top_k_labels = tier_labels.to_numpy()[top_k_indices]
         
