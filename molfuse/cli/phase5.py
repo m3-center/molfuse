@@ -2,20 +2,27 @@
 """
 Phase 5: Validation & Baseline Experiments
 
-Three critical controls to validate Phase 2 methodology:
-    1. Tanimoto Baseline: ECFP4 fingerprint similarity (with 100 nM cutoff)
-    2. Raw Descriptor Baseline: 1-NN in high-D scaled space (no UMAP, with 100 nM cutoff)
-    3. Negative Control: Non-kinase actives vs kinase model (7 KW sets, with 100 nM cutoff)
+Three critical controls to validate Phase 1/2 methodology:
+    1. Raw Fingerprints Baseline: 1-NN in raw ECFP4 space (no UMAP, Jaccard distance)
+    2. Raw Descriptors Baseline: 1-NN in high-D scaled space (no UMAP, Euclidean distance)
+    3. Negative Control: Non-kinase actives vs kinase model (tests database bias)
 
 Research Questions:
-    1. Does MolFuSE (Phase 2) beat industry-standard fingerprint similarity (Tanimoto)?
-    2. Is dimensionality reduction (UMAP) necessary vs raw high-D features?
+    1. Is dimensionality reduction (UMAP) necessary for fingerprints?
+       - Phase 1 fingerprints: ECFP4 → UMAP(20D) → 1-NN(Euclidean)
+       - Phase 5 raw_fingerprints: ECFP4 → 1-NN(Jaccard) in 2048D space
+    2. Is dimensionality reduction (UMAP) necessary for molecular descriptors?
+       - Phase 1 features: Mordred → UMAP(2D) → 1-NN(Euclidean)
+       - Phase 5 raw_descriptors: Mordred → 1-NN(Euclidean) in ~1600D space
     3. Does the kinase model show database bias when tested on non-kinase ChEMBL compounds?
+       - Expected: EF@1% ≈ 1.0 (random performance) for non-kinase compounds
 
 Methodology:
-    - All experiments use Phase 2's optimal affinity cutoff (100 nM) for MF cloud
-    - Tanimoto and raw_descriptors compare against Phase 2's best ABL1 model
-    - Negative control tests 7 non-kinase KW sets (cross-validation approach)
+    - All experiments use Phase 1/2's optimal affinity cutoff (100 nM) for MF cloud scoring
+    - Cutoff applied AFTER transformations (for scoring only), not before
+    - Raw fingerprints and raw descriptors load Phase 1's best ABL1 models and skip UMAP
+    - Negative control tests kinase model on non-kinase KW sets (cross-validation approach)
+    - All experiments use Phase 1's preprocessing (imputer/scaler for features, parser for fingerprints)
 
 Usage:
     python -m molfuse.cli.phase5 \\
@@ -385,42 +392,131 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     logger.info(f"\n[2/6] Running {experiment_type} experiment...")
     
     if experiment_type == "tanimoto":
-        logger.info("Fingerprint Baseline: ECFP4 without UMAP (1-NN Jaccard)")
+        logger.info("Raw Fingerprint Baseline: 1-NN in raw ECFP4 space (no UMAP)")
         logger.info("  This tests whether dimensionality reduction (UMAP) is necessary for fingerprints")
-        logger.info("  Uses raw ECFP4 fingerprints with 1-NN scoring (Jaccard distance)")
+        logger.info("  Uses Phase 1's best ABL1 fingerprint model preprocessing, scores in raw fingerprint space")
         
-        # Generate ECFP4 fingerprints
-        logger.info("  Computing ECFP4 fingerprints...")
-        logger.info(f"    Processing {len(df_mf):,} MF molecules (FULL cloud)...")
-        mf_fps_full = compute_ecfp4_fingerprints(df_mf[smiles_col].tolist(), radius=2, n_bits=2048)
-        logger.info(f"    Processing {len(df_actives):,} actives...")
-        act_fps = compute_ecfp4_fingerprints(df_actives[smiles_col].tolist(), radius=2, n_bits=2048)
-        logger.info(f"    Processing {len(df_zinc):,} ZINC molecules...")
-        zinc_fps = compute_ecfp4_fingerprints(df_zinc[zinc_smiles_col].tolist(), radius=2, n_bits=2048)
-        logger.info(f"    Fingerprints generated: MF_full={mf_fps_full.shape}, Actives={act_fps.shape}, ZINC={zinc_fps.shape}")
+        # Load Phase 1's best ABL1 fingerprint model
+        logger.info("  Loading Phase 1 best ABL1 fingerprint model...")
+        phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
-        if "Standard Value (nM)" in df_mf_filtered.columns:
-            mask_cut = pd.to_numeric(df_mf_filtered["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-            df_mf_for_scoring = df_mf_filtered[mask_cut].copy()
-            logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to MF for scoring only")
-            logger.info(f"    MF for scoring: {len(df_mf_for_scoring):,} / {len(df_mf_filtered):,} compounds")
-            # Filter fingerprints to match scoring set
-            mf_fps = mf_fps_full[mask_cut.to_numpy(dtype=bool)]
-            logger.info(f"    Fingerprints for scoring: {mf_fps.shape}")
+        # Select replicate deterministically based on run-specific seed
+        rng = np.random.RandomState(random_seed)
+        replicate = rng.randint(1, 6)  # Random integer from 1 to 5
+        best_model_name = f"ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep{replicate}"
+        best_phase1_dir = phase1_model_dir / best_model_name
+        logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
+        
+        if not best_phase1_dir.exists():
+            logger.error(f"  Phase 1 fingerprint model not found: {best_phase1_dir}")
+            logger.info("  Creating empty results to mark as skipped")
+            act_scores = np.array([])
+            zinc_scores = np.array([])
         else:
-            logger.warning("  No affinity column found; using full MF cloud for scoring")
-            mf_fps = mf_fps_full
-            df_mf_for_scoring = df_mf_filtered.copy()
-        
-        # Score via 1-NN with Jaccard distance (consistent with Phase 1 fingerprint methodology)
-        logger.info("  Computing 1-NN scores in raw fingerprint space (Jaccard distance)...")
-        logger.info(f"    Scoring {len(act_fps):,} actives vs {len(mf_fps):,} MF molecules...")
-        act_scores, _ = nn_min_distance_scores(mf_fps, act_fps, metric="jaccard")
-        logger.info(f"    Scoring {len(zinc_fps):,} ZINC vs {len(mf_fps):,} MF molecules...")
-        zinc_scores, _ = nn_min_distance_scores(mf_fps, zinc_fps, metric="jaccard")
-        logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
-        logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+            logger.info(f"    Using Phase 1 ABL1 fingerprint model: {best_phase1_dir.name}")
+            
+            # Load Phase 1 config to get exact fingerprint source
+            phase1_artifacts_dir = best_phase1_dir / "artifacts"
+            phase1_summary_path = best_phase1_dir / "logs" / "phase1_summary.json"
+            
+            if not phase1_summary_path.exists():
+                logger.error(f"    Phase 1 summary not found: {phase1_summary_path}")
+                act_scores = np.array([])
+                zinc_scores = np.array([])
+            else:
+                with open(phase1_summary_path, "r") as f:
+                    phase1_summary = json.load(f)
+                phase1_cfg = phase1_summary["config"]
+                
+                # Load Phase 1's fingerprint data (same source as Phase 1 used)
+                logger.info("    Loading Phase 1 fingerprint datasets...")
+                mf_fp_csv = Path(phase1_cfg["mf_features_csv"])
+                zinc_fp_csv = Path(phase1_cfg["zinc_features_csv"])
+                
+                df_mf_fp = pd.read_csv(mf_fp_csv, low_memory=False)
+                df_zinc_fp = pd.read_csv(zinc_fp_csv, low_memory=False)
+                logger.info(f"    Loaded MF fingerprints: {len(df_mf_fp):,} rows")
+                logger.info(f"    Loaded ZINC fingerprints: {len(df_zinc_fp):,} rows")
+                
+                # Apply Phase 1's preprocessing (target exclusion, deduplication)
+                phase1_target = phase1_cfg.get("target", target)
+                if "accession" in df_mf_fp.columns:
+                    df_mf_fp = df_mf_fp[df_mf_fp["accession"] != phase1_target].copy()
+                
+                fp_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_fp.columns else "SMILES"
+                df_mf_fp = df_mf_fp.drop_duplicates(subset=[fp_smiles_col], keep="first").copy()
+                df_zinc_fp = df_zinc_fp.drop_duplicates(subset=[fp_smiles_col], keep="first").copy()
+                logger.info(f"    After Phase 1 preprocessing: MF={len(df_mf_fp):,}, ZINC={len(df_zinc_fp):,}")
+                
+                # Parse ECFP4 fingerprints from Phase 1 data
+                logger.info("    Parsing ECFP4 fingerprints from Phase 1 datasets...")
+                fp_col = "ECFP4" if "ECFP4" in df_mf_fp.columns else "Fingerprint"
+                
+                # Replicate Phase 1's fingerprint parser
+                def parse_fp_series_local(series: pd.Series) -> np.ndarray:
+                    """Parse fingerprint strings to binary arrays."""
+                    import re
+                    ser = series.astype(str).str.strip().str.replace('"', '', regex=False)
+                    mask_nonempty = ser.notna() & (ser.str.len() > 0)
+                    ser = ser[mask_nonempty]
+                    
+                    parsed_list = []
+                    expected_len = None
+                    for s in ser:
+                        try:
+                            ss = s.replace(" ", "").strip()
+                            if ss.startswith("[") and ss.endswith("]"):
+                                ss = ss[1:-1]
+                            ss = re.sub(r"[^01,]", "", ss)
+                            ss = ss.strip(",")
+                            if not ss:
+                                continue
+                            arr = np.fromstring(ss, sep=",", dtype=np.uint8)
+                            if expected_len is None:
+                                expected_len = int(arr.shape[0])
+                            if arr.shape[0] != expected_len or expected_len == 0:
+                                continue
+                            parsed_list.append(arr)
+                        except Exception:
+                            continue
+                    if not parsed_list:
+                        raise RuntimeError("Could not parse any fingerprints")
+                    return np.vstack(parsed_list).astype(np.float32)
+                
+                FP_mf_full = parse_fp_series_local(df_mf_fp[fp_col])
+                FP_zinc = parse_fp_series_local(df_zinc_fp[fp_col])
+                logger.info(f"    Parsed fingerprints: MF={FP_mf_full.shape}, ZINC={FP_zinc.shape}")
+                
+                # Parse actives fingerprints (from Phase 5's actives, matched to Phase 1 source)
+                logger.info("    Parsing actives fingerprints...")
+                # For actives, we need to match to Phase 1's source
+                # Use the same fingerprint dataset but filter to actives SMILES
+                actives_smiles = set(df_actives[smiles_col].values)
+                mask_actives = df_mf_fp[fp_smiles_col].isin(actives_smiles)
+                df_actives_fp = df_mf_fp[mask_actives].copy()
+                if len(df_actives_fp) == 0:
+                    logger.warning("    No actives found in Phase 1 fingerprint dataset")
+                    FP_actives = np.zeros((0, FP_mf_full.shape[1]), dtype=np.float32)
+                else:
+                    FP_actives = parse_fp_series_local(df_actives_fp[fp_col])
+                logger.info(f"    Parsed actives fingerprints: {FP_actives.shape}")
+                
+                # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
+                if "Standard Value (nM)" in df_mf_fp.columns:
+                    mask_cut = pd.to_numeric(df_mf_fp["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+                    FP_mf = FP_mf_full[mask_cut.to_numpy(dtype=bool)]
+                    logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to MF for scoring only")
+                    logger.info(f"    MF for scoring: {FP_mf.shape[0]:,} / {FP_mf_full.shape[0]:,} compounds")
+                else:
+                    logger.warning("  No affinity column found; using full MF cloud for scoring")
+                    FP_mf = FP_mf_full
+                
+                # Score via 1-NN in raw fingerprint space using Jaccard distance
+                logger.info("  Computing 1-NN scores in raw fingerprint space (Jaccard distance)...")
+                act_scores, _ = nn_min_distance_scores(FP_mf, FP_actives, metric="jaccard")
+                zinc_scores, _ = nn_min_distance_scores(FP_mf, FP_zinc, metric="jaccard")
+                logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
+                logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
     elif experiment_type == "raw_descriptors":
         logger.info("Raw Descriptor Baseline: 1-NN in high-D scaled space (no UMAP)")
@@ -548,199 +644,199 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  This tests for database bias (kinase model scoring non-kinase compounds)")
         logger.info("  Expected result: EF@1% ≈ 1.0 (random performance, no enrichment)")
         
-        # Load non-kinase KW dataset from config
-        kw_csv = Path(cfg.get("negative_control_kw_csv", ""))
-        kw_name = cfg.get("negative_control_kw_name", "Unknown")
+        # Load Phase 1 best ABL1 model FIRST to get the correct MF source
+        logger.info("  Loading Phase 1 best ABL1 model...")
+        phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        if not kw_csv or not kw_csv.exists():
-            logger.error(f"  KW dataset not found: {kw_csv}")
-            logger.info("  Creating empty results to mark as skipped")
+        # Select replicate deterministically based on run-specific seed
+        rng = np.random.RandomState(random_seed)
+        replicate = rng.randint(1, 6)  # Random integer from 1 to 5
+        best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
+        best_phase1_dir = phase1_model_dir / best_model_name
+        logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
+        
+        if not best_phase1_dir.exists():
+            logger.error("  No Phase 1 ABL1 model found")
             act_scores = np.array([])
             zinc_scores = np.array([])
         else:
-            logger.info(f"  Loading KW set: {kw_name}")
-            logger.info(f"  Dataset: {kw_csv}")
-            df_kw = pd.read_csv(kw_csv, low_memory=False)
-            logger.info(f"    Loaded: {len(df_kw):,} rows")
+            logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
             
-            # Remove any overlap with kinase target (unlikely but check)
-            if "accession" in df_kw.columns:
-                df_kw = df_kw[df_kw["accession"] != target].copy()
-                logger.info(f"    After removing target overlap: {len(df_kw):,} rows")
+            # Load Phase 1 artifacts
+            phase1_artifacts_dir = best_phase1_dir / "artifacts"
+            phase1_summary_path = best_phase1_dir / "logs" / "phase1_summary.json"
             
-            # Deduplicate KW set
-            kw_smiles_col = "canonical_smiles" if "canonical_smiles" in df_kw.columns else "SMILES"
-            before_kw = len(df_kw)
-            df_kw = df_kw.drop_duplicates(subset=[kw_smiles_col], keep="first").copy()
-            logger.info(f"    Deduplicated: {before_kw:,} -> {len(df_kw):,} (removed {before_kw-len(df_kw):,})")
-            
-            # Load kinase MF cloud to get SMILES for overlap removal
-            # (We need to know which compounds are in the kinase reference set)
-            logger.info("  Loading kinase MF features for overlap removal...")
-            mf_features_csv = Path("output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv")
-            df_mf_kinase = pd.read_csv(mf_features_csv, low_memory=False)
-            logger.info(f"    Loaded kinase MF: {len(df_mf_kinase):,} rows")
-            
-            # Apply same filtering as Phase 1 (remove target, deduplicate)
-            # DO NOT apply affinity cutoff here - wait until after transformations
-            df_mf_kinase = df_mf_kinase[df_mf_kinase["accession"] != target].copy()
-            mf_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_kinase.columns else "SMILES"
-            df_mf_kinase = df_mf_kinase.drop_duplicates(subset=[mf_smiles_col], keep="first").copy()
-            mf_smiles = set(df_mf_kinase[mf_smiles_col].dropna())
-            logger.info(f"    Kinase MF cloud (FULL): {len(mf_smiles):,} unique SMILES")
-            logger.info(f"    Note: Affinity cutoff (≤{affinity_cutoff_nM} nM) will be applied after transformations")
-            
-            # Remove MF overlap from KW set
-            before_mf = len(df_kw)
-            df_kw = df_kw[~df_kw[kw_smiles_col].isin(mf_smiles)].copy()
-            logger.info(f"    Removed MF overlap: {before_mf:,} -> {len(df_kw):,} (removed {before_mf-len(df_kw):,})")
-            
-            # Use FULL KW set (no sampling) for robust cross-validation
-            logger.info(f"    Using full KW set: {len(df_kw):,} compounds (no sampling)")
-            
-            # Load ZINC features (needed as decoys for negative control)
-            logger.info("  Loading ZINC features...")
-            zinc_features_csv = Path(cfg["zinc_features_csv"])
-            df_zinc = pd.read_csv(zinc_features_csv, low_memory=False)
-            logger.info(f"    Loaded ZINC: {len(df_zinc):,} rows")
-            
-            # Deduplicate ZINC
-            zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
-            before_zinc = len(df_zinc)
-            df_zinc = df_zinc.drop_duplicates(subset=[zinc_smiles_col], keep="first").copy()
-            logger.info(f"    Deduplicated ZINC: {before_zinc:,} -> {len(df_zinc):,}")
-            
-            # Remove MF overlap from ZINC
-            before_overlap = len(df_zinc)
-            df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(mf_smiles)].copy()
-            logger.info(f"    Removed MF overlap from ZINC: {before_overlap:,} -> {len(df_zinc):,}")
-            
-            # Remove KW overlap from ZINC (KW compounds are our "actives")
-            kw_smiles = set(df_kw[kw_smiles_col].dropna())
-            before_kw_overlap = len(df_zinc)
-            df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(kw_smiles)].copy()
-            logger.info(f"    Removed KW overlap from ZINC: {before_kw_overlap:,} -> {len(df_zinc):,}")
-            
-            # Load Phase 1 best ABL1 model (Phase 2 reused Phase 1 models)
-            logger.info("  Loading Phase 1 best ABL1 model...")
-            phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
-            
-            # Select replicate deterministically based on run-specific seed
-            # This ensures different Phase 5 runs get different replicates even when started simultaneously
-            rng = np.random.RandomState(random_seed)
-            replicate = rng.randint(1, 6)  # Random integer from 1 to 5
-            best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
-            best_phase1_dir = phase1_model_dir / best_model_name
-            logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
-            
-            if not best_phase1_dir.exists():
-                logger.error("  No Phase 1 ABL1 model found")
+            if not phase1_artifacts_dir.exists() or not phase1_summary_path.exists():
+                logger.error(f"    Phase 1 artifacts or summary not found: {best_phase1_dir}")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
-                logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
+                # Load Phase 1 config to get MF source
+                with open(phase1_summary_path, "r") as f:
+                    phase1_summary = json.load(f)
+                phase1_cfg = phase1_summary["config"]
                 
-                # Load Phase 1 artifacts
-                phase1_artifacts_dir = best_phase1_dir / "artifacts"
-                
-                if not phase1_artifacts_dir.exists():
-                    logger.error(f"    Phase 1 artifacts not found: {phase1_artifacts_dir}")
-                    act_scores = np.array([])
-                    zinc_scores = np.array([])
-                else:
-                    # Load imputer, scaler, UMAP model
-                    imputer_path = phase1_artifacts_dir / "imputer.joblib"
-                    scaler_path = phase1_artifacts_dir / "scaler.joblib"
-                    umap_path = phase1_artifacts_dir / "umap_model.joblib"
+                # Load kinase MF cloud using path from Phase 1 config
+                mf_features_csv = Path(phase1_cfg["mf_features_csv"])
+                logger.info(f"  Loading kinase MF features from Phase 1 config: {mf_features_csv}")
+                if not mf_features_csv.exists():
+                    logger.warning(f"    MF file from Phase 1 config not found: {mf_features_csv}")
+                    # Fallback to hardcoded path if original not found (e.g. different machine)
+                    fallback_path = Path("output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv")
+                    if fallback_path.exists():
+                        logger.warning(f"    Falling back to default path: {fallback_path}")
+                        mf_features_csv = fallback_path
+                    else:
+                        logger.error("    MF features CSV not found")
+                        act_scores = np.array([])
+                        zinc_scores = np.array([])
+                        # Skip the rest of this block
+                        mf_features_csv = None
+
+                if mf_features_csv:
+                    df_mf_kinase = pd.read_csv(mf_features_csv, low_memory=False)
+                    logger.info(f"    Loaded kinase MF: {len(df_mf_kinase):,} rows")
                     
-                    if not all([p.exists() for p in [imputer_path, scaler_path, umap_path]]):
-                        logger.error(f"    Missing artifacts in {phase1_artifacts_dir}")
+                    # Apply same filtering as Phase 1 (remove target, deduplicate)
+                    df_mf_kinase = df_mf_kinase[df_mf_kinase["accession"] != target].copy()
+                    mf_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_kinase.columns else "SMILES"
+                    df_mf_kinase = df_mf_kinase.drop_duplicates(subset=[mf_smiles_col], keep="first").copy()
+                    mf_smiles = set(df_mf_kinase[mf_smiles_col].dropna())
+                    logger.info(f"    Kinase MF cloud (FULL): {len(mf_smiles):,} unique SMILES")
+                    
+                    # Load non-kinase KW dataset from config
+                    kw_csv = Path(cfg.get("negative_control_kw_csv", ""))
+                    kw_name = cfg.get("negative_control_kw_name", "Unknown")
+                    
+                    if not kw_csv or not kw_csv.exists():
+                        logger.error(f"  KW dataset not found: {kw_csv}")
                         act_scores = np.array([])
                         zinc_scores = np.array([])
                     else:
-                        phase2_imputer = joblib.load(imputer_path)
-                        phase2_scaler = joblib.load(scaler_path)
-                        phase2_umap = joblib.load(umap_path)
-                        logger.info("    Loaded imputer + scaler + UMAP from Phase 1 pipeline")
+                        logger.info(f"  Loading KW set: {kw_name}")
+                        df_kw = pd.read_csv(kw_csv, low_memory=False)
                         
-                        # Reconstruct Phase 2 feature list (same process as raw_descriptors)
-                        phase1_summary_path = phase1_artifacts_dir.parent / "logs" / "phase1_summary.json"
-                        with open(phase1_summary_path, "r") as f:
-                            phase1_summary = json.load(f)
-                        phase1_cfg = phase1_summary["config"]
+                        # Remove any overlap with kinase target
+                        if "accession" in df_kw.columns:
+                            df_kw = df_kw[df_kw["accession"] != target].copy()
                         
-                        logger.info("    Reconstructing Phase 2 feature selection...")
-                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
-                        df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
+                        # Deduplicate KW set
+                        kw_smiles_col = "canonical_smiles" if "canonical_smiles" in df_kw.columns else "SMILES"
+                        df_kw = df_kw.drop_duplicates(subset=[kw_smiles_col], keep="first").copy()
                         
-                        phase1_target = phase1_cfg.get("target", target)
-                        if "accession" in df_mf_p1.columns:
-                            df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                        # Remove MF overlap from KW set
+                        before_mf = len(df_kw)
+                        df_kw = df_kw[~df_kw[kw_smiles_col].isin(mf_smiles)].copy()
+                        logger.info(f"    Removed MF overlap: {before_mf:,} -> {len(df_kw):,} (removed {before_mf-len(df_kw):,})")
                         
-                        smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
-                        df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
-                        df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                        # Load ZINC features
+                        logger.info("  Loading ZINC features...")
+                        zinc_features_csv = Path(cfg["zinc_features_csv"])
+                        df_zinc = pd.read_csv(zinc_features_csv, low_memory=False)
                         
-                        feat_cols_mf = select_feature_columns(df_mf_p1)
-                        feat_cols_zinc = select_feature_columns(df_zinc_p1)
-                        common_feats = [c for c in feat_cols_mf if c in feat_cols_zinc]
-                        
-                        df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
-                        phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
-                        del df_train_check, df_mf_p1, df_zinc_p1
-                        gc.collect()
-                        logger.info(f"    Phase 2 features: {len(phase2_features)}")
-                        
-                        # Transform FULL kinase MF through Phase 2 pipeline
-                        logger.info("    Transforming kinase MF through Phase 2 pipeline...")
-                        X_mf_kinase_raw = df_mf_kinase.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
-                        X_mf_kinase_raw[~np.isfinite(X_mf_kinase_raw)] = np.nan
-                        X_mf_kinase_scaled = phase2_scaler.transform(phase2_imputer.transform(X_mf_kinase_raw))
-                        X_mf_kinase_embed = phase2_umap.transform(X_mf_kinase_scaled)
-                        logger.info(f"    Kinase MF embedding (FULL): {X_mf_kinase_embed.shape}")
-                        
-                        # Apply affinity cutoff to kinase MF for scoring only (like Phase 1/2)
-                        if "Standard Value (nM)" in df_mf_kinase.columns:
-                            mask_cut = pd.to_numeric(df_mf_kinase["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-                            X_mf_embed = X_mf_kinase_embed[mask_cut.to_numpy(dtype=bool)]
-                            logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to kinase MF for scoring only")
-                            logger.info(f"    Kinase MF for scoring: {X_mf_embed.shape[0]:,} / {X_mf_kinase_embed.shape[0]:,} compounds")
-                        else:
-                            logger.warning("  No affinity column found; using full kinase MF for scoring")
-                            X_mf_embed = X_mf_kinase_embed
-                        
-                        # Transform KW set through Phase 2 pipeline
-                        logger.info("    Transforming KW set through Phase 2 pipeline...")
-                        X_kw_raw = df_kw.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
-                        X_kw_raw[~np.isfinite(X_kw_raw)] = np.nan
-                        X_kw_scaled = phase2_scaler.transform(phase2_imputer.transform(X_kw_raw))
-                        X_kw_embed = phase2_umap.transform(X_kw_scaled)
-                        logger.info(f"    KW embedding: {X_kw_embed.shape}")
-                        
-                        # Transform ZINC through Phase 2 pipeline
-                        logger.info("    Transforming ZINC through Phase 2 pipeline...")
-                        X_zinc_raw = df_zinc.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
-                        X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
-                        X_zinc_scaled = phase2_scaler.transform(phase2_imputer.transform(X_zinc_raw))
-                        X_zinc_embed = phase2_umap.transform(X_zinc_scaled)
-                        logger.info(f"    ZINC embedding: {X_zinc_embed.shape}")
-                        
-                        # Score KW (as "actives") and ZINC (as decoys) against kinase MF
-                        logger.info("  Scoring KW set against kinase model...")
-                        kw_scores, _ = nn_min_distance_scores(X_mf_embed, X_kw_embed, metric="euclidean")
-                        zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_zinc_embed, metric="euclidean")
-                        logger.info(f"    KW scores: min={kw_scores.min():.4f}, max={kw_scores.max():.4f}, mean={kw_scores.mean():.4f}")
-                        logger.info(f"    ZINC scores: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
-                        
-                        # KW set acts as "actives", ZINC as decoys
-                        act_scores = kw_scores
-                        df_actives = df_kw.copy()
-                        smiles_col = kw_smiles_col
+                        # Deduplicate ZINC
                         zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+                        df_zinc = df_zinc.drop_duplicates(subset=[zinc_smiles_col], keep="first").copy()
                         
-                        logger.info(f"    {kw_name}: {len(act_scores):,} compounds")
-                        logger.info(f"    ZINC decoys: {len(zinc_scores):,} compounds")
-                        logger.info("    Expected: EF@1% ≈ 1.0 (random performance = no database bias)")
+                        # Remove MF overlap from ZINC
+                        before_overlap = len(df_zinc)
+                        df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(mf_smiles)].copy()
+                        logger.info(f"    Removed MF overlap from ZINC: {before_overlap:,} -> {len(df_zinc):,}")
+                        
+                        # Remove KW overlap from ZINC
+                        kw_smiles = set(df_kw[kw_smiles_col].dropna())
+                        before_kw_overlap = len(df_zinc)
+                        df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(kw_smiles)].copy()
+                        logger.info(f"    Removed KW overlap from ZINC: {before_kw_overlap:,} -> {len(df_zinc):,}")
+                        
+                        # Load imputer, scaler, UMAP model
+                        imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                        scaler_path = phase1_artifacts_dir / "scaler.joblib"
+                        umap_path = phase1_artifacts_dir / "umap_model.joblib"
+                        
+                        if not all([p.exists() for p in [imputer_path, scaler_path, umap_path]]):
+                            logger.error(f"    Missing artifacts in {phase1_artifacts_dir}")
+                            act_scores = np.array([])
+                            zinc_scores = np.array([])
+                        else:
+                            phase2_imputer = joblib.load(imputer_path)
+                            phase2_scaler = joblib.load(scaler_path)
+                            phase2_umap = joblib.load(umap_path)
+                            logger.info("    Loaded imputer + scaler + UMAP from Phase 1 pipeline")
+                            
+                            # Reconstruct Phase 2 feature selection
+                            logger.info("    Reconstructing Phase 2 feature selection...")
+                            df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
+                            df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
+                            
+                            phase1_target = phase1_cfg.get("target", target)
+                            if "accession" in df_mf_p1.columns:
+                                df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                            
+                            smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
+                            df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                            df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                            
+                            feat_cols_mf = select_feature_columns(df_mf_p1)
+                            feat_cols_zinc = select_feature_columns(df_zinc_p1)
+                            common_feats = [c for c in feat_cols_mf if c in feat_cols_zinc]
+                            
+                            df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
+                            phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
+                            del df_train_check, df_mf_p1, df_zinc_p1
+                            gc.collect()
+                            logger.info(f"    Phase 2 features: {len(phase2_features)}")
+                            
+                            # Transform FULL kinase MF through Phase 2 pipeline
+                            logger.info("    Transforming kinase MF through Phase 2 pipeline...")
+                            X_mf_kinase_raw = df_mf_kinase.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
+                            X_mf_kinase_raw[~np.isfinite(X_mf_kinase_raw)] = np.nan
+                            X_mf_kinase_scaled = phase2_scaler.transform(phase2_imputer.transform(X_mf_kinase_raw))
+                            X_mf_kinase_embed = phase2_umap.transform(X_mf_kinase_scaled)
+                            logger.info(f"    Kinase MF embedding (FULL): {X_mf_kinase_embed.shape}")
+                            
+                            # Apply affinity cutoff to kinase MF for scoring only (like Phase 1/2)
+                            if "Standard Value (nM)" in df_mf_kinase.columns:
+                                mask_cut = pd.to_numeric(df_mf_kinase["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+                                X_mf_embed = X_mf_kinase_embed[mask_cut.to_numpy(dtype=bool)]
+                                logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to kinase MF for scoring only")
+                                logger.info(f"    Kinase MF for scoring: {X_mf_embed.shape[0]:,} / {X_mf_kinase_embed.shape[0]:,} compounds")
+                            else:
+                                logger.warning("  No affinity column found; using full kinase MF for scoring")
+                                X_mf_embed = X_mf_kinase_embed
+                            
+                            # Transform KW set through Phase 2 pipeline
+                            logger.info("    Transforming KW set through Phase 2 pipeline...")
+                            X_kw_raw = df_kw.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
+                            X_kw_raw[~np.isfinite(X_kw_raw)] = np.nan
+                            X_kw_scaled = phase2_scaler.transform(phase2_imputer.transform(X_kw_raw))
+                            X_kw_embed = phase2_umap.transform(X_kw_scaled)
+                            logger.info(f"    KW embedding: {X_kw_embed.shape}")
+                            
+                            # Transform ZINC through Phase 2 pipeline
+                            logger.info("    Transforming ZINC through Phase 2 pipeline...")
+                            X_zinc_raw = df_zinc.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
+                            X_zinc_raw[~np.isfinite(X_zinc_raw)] = np.nan
+                            X_zinc_scaled = phase2_scaler.transform(phase2_imputer.transform(X_zinc_raw))
+                            X_zinc_embed = phase2_umap.transform(X_zinc_scaled)
+                            logger.info(f"    ZINC embedding: {X_zinc_embed.shape}")
+                            
+                            # Score KW (as "actives") and ZINC (as decoys) against kinase MF
+                            logger.info("  Scoring KW set against kinase model...")
+                            kw_scores, _ = nn_min_distance_scores(X_mf_embed, X_kw_embed, metric="euclidean")
+                            zinc_scores, _ = nn_min_distance_scores(X_mf_embed, X_zinc_embed, metric="euclidean")
+                            logger.info(f"    KW scores: min={kw_scores.min():.4f}, max={kw_scores.max():.4f}, mean={kw_scores.mean():.4f}")
+                            logger.info(f"    ZINC scores: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+                            
+                            # KW set acts as "actives", ZINC as decoys
+                            act_scores = kw_scores
+                            df_actives = df_kw.copy()
+                            smiles_col = kw_smiles_col
+                            zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+                            
+                            logger.info(f"    {kw_name}: {len(act_scores):,} compounds")
+                            logger.info(f"    ZINC decoys: {len(zinc_scores):,} compounds")
+                            logger.info("    Expected: EF@1% ≈ 1.0 (random performance = no database bias)")
     
     else:
         raise ValueError(f"Unknown experiment type: {experiment_type}")
