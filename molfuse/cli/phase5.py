@@ -394,149 +394,113 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     if experiment_type == "tanimoto":
         logger.info("Raw Fingerprint Baseline: 1-NN in raw ECFP4 space (no UMAP)")
         logger.info("  This tests whether dimensionality reduction (UMAP) is necessary for fingerprints")
-        logger.info("  Uses Phase 1's best ABL1 fingerprint model preprocessing, scores in raw fingerprint space")
+        logger.info("  Scores in raw fingerprint space using Jaccard distance")
         
-        # Load Phase 1's best ABL1 fingerprint model
-        logger.info("  Loading Phase 1 best ABL1 fingerprint model...")
-        phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
+        # Use pre-loaded and filtered dataframes from Step 1
+        # df_mf, df_zinc, df_actives are already assigned to the fingerprint dataframes
+        logger.info(f"  Using loaded datasets: MF={len(df_mf):,}, Actives={len(df_actives):,}, ZINC={len(df_zinc):,}")
         
-        # Select replicate deterministically based on run-specific seed
-        rng = np.random.RandomState(random_seed)
-        replicate = rng.randint(1, 6)  # Random integer from 1 to 5
-        best_model_name = f"ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep{replicate}"
-        best_phase1_dir = phase1_model_dir / best_model_name
-        logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
+        # Parse ECFP4 fingerprints
+        logger.info("  Parsing ECFP4 fingerprints...")
+        fp_col = "ECFP4" if "ECFP4" in df_mf.columns else "Fingerprint"
         
-        if not best_phase1_dir.exists():
-            logger.error(f"  Phase 1 fingerprint model not found: {best_phase1_dir}")
-            logger.info("  Creating empty results to mark as skipped")
+        def parse_fp_series_local(series: pd.Series) -> Tuple[np.ndarray, pd.Index]:
+            """Parse fingerprint strings to binary arrays."""
+            import re
+            ser = series.astype(str).str.strip().str.replace('"', '', regex=False)
+            mask_nonempty = ser.notna() & (ser.str.len() > 0)
+            ser = ser[mask_nonempty]
+            
+            parsed_list = []
+            valid_idx = []
+            expected_len = None
+            for idx, s in ser.items():
+                try:
+                    ss = s.replace(" ", "").strip()
+                    if ss.startswith("[") and ss.endswith("]"):
+                        ss = ss[1:-1]
+                    ss = re.sub(r"[^01,]", "", ss)
+                    ss = ss.strip(",")
+                    if not ss:
+                        continue
+                    arr = np.fromstring(ss, sep=",", dtype=np.uint8)
+                    if expected_len is None:
+                        expected_len = int(arr.shape[0])
+                    if arr.shape[0] != expected_len or expected_len == 0:
+                        continue
+                    parsed_list.append(arr)
+                    valid_idx.append(idx)
+                except Exception:
+                    continue
+            if not parsed_list:
+                raise RuntimeError("Could not parse any fingerprints")
+            return np.vstack(parsed_list).astype(np.float32), pd.Index(valid_idx)
+        
+        # Parse MF
+        FP_mf_full, idx_mf = parse_fp_series_local(df_mf[fp_col])
+        # Align DataFrame with parsed fingerprints
+        df_mf = df_mf.loc[idx_mf].copy()
+        
+        # Parse ZINC
+        FP_zinc, idx_zinc = parse_fp_series_local(df_zinc[fp_col])
+        df_zinc = df_zinc.loc[idx_zinc].copy()
+        
+        # Parse Actives
+        if len(df_actives) == 0:
+            FP_actives = np.zeros((0, FP_mf_full.shape[1]), dtype=np.float32)
+        else:
+            FP_actives, idx_act = parse_fp_series_local(df_actives[fp_col])
+            df_actives = df_actives.loc[idx_act].copy()
+            
+        logger.info(f"  Parsed fingerprints: MF={FP_mf_full.shape}, Actives={FP_actives.shape}, ZINC={FP_zinc.shape}")
+        
+        # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
+        if "Standard Value (nM)" in df_mf.columns:
+            mask_cut = pd.to_numeric(df_mf["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+            FP_mf = FP_mf_full[mask_cut.to_numpy(dtype=bool)]
+            logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to MF for scoring only")
+            logger.info(f"    MF for scoring: {FP_mf.shape[0]:,} / {FP_mf_full.shape[0]:,} compounds")
+        else:
+            logger.warning("  No affinity column found; using full MF cloud for scoring")
+            FP_mf = FP_mf_full
+        
+        # Score via 1-NN in raw fingerprint space using Jaccard distance
+        logger.info("  Computing 1-NN scores in raw fingerprint space (Jaccard distance)...")
+        if FP_mf.shape[0] == 0:
+            logger.warning("  MF cloud empty after cutoff! Cannot score.")
             act_scores = np.array([])
             zinc_scores = np.array([])
         else:
-            logger.info(f"    Using Phase 1 ABL1 fingerprint model: {best_phase1_dir.name}")
-            
-            # Load Phase 1 config to get exact fingerprint source
-            phase1_artifacts_dir = best_phase1_dir / "artifacts"
-            phase1_summary_path = best_phase1_dir / "logs" / "phase1_summary.json"
-            
-            if not phase1_summary_path.exists():
-                logger.error(f"    Phase 1 summary not found: {phase1_summary_path}")
-                act_scores = np.array([])
-                zinc_scores = np.array([])
-            else:
-                with open(phase1_summary_path, "r") as f:
-                    phase1_summary = json.load(f)
-                phase1_cfg = phase1_summary["config"]
-                
-                # Load Phase 1's fingerprint data (same source as Phase 1 used)
-                logger.info("    Loading Phase 1 fingerprint datasets...")
-                mf_fp_csv = Path(phase1_cfg["mf_features_csv"])
-                zinc_fp_csv = Path(phase1_cfg["zinc_features_csv"])
-                
-                df_mf_fp = pd.read_csv(mf_fp_csv, low_memory=False)
-                df_zinc_fp = pd.read_csv(zinc_fp_csv, low_memory=False)
-                logger.info(f"    Loaded MF fingerprints: {len(df_mf_fp):,} rows")
-                logger.info(f"    Loaded ZINC fingerprints: {len(df_zinc_fp):,} rows")
-                
-                # Apply Phase 1's preprocessing (target exclusion, deduplication)
-                phase1_target = phase1_cfg.get("target", target)
-                if "accession" in df_mf_fp.columns:
-                    df_mf_fp = df_mf_fp[df_mf_fp["accession"] != phase1_target].copy()
-                
-                fp_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_fp.columns else "SMILES"
-                df_mf_fp = df_mf_fp.drop_duplicates(subset=[fp_smiles_col], keep="first").copy()
-                df_zinc_fp = df_zinc_fp.drop_duplicates(subset=[fp_smiles_col], keep="first").copy()
-                logger.info(f"    After Phase 1 preprocessing: MF={len(df_mf_fp):,}, ZINC={len(df_zinc_fp):,}")
-                
-                # Parse ECFP4 fingerprints from Phase 1 data
-                logger.info("    Parsing ECFP4 fingerprints from Phase 1 datasets...")
-                fp_col = "ECFP4" if "ECFP4" in df_mf_fp.columns else "Fingerprint"
-                
-                # Replicate Phase 1's fingerprint parser
-                def parse_fp_series_local(series: pd.Series) -> Tuple[np.ndarray, pd.Index]:
-                    """Parse fingerprint strings to binary arrays."""
-                    import re
-                    ser = series.astype(str).str.strip().str.replace('"', '', regex=False)
-                    mask_nonempty = ser.notna() & (ser.str.len() > 0)
-                    ser = ser[mask_nonempty]
-                    
-                    parsed_list = []
-                    valid_idx = []
-                    expected_len = None
-                    for idx, s in ser.items():
-                        try:
-                            ss = s.replace(" ", "").strip()
-                            if ss.startswith("[") and ss.endswith("]"):
-                                ss = ss[1:-1]
-                            ss = re.sub(r"[^01,]", "", ss)
-                            ss = ss.strip(",")
-                            if not ss:
-                                continue
-                            arr = np.fromstring(ss, sep=",", dtype=np.uint8)
-                            if expected_len is None:
-                                expected_len = int(arr.shape[0])
-                            if arr.shape[0] != expected_len or expected_len == 0:
-                                continue
-                            parsed_list.append(arr)
-                            valid_idx.append(idx)
-                        except Exception:
-                            continue
-                    if not parsed_list:
-                        raise RuntimeError("Could not parse any fingerprints")
-                    return np.vstack(parsed_list).astype(np.float32), pd.Index(valid_idx)
-                
-                FP_mf_full, idx_mf = parse_fp_series_local(df_mf_fp[fp_col])
-                # CRITICAL: Align DataFrame with parsed fingerprints to ensure mask_cut matches
-                df_mf_fp = df_mf_fp.loc[idx_mf].copy()
-                
-                FP_zinc, _ = parse_fp_series_local(df_zinc_fp[fp_col])
-                logger.info(f"    Parsed fingerprints: MF={FP_mf_full.shape}, ZINC={FP_zinc.shape}")
-                
-                # Parse actives fingerprints (from Phase 5's actives, matched to Phase 1 source)
-                logger.info("    Parsing actives fingerprints...")
-                # For actives, we need to match to Phase 1's source
-                # Use the same fingerprint dataset but filter to actives SMILES
-                actives_smiles = set(df_actives[smiles_col].values)
-                mask_actives = df_mf_fp[fp_smiles_col].isin(actives_smiles)
-                df_actives_fp = df_mf_fp[mask_actives].copy()
-                if len(df_actives_fp) == 0:
-                    logger.warning("    No actives found in Phase 1 fingerprint dataset")
-                    FP_actives = np.zeros((0, FP_mf_full.shape[1]), dtype=np.float32)
-                else:
-                    FP_actives, _ = parse_fp_series_local(df_actives_fp[fp_col])
-                logger.info(f"    Parsed actives fingerprints: {FP_actives.shape}")
-                
-                # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
-                if "Standard Value (nM)" in df_mf_fp.columns:
-                    mask_cut = pd.to_numeric(df_mf_fp["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-                    FP_mf = FP_mf_full[mask_cut.to_numpy(dtype=bool)]
-                    logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to MF for scoring only")
-                    logger.info(f"    MF for scoring: {FP_mf.shape[0]:,} / {FP_mf_full.shape[0]:,} compounds")
-                else:
-                    logger.warning("  No affinity column found; using full MF cloud for scoring")
-                    FP_mf = FP_mf_full
-                
-                # Score via 1-NN in raw fingerprint space using Jaccard distance
-                logger.info("  Computing 1-NN scores in raw fingerprint space (Jaccard distance)...")
-                act_scores, _ = nn_min_distance_scores(FP_mf, FP_actives, metric="jaccard")
-                zinc_scores, _ = nn_min_distance_scores(FP_mf, FP_zinc, metric="jaccard")
-                logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
-                logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
+            act_scores, _ = nn_min_distance_scores(FP_mf, FP_actives, metric="jaccard")
+            zinc_scores, _ = nn_min_distance_scores(FP_mf, FP_zinc, metric="jaccard")
+            logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
+            logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
     elif experiment_type == "raw_descriptors":
         logger.info("Raw Descriptor Baseline: 1-NN in high-D scaled space (no UMAP)")
         logger.info("  This tests whether dimensionality reduction (UMAP) is necessary")
-        logger.info("  Uses Phase 1's best ABL1 model preprocessing, scores in high-D feature space")
+        logger.info("  Uses Phase 1/4 best model preprocessing, scores in high-D feature space")
         
-        # Load Phase 1's best ABL1 model artifacts (imputer + scaler, NOT UMAP)
-        logger.info("  Loading Phase 1 best ABL1 model artifacts...")
+        # Load Phase 1/4 best model artifacts (imputer + scaler, NOT UMAP)
+        logger.info("  Loading best model artifacts...")
         phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
         # Select replicate deterministically based on run-specific seed
-        # This ensures different Phase 5 runs get different replicates even when started simultaneously
         rng = np.random.RandomState(random_seed)
         replicate = rng.randint(1, 6)  # Random integer from 1 to 5
-        best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
+        
+        # Support custom model directory templates (for Phase 4 expansion)
+        model_dir_template = cfg.get("model_dir_template")
+        if model_dir_template:
+            # Use target_short from config if available, else try to derive from target string
+            target_short = cfg.get("target_short")
+            if not target_short:
+                target_short = target.split("_")[-1] if "_" in target else target
+            best_model_name = model_dir_template.format(target=target_short, replicate=replicate)
+        else:
+            # Legacy Phase 1 format
+            best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
+            
         best_phase1_dir = phase1_model_dir / best_model_name
         logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
         
@@ -649,14 +613,26 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  This tests for database bias (kinase model scoring non-kinase compounds)")
         logger.info("  Expected result: EF@1% ≈ 1.0 (random performance, no enrichment)")
         
-        # Load Phase 1 best ABL1 model FIRST to get the correct MF source
-        logger.info("  Loading Phase 1 best ABL1 model...")
+        # Load Phase 1/4 best model FIRST to get the correct MF source
+        logger.info("  Loading best model...")
         phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
         # Select replicate deterministically based on run-specific seed
         rng = np.random.RandomState(random_seed)
         replicate = rng.randint(1, 6)  # Random integer from 1 to 5
-        best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
+        
+        # Support custom model directory templates (for Phase 4 expansion)
+        model_dir_template = cfg.get("model_dir_template")
+        if model_dir_template:
+            # Use target_short from config if available, else try to derive from target string
+            target_short = cfg.get("target_short")
+            if not target_short:
+                target_short = target.split("_")[-1] if "_" in target else target
+            best_model_name = model_dir_template.format(target=target_short, replicate=replicate)
+        else:
+            # Legacy Phase 1 format
+            best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
+            
         best_phase1_dir = phase1_model_dir / best_model_name
         logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
         
