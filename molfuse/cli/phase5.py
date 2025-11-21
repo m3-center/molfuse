@@ -590,6 +590,29 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             # Use FULL KW set (no sampling) for robust cross-validation
             logger.info(f"    Using full KW set: {len(df_kw):,} compounds (no sampling)")
             
+            # Load ZINC features (needed as decoys for negative control)
+            logger.info("  Loading ZINC features...")
+            zinc_features_csv = Path(cfg["zinc_features_csv"])
+            df_zinc = pd.read_csv(zinc_features_csv, low_memory=False)
+            logger.info(f"    Loaded ZINC: {len(df_zinc):,} rows")
+            
+            # Deduplicate ZINC
+            zinc_smiles_col = "canonical_smiles" if "canonical_smiles" in df_zinc.columns else "SMILES"
+            before_zinc = len(df_zinc)
+            df_zinc = df_zinc.drop_duplicates(subset=[zinc_smiles_col], keep="first").copy()
+            logger.info(f"    Deduplicated ZINC: {before_zinc:,} -> {len(df_zinc):,}")
+            
+            # Remove MF overlap from ZINC
+            before_overlap = len(df_zinc)
+            df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(mf_smiles)].copy()
+            logger.info(f"    Removed MF overlap from ZINC: {before_overlap:,} -> {len(df_zinc):,}")
+            
+            # Remove KW overlap from ZINC (KW compounds are our "actives")
+            kw_smiles = set(df_kw[kw_smiles_col].dropna())
+            before_kw_overlap = len(df_zinc)
+            df_zinc = df_zinc[~df_zinc[zinc_smiles_col].isin(kw_smiles)].copy()
+            logger.info(f"    Removed KW overlap from ZINC: {before_kw_overlap:,} -> {len(df_zinc):,}")
+            
             # Load Phase 1 best ABL1 model (Phase 2 reused Phase 1 models)
             logger.info("  Loading Phase 1 best ABL1 model...")
             phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
