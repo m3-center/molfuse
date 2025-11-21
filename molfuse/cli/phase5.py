@@ -564,37 +564,78 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         
                         # Load Phase 1 MF+ZINC to reconstruct feature selection
                         logger.info("    Reconstructing Phase 1/2 feature selection...")
-                        df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
-                        df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
                         
-                        # Apply Phase 1's preprocessing (target exclusion, dedup, zero-variance filter)
-                        phase1_target = phase1_cfg.get("target", target)
-                        if "accession" in df_mf_p1.columns:
-                            df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                        # Check if Phase 4 saved the feature list (extracted via scripts/extract_phase4_features.py)
+                        features_used_path = os.path.join(phase2_artifacts_dir, "features_used.txt")
                         
-                        smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
-                        df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
-                        df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
-                        
-                        # Feature selection + zero-variance filtering
-                        feat_cols_mf = select_feature_columns(df_mf_p1)
-                        feat_cols_zinc = select_feature_columns(df_zinc_p1)
-                        common_feats = [c for c in feat_cols_mf if c in feat_cols_zinc]
-                        
-                        df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
-                        phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
-                        
-                        # Reconstruct imputer if it was missing (Phase 4 didn't save it)
-                        if phase2_imputer is None:
-                            logger.info("    Reconstructing imputer from Phase 1/4 MF+ZINC data (median strategy)...")
-                            X_train_for_imputer = df_train_check[phase2_features].to_numpy(dtype=np.float64)
-                            phase2_imputer = SimpleImputer(strategy='median', copy=True)
-                            phase2_imputer.fit(X_train_for_imputer)
-                            logger.info("    ✓ Imputer reconstructed successfully")
-                        
-                        del df_train_check, df_mf_p1, df_zinc_p1
-                        gc.collect()
-                        logger.info(f"    Phase 1/2 features (after zero-variance filter): {len(phase2_features)}")
+                        if os.path.exists(features_used_path):
+                            logger.info(f"    Loading exact feature list from {features_used_path}...")
+                            with open(features_used_path, 'r') as f:
+                                phase2_features = [line.strip() for line in f if line.strip()]
+                            logger.info(f"    ✓ Loaded {len(phase2_features)} features from saved list")
+                            
+                            # Reconstruct imputer if it was missing (Phase 4 didn't save it)
+                            if phase2_imputer is None:
+                                logger.info("    Reconstructing imputer from Phase 1/4 MF+ZINC data (median strategy)...")
+                                # Load Phase 1 data just for imputer reconstruction
+                                df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
+                                df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
+                                
+                                # Apply Phase 1's preprocessing (target exclusion, dedup)
+                                phase1_target = phase1_cfg.get("target", target)
+                                if "accession" in df_mf_p1.columns:
+                                    df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                                
+                                smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
+                                df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                                df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                                
+                                # Use the saved feature list to reconstruct imputer
+                                df_train_check = pd.concat([df_mf_p1[phase2_features], df_zinc_p1[phase2_features]], axis=0, ignore_index=True)
+                                X_train_for_imputer = df_train_check.to_numpy(dtype=np.float64)
+                                phase2_imputer = SimpleImputer(strategy='median', copy=True)
+                                phase2_imputer.fit(X_train_for_imputer)
+                                logger.info("    ✓ Imputer reconstructed successfully")
+                                
+                                del df_train_check, df_mf_p1, df_zinc_p1
+                                gc.collect()
+                        else:
+                            # Fall back to full reconstruction (legacy path, may have feature count mismatches)
+                            logger.warning(f"    features_used.txt not found in {phase2_artifacts_dir}")
+                            logger.warning("    Falling back to feature reconstruction (may cause feature count mismatch)")
+                            logger.warning("    Consider running: python scripts/extract_phase4_features.py <phase4_run_dir>")
+                            
+                            df_mf_p1 = pd.read_csv(phase1_cfg["mf_features_csv"], low_memory=False)
+                            df_zinc_p1 = pd.read_csv(phase1_cfg["zinc_features_csv"], low_memory=False)
+                            
+                            # Apply Phase 1's preprocessing (target exclusion, dedup, zero-variance filter)
+                            phase1_target = phase1_cfg.get("target", target)
+                            if "accession" in df_mf_p1.columns:
+                                df_mf_p1 = df_mf_p1[df_mf_p1["accession"] != phase1_target].copy()
+                            
+                            smiles_col_p1 = "canonical_smiles" if "canonical_smiles" in df_mf_p1.columns else "SMILES"
+                            df_mf_p1 = df_mf_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                            df_zinc_p1 = df_zinc_p1.drop_duplicates(subset=[smiles_col_p1], keep="first").copy()
+                            
+                            # Feature selection + zero-variance filtering
+                            feat_cols_mf = select_feature_columns(df_mf_p1)
+                            feat_cols_zinc = select_feature_columns(df_zinc_p1)
+                            common_feats = [c for c in feat_cols_mf if c in feat_cols_zinc]
+                            
+                            df_train_check = pd.concat([df_mf_p1[common_feats], df_zinc_p1[common_feats]], axis=0, ignore_index=True)
+                            phase2_features = remove_zero_variance_features(df_train_check, common_feats, variance_threshold=1e-12)
+                            
+                            # Reconstruct imputer if it was missing (Phase 4 didn't save it)
+                            if phase2_imputer is None:
+                                logger.info("    Reconstructing imputer from Phase 1/4 MF+ZINC data (median strategy)...")
+                                X_train_for_imputer = df_train_check[phase2_features].to_numpy(dtype=np.float64)
+                                phase2_imputer = SimpleImputer(strategy='median', copy=True)
+                                phase2_imputer.fit(X_train_for_imputer)
+                                logger.info("    ✓ Imputer reconstructed successfully")
+                            
+                            del df_train_check, df_mf_p1, df_zinc_p1
+                            gc.collect()
+                            logger.info(f"    Phase 1/2 features (after zero-variance filter): {len(phase2_features)}")
                         
                         # Transform Phase 5's data through Phase 2's preprocessing
                         logger.info("    Transforming Phase 5 data through Phase 2 preprocessing...")
