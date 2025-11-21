@@ -415,10 +415,18 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
         # Auto-detect best Phase 1 ABL1 model by highest EF@1%
+        # Only consider features models (with imputer.joblib), not fingerprints models
         best_ef1 = 0
         best_phase1_dir = None
         for run_dir in phase1_model_dir.glob("ABL1_*/"):
             metrics_file = run_dir / "metrics" / "metrics.json"
+            artifacts_dir = run_dir / "artifacts"
+            imputer_path = artifacts_dir / "imputer.joblib"
+            
+            # Skip if no imputer (fingerprints model)
+            if not imputer_path.exists():
+                continue
+                
             if metrics_file.exists():
                 try:
                     with metrics_file.open("r") as f:
@@ -584,10 +592,18 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
             
             # Auto-detect best Phase 1 ABL1 model by highest EF@1%
+            # Only consider features models (with imputer.joblib), not fingerprints models
             best_ef1 = 0
             best_phase1_dir = None
             for run_dir in phase1_model_dir.glob("ABL1_*/"):
                 metrics_file = run_dir / "metrics" / "metrics.json"
+                artifacts_dir = run_dir / "artifacts"
+                imputer_path = artifacts_dir / "imputer.joblib"
+                
+                # Skip if no imputer (fingerprints model)
+                if not imputer_path.exists():
+                    continue
+                    
                 if metrics_file.exists():
                     try:
                         with metrics_file.open("r") as f:
