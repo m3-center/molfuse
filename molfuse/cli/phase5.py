@@ -385,7 +385,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     logger.info(f"\n[2/6] Running {experiment_type} experiment...")
     
     if experiment_type == "tanimoto":
-        logger.info("Tanimoto Baseline: ECFP4 fingerprint similarity")
+        logger.info("Fingerprint Baseline: ECFP4 without UMAP (1-NN Jaccard)")
+        logger.info("  This tests whether dimensionality reduction (UMAP) is necessary for fingerprints")
+        logger.info("  Uses raw ECFP4 fingerprints with 1-NN scoring (Jaccard distance)")
         
         # Generate ECFP4 fingerprints
         logger.info("  Computing ECFP4 fingerprints...")
@@ -411,12 +413,12 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             mf_fps = mf_fps_full
             df_mf_for_scoring = df_mf_filtered.copy()
         
-        # Score via max Tanimoto similarity (chunked for memory efficiency)
-        logger.info("  Computing Tanimoto scores (chunked for large datasets)...")
+        # Score via 1-NN with Jaccard distance (consistent with Phase 1 fingerprint methodology)
+        logger.info("  Computing 1-NN scores in raw fingerprint space (Jaccard distance)...")
         logger.info(f"    Scoring {len(act_fps):,} actives vs {len(mf_fps):,} MF molecules...")
-        act_scores = tanimoto_similarity_max(act_fps, mf_fps, chunk_size=10000)
+        act_scores, _ = nn_min_distance_scores(mf_fps, act_fps, metric="jaccard")
         logger.info(f"    Scoring {len(zinc_fps):,} ZINC vs {len(mf_fps):,} MF molecules...")
-        zinc_scores = tanimoto_similarity_max(zinc_fps, mf_fps, chunk_size=10000)
+        zinc_scores, _ = nn_min_distance_scores(mf_fps, zinc_fps, metric="jaccard")
         logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
         logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
