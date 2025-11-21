@@ -417,38 +417,19 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  Loading Phase 1 best ABL1 model artifacts...")
         phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Auto-detect best Phase 1 ABL1 model by highest EF@1%
-        # Only consider features models (with imputer.joblib), not fingerprints models
-        best_ef1 = 0
-        best_phase1_dir = None
-        for run_dir in phase1_model_dir.glob("ABL1_*/"):
-            metrics_file = run_dir / "metrics" / "metrics.json"
-            artifacts_dir = run_dir / "artifacts"
-            imputer_path = artifacts_dir / "imputer.joblib"
-            
-            # Skip if no imputer (fingerprints model)
-            if not imputer_path.exists():
-                continue
-                
-            if metrics_file.exists():
-                try:
-                    with metrics_file.open("r") as f:
-                        metrics = json.load(f)
-                    if metrics.get("ef_1%", 0) > best_ef1:
-                        best_ef1 = metrics["ef_1%"]
-                        best_phase1_dir = run_dir
-                except Exception:
-                    continue
+        # Use the pre-determined best Phase 1 ABL1 model
+        best_model_name = "ABL1_UMAP_features_2d_nn10_md0p01_rep2"
+        best_phase1_dir = phase1_model_dir / best_model_name
         
-        if not best_phase1_dir:
-            logger.error("  No Phase 1 ABL1 model found - cannot run raw_descriptors baseline")
+        if not best_phase1_dir.exists():
+            logger.error(f"  Phase 1 model not found: {best_phase1_dir}")
             logger.info("  Creating empty results to mark as skipped")
             act_scores = np.array([])
             zinc_scores = np.array([])
         else:
-            logger.info(f"    Best Phase 1 ABL1 model: {best_phase1_dir.name} (EF@1%: {best_ef1:.2f})")
+            logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
             
-            # Load Phase 1 artifacts directly
+            # Load Phase 1 artifacts directly (use different variable name to avoid shadowing Phase 5's artifacts_dir)
             phase1_artifacts_dir = best_phase1_dir / "artifacts"
             
             if not phase1_artifacts_dir.exists():
@@ -623,8 +604,8 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             best_phase1_dir = None
             for run_dir in phase1_model_dir.glob("ABL1_*/"):
                 metrics_file = run_dir / "metrics" / "metrics.json"
-                artifacts_dir = run_dir / "artifacts"
-                imputer_path = artifacts_dir / "imputer.joblib"
+                phase1_check_artifacts = run_dir / "artifacts"
+                imputer_path = phase1_check_artifacts / "imputer.joblib"
                 
                 # Skip if no imputer (fingerprints model)
                 if not imputer_path.exists():
@@ -645,7 +626,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
-                logger.info(f"    Best Phase 1 ABL1 model: {best_phase1_dir.name} (EF@1%: {best_ef1:.2f})")
+                logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
                 
                 # Load Phase 1 artifacts
                 phase1_artifacts_dir = best_phase1_dir / "artifacts"
