@@ -271,11 +271,8 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         df_mf_filtered = df_mf_filtered[~df_mf_filtered[smiles_col].isin(active_smiles_set)].copy()
         logger.info(f"  After removing active SMILES: {len(df_mf_filtered):,} rows (removed {before_smiles - len(df_mf_filtered):,} promiscuous binders)")
         
-        # Apply affinity cutoff
-        if "Standard Value (nM)" in df_mf_filtered.columns:
-            mask_cut = pd.to_numeric(df_mf_filtered["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-            df_mf_filtered = df_mf_filtered[mask_cut].copy()
-            logger.info(f"  After affinity cutoff (≤{affinity_cutoff_nM} nM): {len(df_mf_filtered):,} rows")
+        # DO NOT apply affinity cutoff here - wait until after transformations (like Phase 1/2)
+        # Cutoff is for scoring only, not for data preprocessing
         
         # Deduplicate MF by SMILES (median aggregation)
         before = len(df_mf_filtered)
@@ -290,6 +287,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             logger.error(f"  This should never happen - actives must be excluded from MF")
             raise RuntimeError("Data leakage detected: actives found in MF reference set")
         logger.info(f"  ✓ Verified: Zero overlap between actives and MF cloud (no data leakage)")
+        logger.info(f"  Note: Affinity cutoff (≤{affinity_cutoff_nM} nM) will be applied to MF for scoring only (after transformations)")
         
         # For Tanimoto: load fingerprints separately for scoring
         if experiment_type == "tanimoto":
@@ -391,13 +389,27 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         
         # Generate ECFP4 fingerprints
         logger.info("  Computing ECFP4 fingerprints...")
-        logger.info(f"    Processing {len(df_mf):,} MF molecules...")
-        mf_fps = compute_ecfp4_fingerprints(df_mf[smiles_col].tolist(), radius=2, n_bits=2048)
+        logger.info(f"    Processing {len(df_mf):,} MF molecules (FULL cloud)...")
+        mf_fps_full = compute_ecfp4_fingerprints(df_mf[smiles_col].tolist(), radius=2, n_bits=2048)
         logger.info(f"    Processing {len(df_actives):,} actives...")
         act_fps = compute_ecfp4_fingerprints(df_actives[smiles_col].tolist(), radius=2, n_bits=2048)
         logger.info(f"    Processing {len(df_zinc):,} ZINC molecules...")
         zinc_fps = compute_ecfp4_fingerprints(df_zinc[zinc_smiles_col].tolist(), radius=2, n_bits=2048)
-        logger.info(f"    Fingerprints generated: MF={mf_fps.shape}, Actives={act_fps.shape}, ZINC={zinc_fps.shape}")
+        logger.info(f"    Fingerprints generated: MF_full={mf_fps_full.shape}, Actives={act_fps.shape}, ZINC={zinc_fps.shape}")
+        
+        # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
+        if "Standard Value (nM)" in df_mf_filtered.columns:
+            mask_cut = pd.to_numeric(df_mf_filtered["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+            df_mf_for_scoring = df_mf_filtered[mask_cut].copy()
+            logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to MF for scoring only")
+            logger.info(f"    MF for scoring: {len(df_mf_for_scoring):,} / {len(df_mf_filtered):,} compounds")
+            # Filter fingerprints to match scoring set
+            mf_fps = mf_fps_full[mask_cut.to_numpy(dtype=bool)]
+            logger.info(f"    Fingerprints for scoring: {mf_fps.shape}")
+        else:
+            logger.warning("  No affinity column found; using full MF cloud for scoring")
+            mf_fps = mf_fps_full
+            df_mf_for_scoring = df_mf_filtered.copy()
         
         # Score via max Tanimoto similarity (chunked for memory efficiency)
         logger.info("  Computing Tanimoto scores (chunked for large datasets)...")
@@ -512,10 +524,20 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         
                         logger.info(f"    Transformed shapes: MF={X_mf_scaled.shape}, actives={X_act_scaled.shape}, ZINC={X_zinc_scaled.shape}")
                         
+                        # Apply affinity cutoff to MF for scoring only (like Phase 1/2)
+                        if "Standard Value (nM)" in df_mf_filtered.columns:
+                            mask_cut = pd.to_numeric(df_mf_filtered["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+                            X_mf_for_scoring = X_mf_scaled[mask_cut.to_numpy(dtype=bool)]
+                            logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to MF for scoring only")
+                            logger.info(f"    MF for scoring: {X_mf_for_scoring.shape[0]:,} / {X_mf_scaled.shape[0]:,} compounds")
+                        else:
+                            logger.warning("  No affinity column found; using full MF cloud for scoring")
+                            X_mf_for_scoring = X_mf_scaled
+                        
                         # Score via 1-NN in high-D scaled space (NO UMAP transform)
                         logger.info("  Computing 1-NN scores in high-D scaled feature space...")
-                        act_scores, _ = nn_min_distance_scores(X_mf_scaled, X_act_scaled, metric="euclidean")
-                        zinc_scores, _ = nn_min_distance_scores(X_mf_scaled, X_zinc_scaled, metric="euclidean")
+                        act_scores, _ = nn_min_distance_scores(X_mf_for_scoring, X_act_scaled, metric="euclidean")
+                        zinc_scores, _ = nn_min_distance_scores(X_mf_for_scoring, X_zinc_scaled, metric="euclidean")
                         logger.info(f"    Actives: min={act_scores.min():.4f}, max={act_scores.max():.4f}, mean={act_scores.mean():.4f}")
                         logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
@@ -557,15 +579,14 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             df_mf_kinase = pd.read_csv(mf_features_csv, low_memory=False)
             logger.info(f"    Loaded kinase MF: {len(df_mf_kinase):,} rows")
             
-            # Apply same filtering as Phase 1 (remove target, apply cutoff, deduplicate)
+            # Apply same filtering as Phase 1 (remove target, deduplicate)
+            # DO NOT apply affinity cutoff here - wait until after transformations
             df_mf_kinase = df_mf_kinase[df_mf_kinase["accession"] != target].copy()
-            if "Standard Value (nM)" in df_mf_kinase.columns:
-                mask_cut = pd.to_numeric(df_mf_kinase["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
-                df_mf_kinase = df_mf_kinase[mask_cut].copy()
             mf_smiles_col = "canonical_smiles" if "canonical_smiles" in df_mf_kinase.columns else "SMILES"
             df_mf_kinase = df_mf_kinase.drop_duplicates(subset=[mf_smiles_col], keep="first").copy()
             mf_smiles = set(df_mf_kinase[mf_smiles_col].dropna())
-            logger.info(f"    Kinase MF cloud: {len(mf_smiles):,} unique SMILES")
+            logger.info(f"    Kinase MF cloud (FULL): {len(mf_smiles):,} unique SMILES")
+            logger.info(f"    Note: Affinity cutoff (≤{affinity_cutoff_nM} nM) will be applied after transformations")
             
             # Remove MF overlap from KW set
             before_mf = len(df_kw)
@@ -668,12 +689,23 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         gc.collect()
                         logger.info(f"    Phase 2 features: {len(phase2_features)}")
                         
-                        # Load Phase 2 MF embedding (100 nM cutoff)
-                        mf_embedding_path = phase1_artifacts_dir / "embedding_mf.csv"
-                        df_mf_embed = pd.read_csv(mf_embedding_path)
-                        embed_cols = [f"z{i}" for i in range(cfg["dim"])]
-                        X_mf_embed = df_mf_embed[embed_cols].values
-                        logger.info(f"    Loaded MF embedding: {X_mf_embed.shape}")
+                        # Transform FULL kinase MF through Phase 2 pipeline
+                        logger.info("    Transforming kinase MF through Phase 2 pipeline...")
+                        X_mf_kinase_raw = df_mf_kinase.reindex(columns=phase2_features).to_numpy(dtype=np.float64)
+                        X_mf_kinase_raw[~np.isfinite(X_mf_kinase_raw)] = np.nan
+                        X_mf_kinase_scaled = phase2_scaler.transform(phase2_imputer.transform(X_mf_kinase_raw))
+                        X_mf_kinase_embed = phase2_umap.transform(X_mf_kinase_scaled)
+                        logger.info(f"    Kinase MF embedding (FULL): {X_mf_kinase_embed.shape}")
+                        
+                        # Apply affinity cutoff to kinase MF for scoring only (like Phase 1/2)
+                        if "Standard Value (nM)" in df_mf_kinase.columns:
+                            mask_cut = pd.to_numeric(df_mf_kinase["Standard Value (nM)"], errors="coerce") <= affinity_cutoff_nM
+                            X_mf_embed = X_mf_kinase_embed[mask_cut.to_numpy(dtype=bool)]
+                            logger.info(f"  Applying affinity cutoff (≤{affinity_cutoff_nM} nM) to kinase MF for scoring only")
+                            logger.info(f"    Kinase MF for scoring: {X_mf_embed.shape[0]:,} / {X_mf_kinase_embed.shape[0]:,} compounds")
+                        else:
+                            logger.warning("  No affinity column found; using full kinase MF for scoring")
+                            X_mf_embed = X_mf_kinase_embed
                         
                         # Transform KW set through Phase 2 pipeline
                         logger.info("    Transforming KW set through Phase 2 pipeline...")
