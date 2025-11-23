@@ -44,6 +44,12 @@ for PHASE4_RUN_DIR in "${PHASE4_RUNS[@]}"; do
     FEATURES_FILE="$PHASE4_RUN_DIR/artifacts/features_used.txt"
     IMPUTER_FILE="$PHASE4_RUN_DIR/artifacts/imputer.joblib"
     
+    echo "DEBUG: Checking $RUN_NAME"
+    echo "  Features file: $FEATURES_FILE"
+    echo "  Exists: $([ -f "$FEATURES_FILE" ] && echo 'YES' || echo 'NO')"
+    echo "  Imputer file: $IMPUTER_FILE"
+    echo "  Exists: $([ -f "$IMPUTER_FILE" ] && echo 'YES' || echo 'NO')"
+    
     if [ -f "$FEATURES_FILE" ] && [ -f "$IMPUTER_FILE" ]; then
         echo "SKIP: $RUN_NAME (artifacts exist)"
         ((SKIPPED++))
@@ -51,15 +57,19 @@ for PHASE4_RUN_DIR in "${PHASE4_RUNS[@]}"; do
     fi
     
     # Submit job
-    JOB_ID=$(sbatch --parsable hpc/extract_phase4_features.sh "$PHASE4_RUN_DIR")
+    echo "  Submitting job for $RUN_NAME..."
+    JOB_ID=$(sbatch --parsable hpc/extract_phase4_features.sh "$PHASE4_RUN_DIR" 2>&1)
+    SUBMIT_EXIT=$?
     
-    if [ $? -eq 0 ]; then
+    if [ $SUBMIT_EXIT -eq 0 ]; then
         echo "SUBMITTED: $RUN_NAME (Job ID: $JOB_ID)"
         ((SUBMITTED++))
     else
-        echo "FAILED: $RUN_NAME (submission failed)"
+        echo "FAILED: $RUN_NAME (submission failed with exit code $SUBMIT_EXIT)"
+        echo "  Error: $JOB_ID"
         ((FAILED++))
     fi
+    echo ""
 done
 
 echo ""
