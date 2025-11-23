@@ -592,9 +592,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  Loading best model artifacts...")
         base_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Select replicate deterministically based on run-specific seed
-        rng = np.random.RandomState(random_seed)
-        replicate = rng.randint(1, 6)  # Random integer from 1 to 5
+        # Get replicate number from config (must match Phase 1/4 replicate)
+        replicate = cfg.get("replicate", 1)
+        logger.info(f"    Using replicate: {replicate}")
         
         # Support custom model directory templates (for Phase 4 expansion)
         model_dir_template = cfg.get("model_dir_template")
@@ -609,7 +609,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
             
         base_model_run_dir = base_model_dir / best_model_name
-        logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
+        logger.info(f"    Loading Phase 1/4 model: {best_model_name}")
         
         if not base_model_run_dir.exists():
             logger.error(f"  Base model not found: {base_model_run_dir}")
@@ -794,9 +794,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         logger.info("  Loading best model...")
         base_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
-        # Select replicate deterministically based on run-specific seed
-        rng = np.random.RandomState(random_seed)
-        replicate = rng.randint(1, 6)  # Random integer from 1 to 5
+        # Get replicate number from config (must match Phase 1/4 replicate)
+        replicate = cfg.get("replicate", 1)
+        logger.info(f"    Using replicate: {replicate}")
         
         # Support custom model directory templates (for Phase 4 expansion)
         model_dir_template = cfg.get("model_dir_template")
@@ -811,7 +811,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
             
         base_model_run_dir = base_model_dir / best_model_name
-        logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
+        logger.info(f"    Loading Phase 1/4 model: {best_model_name}")
         
         if not base_model_run_dir.exists():
             logger.error("  No Phase 1 ABL1 model found")
