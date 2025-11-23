@@ -40,12 +40,10 @@ echo "==========================================================================
 # Navigate to workspace
 cd "${SLURM_SUBMIT_DIR}"
 
-# Load Python environment
-module purge
-module load Anaconda3/2024.02-1
 
 # Activate conda environment (adjust name as needed)
-source activate molfuse
+source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+
 
 # Run extraction script
 echo ""
