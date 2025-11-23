@@ -2,27 +2,122 @@
 """
 Phase 5: Validation & Baseline Experiments
 
-Three critical controls to validate Phase 1/2 methodology:
-    1. Raw Fingerprints Baseline: 1-NN in raw ECFP4 space (no UMAP, Jaccard distance)
-    2. Raw Descriptors Baseline: 1-NN in high-D scaled space (no UMAP, Euclidean distance)
-    3. Negative Control: Non-kinase actives vs kinase model (tests database bias)
+Three critical validation experiments to test whether Phase 1's methodology is necessary:
 
-Research Questions:
-    1. Is dimensionality reduction (UMAP) necessary for fingerprints?
-       - Phase 1 fingerprints: ECFP4 → UMAP(20D) → 1-NN(Euclidean)
-       - Phase 5 raw_fingerprints: ECFP4 → 1-NN(Jaccard) in 2048D space
-    2. Is dimensionality reduction (UMAP) necessary for molecular descriptors?
-       - Phase 1 features: Mordred → UMAP(2D) → 1-NN(Euclidean)
-       - Phase 5 raw_descriptors: Mordred → 1-NN(Euclidean) in ~1600D space
-    3. Does the kinase model show database bias when tested on non-kinase ChEMBL compounds?
-       - Expected: EF@1% ≈ 1.0 (random performance) for non-kinase compounds
+================================================================================
+EXPERIMENT 1: "tanimoto" - Raw Fingerprint Baseline (Tanimoto Similarity)
+================================================================================
+Research Question:
+    "Is UMAP dimensionality reduction necessary for fingerprint-based screening?"
 
-Methodology:
-    - All experiments use Phase 1/2's optimal affinity cutoff (100 nM) for MF cloud scoring
-    - Cutoff applied AFTER transformations (for scoring only), not before
-    - Raw fingerprints and raw descriptors load Phase 1's best ABL1 models and skip UMAP
-    - Negative control tests kinase model on non-kinase KW sets (cross-validation approach)
-    - All experiments use Phase 1's preprocessing (imputer/scaler for features, parser for fingerprints)
+What Phase 5 Does (THIS EXPERIMENT):
+    - Loads: Phase 5 MF fingerprints + ZINC fingerprints + Target actives fingerprints
+    - Preprocessing: Parse ECFP4 strings to binary vectors (2048D)
+    - Scoring: Direct 1-NN in raw 2048D ECFP4 space using Jaccard distance
+    - NO dimensionality reduction (no UMAP)
+    - Uses Phase 5 data (same CSVs as Phase 1, but no model loading)
+
+What Phase 1 Does (COMPARISON):
+    - Loads: Phase 1 MF fingerprints + ZINC fingerprints + Target actives fingerprints
+    - Preprocessing: Parse ECFP4 → Fit UMAP(20D, Jaccard) on MF+ZINC → Transform all
+    - Scoring: 1-NN in 20D UMAP embedding using Euclidean distance
+    - WITH dimensionality reduction (UMAP reduces 2048D → 20D)
+
+Expected Outcome:
+    If Phase 5 EF@1% ≥ Phase 1 EF@1%, then UMAP is NOT necessary for fingerprints.
+
+Data Source:
+    - Phase 5 loads fingerprint CSVs directly (no Phase 1 model artifacts)
+    - Same data as Phase 1, but different processing pipeline
+
+================================================================================
+EXPERIMENT 2: "raw_descriptors" - Raw Descriptor Baseline (High-D Euclidean)
+================================================================================
+Research Question:
+    "Is UMAP dimensionality reduction necessary for descriptor-based screening?"
+
+What Phase 5 Does (THIS EXPERIMENT):
+    - Loads: Phase 1/4 model artifacts (imputer.joblib + scaler.joblib + features_used.txt)
+    - Loads: Phase 5 MF features + ZINC features + Target actives features
+    - Preprocessing: 
+        * Use Phase 1/4's exact feature list (from features_used.txt or reconstruction)
+        * Transform through Phase 1/4's imputer + scaler pipeline
+        * STOP HERE - do NOT apply UMAP transform
+    - Scoring: 1-NN in ~1460D scaled feature space using Euclidean distance
+    - NO dimensionality reduction (skips UMAP step)
+
+What Phase 1/4 Does (COMPARISON):
+    - Loads: Same MF/ZINC/actives feature CSVs
+    - Preprocessing:
+        * Select features, remove zero-variance
+        * Fit imputer + scaler on MF+ZINC
+        * Fit UMAP(2D or 5D) on scaled MF+ZINC
+        * Transform all data through full pipeline
+    - Scoring: 1-NN in 2D/5D UMAP embedding using Euclidean distance
+    - WITH dimensionality reduction (UMAP reduces ~1460D → 2D/5D)
+
+Expected Outcome:
+    If Phase 5 EF@1% ≥ Phase 1/4 EF@1%, then UMAP is NOT necessary for descriptors.
+
+Data Source:
+    - Phase 5 loads Phase 1/4 preprocessing artifacts (imputer, scaler, feature list)
+    - Phase 5 loads same feature CSVs as Phase 1/4
+    - Reuses Phase 1/4's preprocessing pipeline but STOPS before UMAP
+
+Model Selection:
+    - Config specifies which Phase 1/4 model to use via:
+        * phase2_best_model_dir: Parent directory (e.g., experiment_workspace_v4/phase1)
+        * model_dir_template: Template for run name (e.g., "umap_features_{target}_rep{replicate}")
+    - For Phase 1 ABL1 validation: Uses ABL1 best models
+    - For Phase 4 cross-target validation: Uses each target's best model
+
+================================================================================
+EXPERIMENT 3: "negative_control" - Database Bias Test (Cross-Target Validation)
+================================================================================
+Research Question:
+    "Does the kinase model artificially enrich compounds due to database bias?"
+
+What Phase 5 Does (THIS EXPERIMENT):
+    - Loads: Phase 1 ABL1 kinase model (imputer + scaler + UMAP + full MF kinase cloud)
+    - Loads: Non-kinase KW dataset as "actives" (e.g., Ion Channel, GPCR compounds)
+    - Loads: ZINC as decoys
+    - Preprocessing:
+        * Transform FULL kinase MF cloud through Phase 1 pipeline (imputer + scaler + UMAP)
+        * Apply affinity cutoff (≤100 nM) to kinase MF for scoring only
+        * Transform non-kinase KW set through Phase 1 pipeline
+        * Transform ZINC through Phase 1 pipeline
+    - Scoring: 
+        * Score non-kinase compounds (as "actives") against kinase model
+        * Score ZINC (as decoys) against kinase model
+        * Compute EF@1% treating non-kinase as positives
+
+What Phase 1 Does (COMPARISON):
+    - Loads: Phase 1 ABL1 kinase model
+    - Loads: ABL1 kinase actives as positives
+    - Loads: ZINC as decoys
+    - Scoring: Score kinase actives + ZINC against kinase model
+    - Expected: High EF@1% (kinase model enriches kinase compounds)
+
+Expected Outcome:
+    If Phase 5 EF@1% ≈ 1.0 (random performance), then NO database bias.
+    If Phase 5 EF@1% >> 1.0, then the model has database bias (enriches non-kinase compounds).
+
+Data Source:
+    - Phase 5 loads Phase 1 ABL1 model artifacts (ALL: imputer, scaler, UMAP)
+    - Phase 5 loads non-kinase KW dataset from config (negative_control_kw_csv)
+    - Phase 5 uses Phase 1's FULL kinase MF cloud (not Phase 5's target-specific MF)
+
+Critical Design:
+    - This is a TRUE negative control: non-kinase compounds should NOT be enriched
+    - Tests whether model learned kinase-specific patterns vs ChEMBL database artifacts
+
+================================================================================
+COMMON METHODOLOGY ACROSS ALL EXPERIMENTS:
+================================================================================
+- Affinity Cutoff: 100 nM applied to MF cloud FOR SCORING ONLY (not preprocessing)
+- Data Leakage Prevention: Actives excluded from MF and ZINC by SMILES
+- Metrics: EF@1%, EF@5%, ROC-AUC, PR-AUC
+- Random Seeds: Deterministic model selection for reproducibility
 
 Usage:
     python -m molfuse.cli.phase5 \\
@@ -393,9 +488,14 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
     logger.info(f"\n[2/6] Running {experiment_type} experiment...")
     
     if experiment_type == "tanimoto":
-        logger.info("Raw Fingerprint Baseline: 1-NN in raw ECFP4 space (no UMAP)")
-        logger.info("  This tests whether dimensionality reduction (UMAP) is necessary for fingerprints")
-        logger.info("  Scores in raw fingerprint space using Jaccard distance")
+        logger.info("="*80)
+        logger.info("EXPERIMENT 1: Raw Fingerprint Baseline (Tanimoto Similarity)")
+        logger.info("="*80)
+        logger.info("Research Question: Is UMAP necessary for fingerprint-based screening?")
+        logger.info("Phase 5 Method: 1-NN in raw 2048D ECFP4 space (Jaccard distance, NO UMAP)")
+        logger.info("Phase 1 Comparison: 1-NN in 20D UMAP embedding (Euclidean distance, WITH UMAP)")
+        logger.info("Data Source: Phase 5 MF/ZINC/actives fingerprint CSVs (no model loading)")
+        logger.info("="*80)
         
         # Use pre-loaded and filtered dataframes from Step 1
         # df_mf, df_zinc, df_actives are already assigned to the fingerprint dataframes
@@ -478,13 +578,19 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
     elif experiment_type == "raw_descriptors":
-        logger.info("Raw Descriptor Baseline: 1-NN in high-D scaled space (no UMAP)")
-        logger.info("  This tests whether dimensionality reduction (UMAP) is necessary")
-        logger.info("  Uses Phase 1/4 best model preprocessing, scores in high-D feature space")
+        logger.info("="*80)
+        logger.info("EXPERIMENT 2: Raw Descriptor Baseline (High-D Euclidean)")
+        logger.info("="*80)
+        logger.info("Research Question: Is UMAP necessary for descriptor-based screening?")
+        logger.info("Phase 5 Method: 1-NN in ~1460D scaled feature space (Euclidean, NO UMAP)")
+        logger.info("Phase 1/4 Comparison: 1-NN in 2D/5D UMAP embedding (Euclidean, WITH UMAP)")
+        logger.info("Data Source: Phase 1/4 model preprocessing (imputer+scaler+features) + Phase 5 feature CSVs")
+        logger.info("Model Loading: Reuses Phase 1/4 preprocessing pipeline, STOPS before UMAP transform")
+        logger.info("="*80)
         
         # Load Phase 1/4 best model artifacts (imputer + scaler, NOT UMAP)
         logger.info("  Loading best model artifacts...")
-        phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
+        base_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
         # Select replicate deterministically based on run-specific seed
         rng = np.random.RandomState(random_seed)
@@ -502,30 +608,30 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             # Legacy Phase 1 format
             best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
             
-        best_phase1_dir = phase1_model_dir / best_model_name
+        base_model_run_dir = base_model_dir / best_model_name
         logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
         
-        if not best_phase1_dir.exists():
-            logger.error(f"  Phase 1 model not found: {best_phase1_dir}")
+        if not base_model_run_dir.exists():
+            logger.error(f"  Base model not found: {base_model_run_dir}")
             logger.info("  Creating empty results to mark as skipped")
             act_scores = np.array([])
             zinc_scores = np.array([])
         else:
-            logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
+            logger.info(f"    Using base model: {base_model_run_dir.name}")
             
-            # Load Phase 1 artifacts directly (use different variable name to avoid shadowing Phase 5's artifacts_dir)
-            phase1_artifacts_dir = best_phase1_dir / "artifacts"
+            # Load artifacts from base model (Phase 1 or Phase 4)
+            base_model_artifacts_dir = base_model_run_dir / "artifacts"
             
-            if not phase1_artifacts_dir.exists():
-                logger.error(f"    Phase 1 artifacts not found: {phase1_artifacts_dir}")
+            if not base_model_artifacts_dir.exists():
+                logger.error(f"    Base model artifacts not found: {base_model_artifacts_dir}")
                 logger.info("    Creating empty results to mark as skipped")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
-                logger.info(f"    Loading Phase 1 artifacts from: {phase1_artifacts_dir.parent.name}")
+                logger.info(f"    Loading Phase 1 artifacts from: {base_model_artifacts_dir.parent.name}")
                 
                 # Load scaler (required)
-                scaler_path = phase1_artifacts_dir / "scaler.joblib"
+                scaler_path = base_model_artifacts_dir / "scaler.joblib"
                 
                 if not scaler_path.exists():
                     logger.error(f"    Scaler not found: {scaler_path}")
@@ -535,7 +641,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     phase2_scaler = joblib.load(scaler_path)
                     
                     # Load or reconstruct imputer
-                    imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                    imputer_path = base_model_artifacts_dir / "imputer.joblib"
                     if imputer_path.exists():
                         phase2_imputer = joblib.load(imputer_path)
                         logger.info("    Loaded imputer + scaler from Phase 1 pipeline")
@@ -546,8 +652,8 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                     
                     # Reconstruct Phase 1's feature list (same preprocessing as Phase 1/2)
                     # Load Phase 1/4 config to get exact preprocessing
-                    phase1_summary_path = phase1_artifacts_dir.parent / "logs" / "phase1_summary.json"
-                    phase4_summary_path = phase1_artifacts_dir.parent / "logs" / "phase4_summary.json"
+                    phase1_summary_path = base_model_artifacts_dir.parent / "logs" / "phase1_summary.json"
+                    phase4_summary_path = base_model_artifacts_dir.parent / "logs" / "phase4_summary.json"
                     
                     # Check for either phase1 or phase4 summary
                     if phase4_summary_path.exists():
@@ -566,9 +672,9 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         logger.info("    Reconstructing Phase 1/2 feature selection...")
                         
                         # Check if Phase 4 saved the feature list (extracted via scripts/extract_phase4_features.py)
-                        features_used_path = os.path.join(phase2_artifacts_dir, "features_used.txt")
+                        features_used_path = base_model_artifacts_dir / "features_used.txt"
                         
-                        if os.path.exists(features_used_path):
+                        if features_used_path.exists():
                             logger.info(f"    Loading exact feature list from {features_used_path}...")
                             with open(features_used_path, 'r') as f:
                                 phase2_features = [line.strip() for line in f if line.strip()]
@@ -601,7 +707,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                                 gc.collect()
                         else:
                             # Fall back to full reconstruction (legacy path, may have feature count mismatches)
-                            logger.warning(f"    features_used.txt not found in {phase2_artifacts_dir}")
+                            logger.warning(f"    features_used.txt not found in {base_model_artifacts_dir}")
                             logger.warning("    Falling back to feature reconstruction (may cause feature count mismatch)")
                             logger.warning("    Consider running: python scripts/extract_phase4_features.py <phase4_run_dir>")
                             
@@ -673,13 +779,20 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         logger.info(f"    ZINC: min={zinc_scores.min():.4f}, max={zinc_scores.max():.4f}, mean={zinc_scores.mean():.4f}")
         
     elif experiment_type == "negative_control":
-        logger.info("Negative Control: Non-kinase KW set vs kinase model")
-        logger.info("  This tests for database bias (kinase model scoring non-kinase compounds)")
-        logger.info("  Expected result: EF@1% ≈ 1.0 (random performance, no enrichment)")
+        logger.info("="*80)
+        logger.info("EXPERIMENT 3: Negative Control (Database Bias Test)")
+        logger.info("="*80)
+        logger.info("Research Question: Does the kinase model have database bias?")
+        logger.info("Phase 5 Method: Score non-kinase compounds against Phase 1 ABL1 kinase model")
+        logger.info("Phase 1 Comparison: Score kinase actives against Phase 1 ABL1 kinase model")
+        logger.info("Data Source: Phase 1 ABL1 FULL model (imputer+scaler+UMAP+kinase MF) + non-kinase KW dataset")
+        logger.info("Model Loading: Uses Phase 1 ABL1 complete pipeline INCLUDING UMAP transform")
+        logger.info("Expected Outcome: EF@1% ≈ 1.0 (random = no bias) or EF@1% >> 1.0 (bias detected)")
+        logger.info("="*80)
         
         # Load Phase 1/4 best model FIRST to get the correct MF source
         logger.info("  Loading best model...")
-        phase1_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
+        base_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
         
         # Select replicate deterministically based on run-specific seed
         rng = np.random.RandomState(random_seed)
@@ -697,27 +810,27 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
             # Legacy Phase 1 format
             best_model_name = f"ABL1_UMAP_features_2d_nn10_md0p01_rep{replicate}"
             
-        best_phase1_dir = phase1_model_dir / best_model_name
+        base_model_run_dir = base_model_dir / best_model_name
         logger.info(f"    Selected replicate: {replicate} (seed: {random_seed})")
         
-        if not best_phase1_dir.exists():
+        if not base_model_run_dir.exists():
             logger.error("  No Phase 1 ABL1 model found")
             act_scores = np.array([])
             zinc_scores = np.array([])
         else:
-            logger.info(f"    Using Phase 1 ABL1 model: {best_phase1_dir.name}")
+            logger.info(f"    Using Phase 1 ABL1 model: {base_model_run_dir.name}")
             
             # Load Phase 1/4 artifacts
-            phase1_artifacts_dir = best_phase1_dir / "artifacts"
-            phase1_summary_path = best_phase1_dir / "logs" / "phase1_summary.json"
-            phase4_summary_path = best_phase1_dir / "logs" / "phase4_summary.json"
+            base_model_artifacts_dir = base_model_run_dir / "artifacts"
+            phase1_summary_path = base_model_run_dir / "logs" / "phase1_summary.json"
+            phase4_summary_path = base_model_run_dir / "logs" / "phase4_summary.json"
             
             # Check for either phase1 or phase4 summary
             if phase4_summary_path.exists():
                 phase1_summary_path = phase4_summary_path
             
-            if not phase1_artifacts_dir.exists() or not phase1_summary_path.exists():
-                logger.error(f"    Phase 1/4 artifacts or summary not found: {best_phase1_dir}")
+            if not base_model_artifacts_dir.exists() or not phase1_summary_path.exists():
+                logger.error(f"    Phase 1/4 artifacts or summary not found: {base_model_run_dir}")
                 act_scores = np.array([])
                 zinc_scores = np.array([])
             else:
@@ -800,11 +913,11 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                         logger.info(f"    Removed KW overlap from ZINC: {before_kw_overlap:,} -> {len(df_zinc):,}")
                         
                         # Load scaler and UMAP (required)
-                        scaler_path = phase1_artifacts_dir / "scaler.joblib"
-                        umap_path = phase1_artifacts_dir / "umap_model.joblib"
+                        scaler_path = base_model_artifacts_dir / "scaler.joblib"
+                        umap_path = base_model_artifacts_dir / "umap_model.joblib"
                         
                         if not all([p.exists() for p in [scaler_path, umap_path]]):
-                            logger.error(f"    Missing artifacts in {phase1_artifacts_dir}")
+                            logger.error(f"    Missing artifacts in {base_model_artifacts_dir}")
                             act_scores = np.array([])
                             zinc_scores = np.array([])
                         else:
@@ -812,7 +925,7 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                             phase2_umap = joblib.load(umap_path)
                             
                             # Load or reconstruct imputer
-                            imputer_path = phase1_artifacts_dir / "imputer.joblib"
+                            imputer_path = base_model_artifacts_dir / "imputer.joblib"
                             if imputer_path.exists():
                                 phase2_imputer = joblib.load(imputer_path)
                                 logger.info("    Loaded imputer + scaler + UMAP from Phase 1 pipeline")
