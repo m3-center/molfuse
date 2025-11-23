@@ -2,10 +2,10 @@
 #SBATCH --job-name=extract_p4_feat
 #SBATCH --output=slurm_logs/extract_phase4_features_%j.out
 #SBATCH --error=slurm_logs/extract_phase4_features_%j.err
-#SBATCH --time=00:30:00
-#SBATCH --mem=16G
-#SBATCH --cpus-per-task=1
-#SBATCH --partition=compute
+#SBATCH --time=01:00:00
+#SBATCH --mem=300G
+#SBATCH --cpus-per-task=64
+#SBATCH --partition=hpc
 
 # Extract Phase 4 features for a single run
 # Usage: sbatch hpc/extract_single_phase4_features.sh <phase4_run_dir>
