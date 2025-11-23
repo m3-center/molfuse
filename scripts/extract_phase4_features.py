@@ -32,6 +32,9 @@ import joblib
 import pandas as pd
 from sklearn.impute import SimpleImputer
 
+# Add parent directory to path to import molfuse
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 # Import Phase 4's preprocessing functions
 from molfuse.data.prep import (
     select_feature_columns,
