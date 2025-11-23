@@ -11,8 +11,6 @@
 # Usage: sbatch hpc/extract_single_phase4_features.sh <phase4_run_dir>
 # Example: sbatch hpc/extract_single_phase4_features.sh experiment_workspace_v4/phase4/cross_target/umap_features_Lyase_rep4
 
-set -euo pipefail
-
 # Get phase4 run directory from command line argument
 PHASE4_RUN_DIR="${1:-}"
 
