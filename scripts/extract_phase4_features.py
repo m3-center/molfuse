@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Extract feature lists from Phase 4 runs.
+Extract feature lists and reconstruct imputers from Phase 4 runs.
 
-This script reconstructs the exact feature preprocessing pipeline used in Phase 4
-and saves the final feature list to `features_used.txt` in the artifacts directory.
+This script reconstructs Phase 4's exact preprocessing pipeline and saves:
+- features_used.txt: The exact features Phase 4 used after zero-variance filtering
+- imputer.joblib: The imputer Phase 4 fitted (required by scaler, but Phase 4 didn't save it)
 
-**SAFETY**: This script is READ-ONLY except for creating `features_used.txt`.
-It will NOT overwrite or modify any existing Phase 4 artifacts (embeddings, models, etc.).
+**SAFETY**: This script is READ-ONLY except for creating features_used.txt and imputer.joblib.
+It will NOT overwrite or modify any existing Phase 4 artifacts (embeddings, scaler, UMAP model).
 
 Usage:
     # Single run
@@ -150,13 +151,32 @@ def extract_features_from_phase4_run(phase4_run_dir: Path, force: bool = False) 
                     print("Aborted.")
                     return
     
+    # Reconstruct and save imputer (Phase 4 didn't save it, but scaler expects it)
+    print("\nReconstructing imputer...")
+    imputer_file = artifacts_dir / "imputer.joblib"
+    
+    if imputer_file.exists() and not force:
+        print(f"  Imputer already exists: {imputer_file}")
+    else:
+        from sklearn.impute import SimpleImputer
+        import joblib
+        
+        # Fit imputer on MF+ZINC with final features (EXACT same data Phase 4 used)
+        X_train = df_train[final_features].to_numpy(dtype=float, copy=False)
+        imputer = SimpleImputer(strategy='median', copy=True)
+        imputer.fit(X_train)
+        
+        # Save imputer
+        joblib.dump(imputer, imputer_file)
+        print(f"  ✓ Saved imputer to: {imputer_file}")
+    
     # Save feature list (SAFE: only creates new file, doesn't modify existing artifacts)
     print(f"\nSaving feature list to: {features_file}")
     with open(features_file, "w") as f:
         for feat in final_features:
             f.write(f"{feat}\n")
     
-    print(f"✓ SUCCESS: Saved {len(final_features)} features")
+    print(f"✓ SUCCESS: Saved {len(final_features)} features + imputer")
     print(f"{'='*80}\n")
 
 
