@@ -2,7 +2,7 @@
 # Submit all Phase 4 feature extraction jobs to SLURM
 # Usage: bash hpc/submit_extract_phase4_features.sh [phase4_parent_dir]
 
-set -e
+# Note: Not using 'set -e' to allow loop to continue on individual failures
 
 PHASE4_PARENT_DIR="${1:-experiment_workspace_v4/phase4/cross_target}"
 
