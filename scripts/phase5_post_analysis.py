@@ -173,64 +173,56 @@ def compute_summary_stats(results: List[Dict]) -> Dict[str, Tuple[float, float]]
     return stats_dict
 
 
-def perform_significance_tests(
+def perform_pairwise_significance_tests(
     results_dict: Dict[str, List[Dict]],
-    baseline_exp: str = "tanimoto",
-) -> Tuple[Dict[str, Dict[str, float]], List[str]]:
+) -> Tuple[Dict[Tuple[str, str], Dict[str, float]], List[str]]:
     """
-    Perform paired t-tests comparing each experiment to baseline.
+    Perform pairwise t-tests between all Phase 5 experiments.
     
     Returns:
-        Tuple of (p_values dict, list of warning messages)
+        Tuple of (p_values dict keyed by (exp1, exp2), list of warning messages)
     """
     p_values = {}
     warning_messages = []
     
-    baseline_results = results_dict.get(baseline_exp, [])
-    if not baseline_results:
-        print(f"WARNING: No results for baseline experiment '{baseline_exp}'")
-        return {}, []
+    # All pairwise comparisons between the 3 experiments
+    comparisons = [
+        ("tanimoto", "raw_descriptors"),
+        ("tanimoto", "negative_control"),
+        ("raw_descriptors", "negative_control"),
+    ]
     
-    for exp_type in EXPERIMENT_ORDER:
-        if exp_type == baseline_exp:
+    for exp1, exp2 in comparisons:
+        exp1_results = results_dict.get(exp1, [])
+        exp2_results = results_dict.get(exp2, [])
+        
+        if not exp1_results or not exp2_results:
             continue
         
-        exp_results = results_dict.get(exp_type, [])
-        if not exp_results:
-            continue
-        
-        p_values[exp_type] = {}
+        p_values[(exp1, exp2)] = {}
         
         for metric in METRICS:
-            baseline_vals = [r.get(metric, np.nan) for r in baseline_results]
-            exp_vals = [r.get(metric, np.nan) for r in exp_results]
+            exp1_vals = [r.get(metric, np.nan) for r in exp1_results]
+            exp2_vals = [r.get(metric, np.nan) for r in exp2_results]
             
             # Remove NaNs
-            baseline_vals = [v for v in baseline_vals if not np.isnan(v)]
-            exp_vals = [v for v in exp_vals if not np.isnan(v)]
+            exp1_vals = [v for v in exp1_vals if not np.isnan(v)]
+            exp2_vals = [v for v in exp2_vals if not np.isnan(v)]
             
-            if len(baseline_vals) > 1 and len(exp_vals) > 1 and len(baseline_vals) == len(exp_vals):
-                # Paired t-test (assumes same number of replicates)
-                with warnings.catch_warnings(record=True) as w:
-                    warnings.simplefilter("always")
-                    t_stat, p_val = stats.ttest_rel(exp_vals, baseline_vals)
-                    if w:
-                        for warning in w:
-                            msg = f"Statistical test warning for {exp_type} vs {baseline_exp} ({metric}): {warning.message}"
-                            warning_messages.append(msg)
-                p_values[exp_type][metric] = p_val
-            elif len(baseline_vals) > 1 and len(exp_vals) > 1:
-                # Independent t-test (different number of replicates)
-                with warnings.catch_warnings(record=True) as w:
-                    warnings.simplefilter("always")
-                    t_stat, p_val = stats.ttest_ind(exp_vals, baseline_vals)
-                    if w:
-                        for warning in w:
-                            msg = f"Statistical test warning for {exp_type} vs {baseline_exp} ({metric}): {warning.message}"
-                            warning_messages.append(msg)
-                p_values[exp_type][metric] = p_val
-            else:
-                p_values[exp_type][metric] = np.nan
+            if len(exp1_vals) < 2 or len(exp2_vals) < 2:
+                p_values[(exp1, exp2)][metric] = np.nan
+                continue
+            
+            # Use independent t-test (different sample sizes likely)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                t_stat, p_val = stats.ttest_ind(exp1_vals, exp2_vals)
+                if w:
+                    for warning in w:
+                        msg = f"Statistical test warning for {exp1} vs {exp2} ({metric}): {warning.message}"
+                        warning_messages.append(msg)
+            
+            p_values[(exp1, exp2)][metric] = p_val
     
     return p_values, warning_messages
 
@@ -244,8 +236,8 @@ def compute_raw_descriptors_comparison(
     results_dict: Dict[str, List[Dict]],
 ) -> str:
     """
-    Generate detailed per-MF comparison table for raw_descriptors vs tanimoto baseline.
-    Shows absolute and relative change in EF@1% for each MF class.
+    Generate detailed per-MF comparison table for raw_descriptors experiment.
+    Shows EF@1% values for each MF class (all raw_descriptors use same kinase target).
     """
     raw_desc_results = results_dict.get("raw_descriptors", [])
     tanimoto_results = results_dict.get("tanimoto", [])
@@ -319,8 +311,8 @@ def compute_negative_control_comparison(
     results_dict: Dict[str, List[Dict]],
 ) -> str:
     """
-    Generate summary comparison for negative_control vs tanimoto baseline.
-    Shows total absolute and relative change in EF@1%.
+    Generate summary comparison for negative_control experiment.
+    Shows EF@1% statistics across all non-kinase control classes.
     """
     neg_results = results_dict.get("negative_control", [])
     tanimoto_results = results_dict.get("tanimoto", [])
@@ -625,7 +617,7 @@ def format_p_value(p_val: float) -> str:
 
 def generate_latex_table(
     summary_stats: Dict[str, Dict],
-    p_values: Dict[str, Dict],
+    p_values: Dict[Tuple[str, str], Dict],
     stratified_stats: Dict[str, Dict[str, Tuple[float, float]]],
 ) -> str:
     """Generate LaTeX table for Phase 5 results with stratified potency tiers."""
@@ -644,7 +636,7 @@ def generate_latex_table(
     lines.append(" & (Overall) & (Overall) & EF@1\\% & EF@1\\% & EF@1\\% \\\\")
     lines.append("\\hline")
     
-    # Data rows
+    # Data rows (no significance markers - see pairwise comparisons separately)
     for exp_type in EXPERIMENT_ORDER:
         if exp_type not in summary_stats or not summary_stats[exp_type]:
             # Skip experiments with no data
@@ -656,21 +648,11 @@ def generate_latex_table(
         # Overall EF@1%
         ef1_mean, ef1_std = summary_stats[exp_type].get("ef_1%", (np.nan, np.nan))
         ef1_str = format_metric_value(ef1_mean, ef1_std, "ef_1%")
-        if exp_type in p_values and "ef_1%" in p_values[exp_type]:
-            p_val = p_values[exp_type]["ef_1%"]
-            if not np.isnan(p_val) and p_val < 0.05:
-                sig_marker = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
-                ef1_str += f"$^{{{sig_marker}}}$"
         row += f" & {ef1_str}"
         
         # Overall ROC-AUC
         roc_mean, roc_std = summary_stats[exp_type].get("roc_auc", (np.nan, np.nan))
         roc_str = format_metric_value(roc_mean, roc_std, "roc_auc")
-        if exp_type in p_values and "roc_auc" in p_values[exp_type]:
-            p_val = p_values[exp_type]["roc_auc"]
-            if not np.isnan(p_val) and p_val < 0.05:
-                sig_marker = "***" if p_val < 0.001 else ("**" if p_val < 0.01 else "*")
-                roc_str += f"$^{{{sig_marker}}}$"
         row += f" & {roc_str}"
         
         # Stratified tier EF@1%
@@ -689,9 +671,8 @@ def generate_latex_table(
     lines.append("\\end{tabular}")
     lines.append("\\end{table}")
     lines.append("")
-    lines.append("% Significance markers: * p < 0.05, ** p < 0.01, *** p < 0.001")
-    lines.append("% Comparison: Each experiment vs Tanimoto Baseline")
     lines.append("% Potency tiers in nM: High <100, Medium 100-1000, Low 1000-100000")
+    lines.append("% For pairwise statistical significance, see text report")
     lines.append("% Note: Experiments with no completed runs are excluded from the table")
     
     return "\n".join(lines)
@@ -699,7 +680,7 @@ def generate_latex_table(
 
 def generate_text_report(
     summary_stats: Dict[str, Dict],
-    p_values: Dict[str, Dict],
+    p_values: Dict[Tuple[str, str], Dict],
     results_dict: Dict[str, List[Dict]],
 ) -> str:
     """Generate human-readable text report for LaTeX inclusion."""
@@ -742,23 +723,21 @@ def generate_text_report(
     lines.append("")
     lines.append("="*80)
     
-    # Statistical comparisons
+    # Pairwise statistical comparisons
     if p_values:
-        lines.append("\nSTATISTICAL SIGNIFICANCE (vs Tanimoto Baseline):")
+        lines.append("\nPAIRWISE STATISTICAL SIGNIFICANCE:")
         lines.append("-" * 80)
         
-        for exp_type in EXPERIMENT_ORDER:
-            if exp_type not in p_values or exp_type == "tanimoto":
-                continue
-            
-            exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
-            lines.append(f"\n{exp_name}:")
+        for (exp1, exp2), metrics in p_values.items():
+            exp1_name = EXPERIMENT_NAMES.get(exp1, exp1)
+            exp2_name = EXPERIMENT_NAMES.get(exp2, exp2)
+            lines.append(f"\n{exp1_name} vs {exp2_name}:")
             
             for metric in METRICS:
-                if metric not in p_values[exp_type]:
+                if metric not in metrics:
                     continue
                 
-                p_val = p_values[exp_type][metric]
+                p_val = metrics[metric]
                 p_str = format_p_value(p_val)
                 metric_name = METRIC_NAMES[metric].replace("\\%", "%").replace("\\", "")
                 lines.append(f"  {metric_name:15s}: p = {p_str}")
@@ -846,10 +825,10 @@ def generate_text_report(
 
 def generate_latex_text_snippet(
     summary_stats: Dict[str, Dict],
-    p_values: Dict[str, Dict],
+    p_values: Dict[Tuple[str, str], Dict],
     stratified_stats: Dict[str, Dict[str, Tuple[float, float]]],
 ) -> str:
-    """Generate concise LaTeX text snippet for Results section with Phase 2 comparison and tier scores."""
+    """Generate concise LaTeX text snippet for Results section with pairwise comparisons."""
     lines = []
     
     lines.append("% LaTeX snippet for Results/Bias Analysis section")
@@ -857,17 +836,6 @@ def generate_latex_text_snippet(
     lines.append("% Note: Incomplete experiments will show [INCOMPLETE] markers")
     lines.append("")
     lines.append("\\subsection{Validation \\& Baseline Experiments}")
-    lines.append("")
-    
-    # Phase 2 reference values (from best ABL1 model results)
-    phase2_ef1_mean = 39.7  # Placeholder - update with actual Phase 2 ABL1 best model EF@1%
-    phase2_tier_high = 45.7  # Placeholder - update with actual Tier 1 (high potency) EF@1%
-    phase2_tier_medium = 39.5  # Placeholder - update with actual Tier 2 (medium potency) EF@1%
-    phase2_tier_low = 31.0  # Placeholder - update with actual Tier 3 (low potency) EF@1%
-    
-    lines.append("% Phase 2 Reference (MolFuSE with UMAP, 100 nM cutoff, ABL1):")
-    lines.append(f"% Overall EF@1\\%: {phase2_ef1_mean:.1f}")
-    lines.append(f"% Tier Stratified EF@1\\%: High (<100 nM): {phase2_tier_high:.1f}, Medium (100-1000 nM): {phase2_tier_medium:.1f}, Low (1000-100K nM): {phase2_tier_low:.1f}")
     lines.append("")
     
     # Check data availability
@@ -1094,13 +1062,14 @@ def main():
         else:
             print(f"  ✗ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: No data (skipped)")
     
-    # Perform significance tests
-    print("\nPerforming statistical tests...")
-    p_values, test_warnings = perform_significance_tests(results_dict, baseline_exp="tanimoto")
+    # Perform pairwise significance tests between the 3 Phase 5 experiments
+    print("\nPerforming pairwise statistical tests between Phase 5 experiments...")
+    p_values, test_warnings = perform_pairwise_significance_tests(results_dict)
     if p_values:
-        print(f"  Computed {sum(len(v) for v in p_values.values())} pairwise comparisons")
+        n_comparisons = sum(len(metrics) for metrics in p_values.values())
+        print(f"  Computed {n_comparisons} pairwise metric comparisons across {len(p_values)} experiment pairs")
     else:
-        print("  No comparisons (insufficient data or missing baseline)")
+        print("  No comparisons (insufficient data)")
     
     if test_warnings:
         print("\nStatistical Test Warnings:")
