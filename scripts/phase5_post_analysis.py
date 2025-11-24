@@ -342,11 +342,17 @@ def compute_baseline_comparisons(
     lines.append("="*80)
     
     # Tanimoto: Phase 5 raw ECFP4 vs Phase 1 ECFP4+UMAP
-    if "tanimoto" in phase5_summary_stats and "tanimoto" in phase1_summary_stats:
+    if "tanimoto" in phase5_summary_stats:
+        has_baseline = "tanimoto" in phase1_summary_stats
+        
         p5_ef1_mean, p5_ef1_std = phase5_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
-        p1_ef1_mean, p1_ef1_std = phase1_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         p5_roc_mean, p5_roc_std = phase5_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
-        p1_roc_mean, p1_roc_std = phase1_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
+        
+        if has_baseline:
+            p1_ef1_mean, p1_ef1_std = phase1_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+            p1_roc_mean, p1_roc_std = phase1_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
+        else:
+            p1_ef1_mean = p1_ef1_std = p1_roc_mean = p1_roc_std = np.nan
         
         if not np.isnan(p5_ef1_mean) and not np.isnan(p1_ef1_mean):
             abs_delta = p5_ef1_mean - p1_ef1_mean
@@ -696,61 +702,70 @@ def generate_latex_table(
     summary_stats: Dict[str, Dict],
     p_values: Dict[str, Dict],
     stratified_stats: Dict[str, Dict[str, Tuple[float, float]]],
+    phase1_summary_stats: Dict[str, Dict] = None,
 ) -> str:
-    """Generate LaTeX table for Phase 5 results with stratified potency tiers."""
+    """Generate LaTeX table for Phase 5 results with Phase 1/4 baseline comparison."""
     lines = []
     
     lines.append("\\begin{table}[htbp]")
     lines.append("\\centering")
-    lines.append("\\caption{Phase 5 Validation \\& Baseline Experiments: Overall and Stratified Metrics}")
+    lines.append("\\caption{Phase 5 Validation \\& Baseline Experiments vs Phase 1/4 Baselines}")
     lines.append("\\label{tab:phase5_bias}")
-    # Columns: Experiment | Overall EF@1% | Overall ROC-AUC | High Tier EF@1% | Medium Tier EF@1% | Low Tier EF@1%
-    lines.append("\\begin{tabular}{lccccc}")
+    # Simplified table: Method | EF@1% | ROC-AUC | p-value
+    lines.append("\\begin{tabular}{lccc}")
     lines.append("\\hline")
     
     # Header
-    lines.append("Experiment & EF@1\\% & ROC-AUC & High (<100) & Medium (100-1K) & Low (1-100K) \\\\")
-    lines.append(" & (Overall) & (Overall) & EF@1\\% & EF@1\\% & EF@1\\% \\\\")
+    lines.append("Method & EF@1\\% & ROC-AUC & p-value \\\\")
     lines.append("\\hline")
     
-    # Data rows (no significance markers - see pairwise comparisons separately)
-    for exp_type in EXPERIMENT_ORDER:
-        if exp_type not in summary_stats or not summary_stats[exp_type]:
-            # Skip experiments with no data
-            continue
+    # Tanimoto comparison
+    if "tanimoto" in summary_stats:
+        p5_ef1 = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        p5_roc = summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
         
-        exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
-        row = exp_name
+        lines.append("\\multicolumn{4}{l}{\\textbf{Fingerprint Comparison (Tanimoto):}} \\\\")
+        lines.append(f"Phase 5 (raw ECFP4, NO UMAP) & {format_metric_value(*p5_ef1, 'ef_1%')} & {format_metric_value(*p5_roc, 'roc_auc')} & — \\\\")
         
-        # Overall EF@1%
-        ef1_mean, ef1_std = summary_stats[exp_type].get("ef_1%", (np.nan, np.nan))
-        ef1_str = format_metric_value(ef1_mean, ef1_std, "ef_1%")
-        row += f" & {ef1_str}"
+        if phase1_summary_stats and "tanimoto" in phase1_summary_stats:
+            p1_ef1 = phase1_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+            p1_roc = phase1_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
+            p_val = p_values.get("tanimoto", {}).get("ef_1%", np.nan) if p_values else np.nan
+            lines.append(f"Phase 1 (ECFP4+UMAP) & {format_metric_value(*p1_ef1, 'ef_1%')} & {format_metric_value(*p1_roc, 'roc_auc')} & {format_p_value(p_val)} \\\\")
         
-        # Overall ROC-AUC
-        roc_mean, roc_std = summary_stats[exp_type].get("roc_auc", (np.nan, np.nan))
-        roc_str = format_metric_value(roc_mean, roc_std, "roc_auc")
-        row += f" & {roc_str}"
-        
-        # Stratified tier EF@1%
-        if exp_type in stratified_stats:
-            tier_stats = stratified_stats[exp_type]
-            for tier in TIER_ORDER:
-                tier_mean, tier_std = tier_stats.get(tier, (np.nan, np.nan))
-                tier_str = format_metric_value(tier_mean, tier_std, "ef_1%")
-                row += f" & {tier_str}"
-        else:
-            row += " & N/A & N/A & N/A"
-        
-        lines.append(row + " \\\\")
+        lines.append("\\hline")
     
-    lines.append("\\hline")
+    # Raw descriptors comparison
+    if "raw_descriptors" in summary_stats:
+        p5_ef1 = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
+        p5_roc = summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
+        
+        lines.append("\\multicolumn{4}{l}{\\textbf{Feature Comparison (Raw Descriptors):}} \\\\")
+        lines.append(f"Phase 5 (raw features, NO UMAP) & {format_metric_value(*p5_ef1, 'ef_1%')} & {format_metric_value(*p5_roc, 'roc_auc')} & — \\\\")
+        
+        if phase1_summary_stats and "raw_descriptors" in phase1_summary_stats:
+            p1_ef1 = phase1_summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
+            p1_roc = phase1_summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
+            p_val = p_values.get("raw_descriptors", {}).get("ef_1%", np.nan) if p_values else np.nan
+            lines.append(f"Phase 4 (features+UMAP) & {format_metric_value(*p1_ef1, 'ef_1%')} & {format_metric_value(*p1_roc, 'roc_auc')} & {format_p_value(p_val)} \\\\")
+        
+        lines.append("\\hline")
+    
+    # Negative control (no baseline comparison)
+    if "negative_control" in summary_stats:
+        nc_ef1 = summary_stats["negative_control"].get("ef_1%", (np.nan, np.nan))
+        nc_roc = summary_stats["negative_control"].get("roc_auc", (np.nan, np.nan))
+        
+        lines.append("\\multicolumn{4}{l}{\\textbf{Database Bias Control:}} \\\\")
+        lines.append(f"Non-kinase actives vs kinase model & {format_metric_value(*nc_ef1, 'ef_1%')} & {format_metric_value(*nc_roc, 'roc_auc')} & N/A \\\\")
+        lines.append("\\hline")
+    
     lines.append("\\end{tabular}")
     lines.append("\\end{table}")
     lines.append("")
-    lines.append("% Potency tiers in nM: High <100, Medium 100-1000, Low 1000-100000")
-    lines.append("% For pairwise statistical significance, see text report")
-    lines.append("% Note: Experiments with no completed runs are excluded from the table")
+    lines.append("% p-value from independent t-test comparing Phase 5 (no UMAP) vs Phase 1/4 (with UMAP)")
+    lines.append("% *p<0.05, **p<0.01, ***p<0.001")
+    lines.append("% Phase 5 uses ABL1 kinase as target for all experiments")
     
     return "\n".join(lines)
 
@@ -1150,7 +1165,7 @@ def main():
     print("Generating reports...")
     
     text_report = generate_text_report(summary_stats, p_values, results_dict, phase1_summary_stats)
-    latex_table = generate_latex_table(summary_stats, p_values, stratified_stats)
+    latex_table = generate_latex_table(summary_stats, p_values, stratified_stats, phase1_summary_stats)
     latex_snippet = generate_latex_text_snippet(summary_stats, p_values, stratified_stats, phase1_summary_stats)
     
     # Write output
