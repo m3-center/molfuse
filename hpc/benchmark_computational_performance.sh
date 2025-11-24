@@ -40,7 +40,7 @@ echo ""
 # Paths
 WORKSPACE="experiment_workspace_v4"
 ZINC_FP_CSV="output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv"
-ZINC_FEAT_CSV="output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features_2D.csv"
+ZINC_FEAT_CSV="output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv"
 PHASE1_RUN="ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep1"
 PHASE4_RUN="umap_features_Transferase_rep1"
 OUTPUT_DIR="reporting/computational_benchmark"
