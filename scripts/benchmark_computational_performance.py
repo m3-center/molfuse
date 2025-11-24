@@ -338,11 +338,12 @@ def run_benchmark(
         phase1_feat_config = json.load(f)["config"]
     
     mf_feat_full, _ = load_features(Path(phase1_feat_config["mf_features_csv"]))
-    # Filter to target (ABL1)
-    mf_df = pd.read_csv(phase1_feat_config["mf_features_csv"], low_memory=False)
-    target = phase1_feat_config["target"]
-    target_mask = mf_df["accession"] == target
-    mf_feat_full = mf_feat_full[target_mask.values[:len(mf_feat_full)]]
+    
+    # For Phase 1, the MF features CSV contains only the target protein's data
+    # No need to filter - just use all rows
+    print(f"  Loaded MF features: {mf_feat_full.shape}")
+    
+    # Scale the full MF feature set
     mf_feat_scaled = scaler.transform(mf_feat_full)
     
     print(f"  Scaler loaded")
