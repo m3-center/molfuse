@@ -168,12 +168,19 @@ def load_phase1_reference_results(
     phase1_dir = workspace_dir / "phase1"
     phase4_dir = workspace_dir / "phase4" / "cross_target"
     
+    print(f"  DEBUG: Looking for Phase 1 at: {phase1_dir}")
+    print(f"  DEBUG: Looking for Phase 4 at: {phase4_dir}")
+    print(f"  DEBUG: Phase 1 exists: {phase1_dir.exists()}")
+    print(f"  DEBUG: Phase 4 exists: {phase4_dir.exists()}")
+    
     reference_results = {}
     
     # For each Phase 5 experiment type, find corresponding Phase 1/4 runs
     for exp_type, phase5_runs in phase5_results.items():
         if not phase5_runs:
             continue
+        
+        print(f"  DEBUG: Processing {exp_type} with {len(phase5_runs)} Phase 5 runs")
         
         ref_runs = []
         
@@ -190,6 +197,8 @@ def load_phase1_reference_results(
                 # Load Phase 1 best fingerprint model: ABL1_UMAP_fingerprints_20d_nn10_md0p0
                 run_name = f"ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep{replicate}"
                 run_dir = phase1_dir / run_name
+                print(f"    DEBUG: Tanimoto - looking for: {run_dir}")
+                print(f"    DEBUG: Exists: {run_dir.exists()}")
                 
                 if run_dir.exists():
                     summary_path = run_dir / "logs" / "phase1_summary.json"
@@ -197,10 +206,14 @@ def load_phase1_reference_results(
                         # Try metrics.json as fallback
                         summary_path = run_dir / "metrics" / "metrics.json"
                     
+                    print(f"    DEBUG: Summary path: {summary_path}")
+                    print(f"    DEBUG: Summary exists: {summary_path.exists()}")
+                    
                     if summary_path.exists():
                         try:
                             with summary_path.open("r") as f:
                                 ref_summary = json.load(f)
+                            print(f"    DEBUG: Successfully loaded tanimoto baseline for rep{replicate}")
                         except Exception as e:
                             print(f"  Warning: Could not load {summary_path}: {e}")
                 
@@ -208,6 +221,8 @@ def load_phase1_reference_results(
                 # Load Phase 4 features+UMAP run: umap_features_{keyword}_rep{replicate}
                 run_name = f"umap_features_{keyword}_rep{replicate}"
                 run_dir = phase4_dir / run_name
+                print(f"    DEBUG: Raw descriptors - looking for: {run_dir}")
+                print(f"    DEBUG: Exists: {run_dir.exists()}")
                 
                 if run_dir.exists():
                     summary_path = run_dir / "logs" / "phase4_summary.json"
@@ -215,10 +230,14 @@ def load_phase1_reference_results(
                         # Try metrics.json as fallback
                         summary_path = run_dir / "metrics" / "metrics.json"
                     
+                    print(f"    DEBUG: Summary path: {summary_path}")
+                    print(f"    DEBUG: Summary exists: {summary_path.exists()}")
+                    
                     if summary_path.exists():
                         try:
                             with summary_path.open("r") as f:
                                 ref_summary = json.load(f)
+                            print(f"    DEBUG: Successfully loaded raw_descriptors baseline for {keyword} rep{replicate}")
                         except Exception as e:
                             print(f"  Warning: Could not load {summary_path}: {e}")
                 
