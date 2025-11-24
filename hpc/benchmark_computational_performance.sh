@@ -4,9 +4,9 @@
 #SBATCH --error=slurm_logs/benchmark_computational_%j.err
 #SBATCH --time=04:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=32G
-#SBATCH --partition=compute
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=300G
+#SBATCH --partition=any
 
 # =============================================================================
 # Computational Performance Benchmark for MolFuSE
