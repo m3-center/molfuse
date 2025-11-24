@@ -71,7 +71,7 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
     Returns:
         Dict mapping experiment_type -> list of result dicts
     """
-    phase5_dir = workspace_dir / "phase5" / "validation"
+    phase5_dir = workspace_dir / "phase5" / "expansion"
     
     if not phase5_dir.exists():
         print(f"WARNING: Phase 5 validation directory not found: {phase5_dir}")
@@ -311,48 +311,83 @@ def compute_stratified_metrics_for_run(
         return {}
     
     run_name = run_summary["run_name"]
-    config = run_summary["config"]
+    config = run_summary.get("config", {})
     
     # Get paths
     phase5_dir = workspace_dir / "phase5" / "validation" / run_name
     ranked_scores_path = phase5_dir / "artifacts" / "ranked_scores.csv"
     
     if not ranked_scores_path.exists():
+        print(f"DEBUG: ranked_scores.csv not found for {run_name}")
         return {}
     
     try:
         if experiment_type in ["tanimoto", "raw_descriptors"]:
             # Load ABL1 actives from MF features
-            mf_features_csv = Path(config.get("mf_features_csv", ""))
+            mf_features_csv_str = config.get("mf_features_csv", "")
+            if not mf_features_csv_str:
+                print(f"DEBUG: mf_features_csv not in config for {run_name}")
+                return {}
+            
+            mf_features_csv = Path(mf_features_csv_str)
             if not mf_features_csv.exists():
+                print(f"DEBUG: MF features CSV not found: {mf_features_csv}")
                 return {}
             
             df_mf = pd.read_csv(mf_features_csv, low_memory=False)
             target = config.get("target", "P00519")
+            
+            if "accession" not in df_mf.columns:
+                print(f"DEBUG: 'accession' column not found in MF features for {run_name}")
+                return {}
+            
             df_actives = df_mf[df_mf["accession"] == target].copy()
+            
+            if len(df_actives) == 0:
+                print(f"DEBUG: No actives found for target {target} in {run_name}")
+                return {}
+            
+            if "Standard Value (nM)" not in df_actives.columns:
+                print(f"DEBUG: 'Standard Value (nM)' column not found in actives for {run_name}")
+                return {}
             
             smiles_col = "canonical_smiles" if "canonical_smiles" in df_actives.columns else "SMILES"
             
-            return compute_tier_ef1(ranked_scores_path, df_actives, smiles_col)
+            result = compute_tier_ef1(ranked_scores_path, df_actives, smiles_col)
+            if not result:
+                print(f"DEBUG: compute_tier_ef1 returned empty dict for {run_name}")
+            return result
         
         elif experiment_type == "negative_control":
             # Load KW dataset
-            kw_csv = Path(config.get("negative_control_kw_csv", ""))
+            kw_csv_str = config.get("negative_control_kw_csv", "")
+            if not kw_csv_str:
+                print(f"DEBUG: negative_control_kw_csv not in config for {run_name}")
+                return {}
+            
+            kw_csv = Path(kw_csv_str)
             if not kw_csv.exists():
+                print(f"DEBUG: KW CSV not found: {kw_csv}")
                 return {}
             
             df_kw = pd.read_csv(kw_csv, low_memory=False)
             
             # Check if we have activity column
             if "Standard Value (nM)" not in df_kw.columns:
+                print(f"DEBUG: 'Standard Value (nM)' not in KW dataset for {run_name}")
                 return {}
             
             smiles_col = "canonical_smiles" if "canonical_smiles" in df_kw.columns else "SMILES"
             
-            return compute_tier_ef1(ranked_scores_path, df_kw, smiles_col)
+            result = compute_tier_ef1(ranked_scores_path, df_kw, smiles_col)
+            if not result:
+                print(f"DEBUG: compute_tier_ef1 returned empty dict for {run_name} (negative control)")
+            return result
         
     except Exception as e:
         print(f"WARNING: Failed to compute stratified metrics for {run_name}: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
     
     return {}
