@@ -1082,6 +1082,12 @@ def main():
     else:
         print("  WARNING: No Phase 1/4 reference data found - cannot perform baseline comparisons")
     
+    # Compute Phase 1/4 summary stats from reference results
+    phase1_summary_stats = {}
+    for exp_type in EXPERIMENT_ORDER:
+        if exp_type in phase1_reference and phase1_reference[exp_type]:
+            phase1_summary_stats[exp_type] = compute_summary_stats(phase1_reference[exp_type])
+    
     # Perform statistical tests: Phase 5 (no UMAP) vs Phase 1/4 (with UMAP)
     print("\nPerforming statistical tests: Phase 5 (no UMAP) vs Phase 1/4 (with UMAP)...")
     p_values, test_warnings = perform_baseline_comparison_tests(results_dict, phase1_reference)
