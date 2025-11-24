@@ -375,6 +375,10 @@ def run_benchmark(
     # Fill remaining NaNs with 0 (standard practice for molecular descriptors)
     X = X.fillna(0)
     
+    # Replace infinity values with large finite values (standard practice)
+    X = X.replace([np.inf, -np.inf], [1e10, -1e10])
+    print(f"    Replaced infinity values with finite bounds")
+    
     mf_feat_full = X.values
     print(f"    Final MF features shape: {mf_feat_full.shape}")
     
