@@ -41,8 +41,8 @@ echo ""
 WORKSPACE="experiment_workspace_v4"
 ZINC_FP_CSV="output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv"
 ZINC_FEAT_CSV="output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv"
-PHASE1_RUN="ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep1"
-PHASE4_RUN="umap_features_Transferase_rep1"
+PHASE1_FP_RUN="ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep1"
+PHASE1_FEAT_RUN="ABL1_UMAP_features_2d_nn10_md0p01_rep1"
 OUTPUT_DIR="reporting/computational_benchmark"
 
 # Create output directory
@@ -61,13 +61,13 @@ if [ ! -f "$ZINC_FEAT_CSV" ]; then
     exit 1
 fi
 
-if [ ! -d "$WORKSPACE/phase1/$PHASE1_RUN" ]; then
-    echo "ERROR: Phase 1 run not found: $WORKSPACE/phase1/$PHASE1_RUN"
+if [ ! -d "$WORKSPACE/phase1/$PHASE1_FP_RUN" ]; then
+    echo "ERROR: Phase 1 fingerprints run not found: $WORKSPACE/phase1/$PHASE1_FP_RUN"
     exit 1
 fi
 
-if [ ! -d "$WORKSPACE/phase4/cross_target/$PHASE4_RUN" ]; then
-    echo "ERROR: Phase 4 run not found: $WORKSPACE/phase4/cross_target/$PHASE4_RUN"
+if [ ! -d "$WORKSPACE/phase1/$PHASE1_FEAT_RUN" ]; then
+    echo "ERROR: Phase 1 features run not found: $WORKSPACE/phase1/$PHASE1_FEAT_RUN"
     exit 1
 fi
 
@@ -83,8 +83,8 @@ python scripts/benchmark_computational_performance.py \
     --workspace "$WORKSPACE" \
     --zinc-fp-csv "$ZINC_FP_CSV" \
     --zinc-feat-csv "$ZINC_FEAT_CSV" \
-    --phase1-run "$PHASE1_RUN" \
-    --phase4-run "$PHASE4_RUN" \
+    --phase1-run "$PHASE1_FP_RUN" \
+    --phase1-feat-run "$PHASE1_FEAT_RUN" \
     --sample-sizes 1 10 100 1000 10000 100000 \
     --output "$OUTPUT_DIR"
 

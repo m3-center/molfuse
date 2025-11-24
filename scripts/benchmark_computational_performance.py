@@ -283,7 +283,7 @@ def run_benchmark(
     zinc_fp_csv: Path,
     zinc_feat_csv: Path,
     phase1_fp_run: str,
-    phase4_feat_run: str,
+    phase1_feat_run: str,
     sample_sizes: List[int],
     output_dir: Path,
 ):
@@ -309,47 +309,45 @@ def run_benchmark(
     # Load UMAP model
     umap_fp_model = joblib.load(phase1_dir / "artifacts" / "umap_model.joblib")
     
-    # Load MF embedding
+    # Load MF embedding (column names are z0, z1, ..., z19 for 20D)
     mf_fp_embedding_df = pd.read_csv(phase1_dir / "artifacts" / "embedding_mf.csv")
-    mf_fp_embedding = mf_fp_embedding_df[[f"dim_{i}" for i in range(20)]].values
+    mf_fp_embedding = mf_fp_embedding_df[[f"z{i}" for i in range(20)]].values
     
     print(f"  UMAP model: {phase1_fp_run}")
     print(f"  MF embedding: {mf_fp_embedding.shape}")
     
     # ========================================================================
-    # Load Phase 4 Features+UMAP Model
+    # Load Phase 1 Features+UMAP Model (2D)
     # ========================================================================
-    print("\nLoading Phase 4 Features+UMAP model...")
-    phase4_dir = workspace_dir / "phase4" / "cross_target" / phase4_feat_run
+    print("\nLoading Phase 1 Features+UMAP model (2D)...")
+    phase1_feat_dir = workspace_dir / "phase1" / phase1_feat_run
     
     # Load scaler
-    scaler = joblib.load(phase4_dir / "artifacts" / "scaler.joblib")
+    scaler = joblib.load(phase1_feat_dir / "artifacts" / "scaler.joblib")
     
     # Load UMAP model
-    umap_feat_model = joblib.load(phase4_dir / "artifacts" / "umap_model.joblib")
+    umap_feat_model = joblib.load(phase1_feat_dir / "artifacts" / "umap_model.joblib")
     
-    # Load MF embedding
-    mf_feat_embedding_df = pd.read_csv(phase4_dir / "artifacts" / "embedding_mf.csv")
-    mf_feat_embedding = mf_feat_embedding_df[[f"dim_{i}" for i in range(2)]].values
+    # Load MF embedding (2D, column names are z0, z1)
+    mf_feat_embedding_df = pd.read_csv(phase1_feat_dir / "artifacts" / "embedding_mf.csv")
+    mf_feat_embedding = mf_feat_embedding_df[[f"z{i}" for i in range(2)]].values
     
-    # Load scaled MF features for raw baseline
-    mf_feat_scaled_df = pd.read_csv(phase4_dir / "artifacts" / "embedding_mf.csv")
-    # For raw features, we need the original scaled features (before UMAP)
-    # Load MF features and scale them
+    # Load MF features and scale them for raw baseline
     print("  Loading MF features for raw baseline...")
-    with open(phase4_dir / "logs" / "phase4_summary.json") as f:
-        phase4_config = json.load(f)["config"]
+    with open(phase1_feat_dir / "logs" / "phase1_summary.json") as f:
+        phase1_feat_config = json.load(f)["config"]
     
-    mf_feat_full, _ = load_features(Path(phase4_config["mf_features_csv"]))
-    # Filter to target
-    mf_df = pd.read_csv(phase4_config["mf_features_csv"], low_memory=False)
-    target_mask = mf_df["accession"] == phase4_config["target"]
+    mf_feat_full, _ = load_features(Path(phase1_feat_config["mf_features_csv"]))
+    # Filter to target (ABL1)
+    mf_df = pd.read_csv(phase1_feat_config["mf_features_csv"], low_memory=False)
+    target = phase1_feat_config["target"]
+    target_mask = mf_df["accession"] == target
     mf_feat_full = mf_feat_full[target_mask.values[:len(mf_feat_full)]]
     mf_feat_scaled = scaler.transform(mf_feat_full)
     
     print(f"  Scaler loaded")
-    print(f"  UMAP model: {phase4_feat_run}")
-    print(f"  MF embedding: {mf_feat_embedding.shape}")
+    print(f"  UMAP model: {phase1_feat_run}")
+    print(f"  MF embedding (2D): {mf_feat_embedding.shape}")
     print(f"  MF scaled features: {mf_feat_scaled.shape}")
     
     # ========================================================================
@@ -532,10 +530,10 @@ def main():
         help="Phase 1 run name (ECFP4+UMAP model)",
     )
     parser.add_argument(
-        "--phase4-run",
+        "--phase1-feat-run",
         type=str,
-        default="umap_features_Transferase_rep1",
-        help="Phase 4 run name (Features+UMAP model)",
+        default="ABL1_UMAP_features_2d_nn10_md0p01_rep1",
+        help="Phase 1 run name (Features+UMAP 2D model)",
     )
     parser.add_argument(
         "--sample-sizes",
@@ -558,7 +556,7 @@ def main():
         zinc_fp_csv=Path(args.zinc_fp_csv),
         zinc_feat_csv=Path(args.zinc_feat_csv),
         phase1_fp_run=args.phase1_run,
-        phase4_feat_run=args.phase4_run,
+        phase1_feat_run=args.phase1_feat_run,
         sample_sizes=args.sample_sizes,
         output_dir=Path(args.output),
     )
