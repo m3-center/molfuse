@@ -337,11 +337,49 @@ def run_benchmark(
     with open(phase1_feat_dir / "logs" / "phase1_summary.json") as f:
         phase1_feat_config = json.load(f)["config"]
     
-    mf_feat_full, _ = load_features(Path(phase1_feat_config["mf_features_csv"]))
+    mf_csv_path = Path(phase1_feat_config["mf_features_csv"])
+    print(f"    MF features CSV: {mf_csv_path}")
     
-    # For Phase 1, the MF features CSV contains only the target protein's data
-    # No need to filter - just use all rows
-    print(f"  Loaded MF features: {mf_feat_full.shape}")
+    # Check if file exists
+    if not mf_csv_path.exists():
+        raise FileNotFoundError(f"MF features CSV not found: {mf_csv_path}")
+    
+    # Load with relaxed validation - accept some NaNs
+    df = pd.read_csv(mf_csv_path, low_memory=False)
+    print(f"    Loaded {len(df)} rows from CSV")
+    
+    # Get SMILES column
+    smiles_col = "canonical_smiles" if "canonical_smiles" in df.columns else "SMILES"
+    smiles = df[smiles_col].tolist()
+    
+    # Select numeric feature columns (exclude metadata)
+    exclude_cols = {
+        smiles_col, "accession", "Standard Value (nM)", "label", "target",
+        "Organism", "Assay Type", "Relation", "Standard Type", "ChEMBL ID",
+        "Compound ChEMBL ID"
+    }
+    
+    feature_cols = [c for c in df.columns if c not in exclude_cols and not c.startswith("ECFP")]
+    print(f"    Found {len(feature_cols)} feature columns")
+    
+    # Extract features
+    X = df[feature_cols].copy()
+    for col in X.columns:
+        X[col] = pd.to_numeric(X[col], errors="coerce")
+    
+    # Drop rows where ALL features are NaN (keep rows with some valid features)
+    initial_rows = len(X)
+    X = X.dropna(how='all')
+    print(f"    After dropping all-NaN rows: {len(X)} rows (removed {initial_rows - len(X)})")
+    
+    # Fill remaining NaNs with 0 (standard practice for molecular descriptors)
+    X = X.fillna(0)
+    
+    mf_feat_full = X.values
+    print(f"    Final MF features shape: {mf_feat_full.shape}")
+    
+    if len(mf_feat_full) == 0:
+        raise ValueError("No valid MF features found after loading!")
     
     # Scale the full MF feature set
     mf_feat_scaled = scaler.transform(mf_feat_full)
