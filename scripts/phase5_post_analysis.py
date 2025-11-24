@@ -67,14 +67,28 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
     Collect all Phase 5 results from workspace.
     
     Handles incomplete experiments gracefully by continuing to next experiment.
+    Auto-detects subdirectory (validation or expansion).
     
     Returns:
         Dict mapping experiment_type -> list of result dicts
     """
-    phase5_dir = workspace_dir / "phase5" / "expansion"
+    # Try both possible Phase 5 subdirectories
+    phase5_base = workspace_dir / "phase5"
     
-    if not phase5_dir.exists():
-        print(f"WARNING: Phase 5 validation directory not found: {phase5_dir}")
+    if not phase5_base.exists():
+        print(f"WARNING: Phase 5 directory not found: {phase5_base}")
+        print("Creating empty results structure...")
+        return {exp: [] for exp in EXPERIMENT_ORDER}
+    
+    # Auto-detect subdirectory: check both 'validation' and 'expansion'
+    phase5_subdirs = []
+    for subdir_name in ["validation", "expansion"]:
+        subdir = phase5_base / subdir_name
+        if subdir.exists() and any(subdir.iterdir()):
+            phase5_subdirs.append(subdir)
+    
+    if not phase5_subdirs:
+        print(f"WARNING: No Phase 5 results found in {phase5_base}")
         print("Creating empty results structure...")
         return {exp: [] for exp in EXPERIMENT_ORDER}
     
