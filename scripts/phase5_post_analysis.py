@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -175,19 +176,20 @@ def compute_summary_stats(results: List[Dict]) -> Dict[str, Tuple[float, float]]
 def perform_significance_tests(
     results_dict: Dict[str, List[Dict]],
     baseline_exp: str = "tanimoto",
-) -> Dict[str, Dict[str, float]]:
+) -> Tuple[Dict[str, Dict[str, float]], List[str]]:
     """
     Perform paired t-tests comparing each experiment to baseline.
     
     Returns:
-        Dict mapping experiment -> Dict mapping metric -> p-value
+        Tuple of (p_values dict, list of warning messages)
     """
     p_values = {}
+    warning_messages = []
     
     baseline_results = results_dict.get(baseline_exp, [])
     if not baseline_results:
         print(f"WARNING: No results for baseline experiment '{baseline_exp}'")
-        return {}
+        return {}, []
     
     for exp_type in EXPERIMENT_ORDER:
         if exp_type == baseline_exp:
@@ -209,16 +211,153 @@ def perform_significance_tests(
             
             if len(baseline_vals) > 1 and len(exp_vals) > 1 and len(baseline_vals) == len(exp_vals):
                 # Paired t-test (assumes same number of replicates)
-                t_stat, p_val = stats.ttest_rel(exp_vals, baseline_vals)
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+                    t_stat, p_val = stats.ttest_rel(exp_vals, baseline_vals)
+                    if w:
+                        for warning in w:
+                            msg = f"Statistical test warning for {exp_type} vs {baseline_exp} ({metric}): {warning.message}"
+                            warning_messages.append(msg)
                 p_values[exp_type][metric] = p_val
             elif len(baseline_vals) > 1 and len(exp_vals) > 1:
                 # Independent t-test (different number of replicates)
-                t_stat, p_val = stats.ttest_ind(exp_vals, baseline_vals)
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+                    t_stat, p_val = stats.ttest_ind(exp_vals, baseline_vals)
+                    if w:
+                        for warning in w:
+                            msg = f"Statistical test warning for {exp_type} vs {baseline_exp} ({metric}): {warning.message}"
+                            warning_messages.append(msg)
                 p_values[exp_type][metric] = p_val
             else:
                 p_values[exp_type][metric] = np.nan
     
-    return p_values
+    return p_values, warning_messages
+
+
+# ============================================================================
+# Detailed Comparison Tables
+# ============================================================================
+
+def compute_raw_descriptors_comparison(
+    workspace_dir: Path,
+    results_dict: Dict[str, List[Dict]],
+) -> str:
+    """
+    Generate detailed per-MF comparison table for raw_descriptors vs tanimoto baseline.
+    Shows absolute and relative change in EF@1% for each MF class.
+    """
+    raw_desc_results = results_dict.get("raw_descriptors", [])
+    tanimoto_results = results_dict.get("tanimoto", [])
+    
+    if not raw_desc_results or not tanimoto_results:
+        return "No data available for raw_descriptors comparison.\n"
+    
+    # Group by MF class
+    raw_by_mf = {}
+    tanimoto_by_mf = {}
+    
+    for result in raw_desc_results:
+        mf = result.get("config", {}).get("keyword", "Unknown")
+        if mf not in raw_by_mf:
+            raw_by_mf[mf] = []
+        raw_by_mf[mf].append(result.get("ef_1%", np.nan))
+    
+    for result in tanimoto_results:
+        mf = result.get("config", {}).get("keyword", "Unknown")
+        if mf not in tanimoto_by_mf:
+            tanimoto_by_mf[mf] = []
+        tanimoto_by_mf[mf].append(result.get("ef_1%", np.nan))
+    
+    # Compute mean for each MF
+    lines = []
+    lines.append("\nRaw Descriptors vs Tanimoto Baseline: Per-MF EF@1% Comparison")
+    lines.append("="*80)
+    lines.append(f"{'MF Class':<25} {'Tanimoto':<12} {'Raw Desc':<12} {'Abs Δ':<10} {'Rel Δ (%)':<12}")
+    lines.append("-"*80)
+    
+    all_mfs = sorted(set(raw_by_mf.keys()) | set(tanimoto_by_mf.keys()))
+    total_tanimoto = []
+    total_raw = []
+    
+    for mf in all_mfs:
+        tani_vals = [v for v in tanimoto_by_mf.get(mf, []) if not np.isnan(v)]
+        raw_vals = [v for v in raw_by_mf.get(mf, []) if not np.isnan(v)]
+        
+        if not tani_vals or not raw_vals:
+            lines.append(f"{mf:<25} {'N/A':<12} {'N/A':<12} {'N/A':<10} {'N/A':<12}")
+            continue
+        
+        tani_mean = np.mean(tani_vals)
+        raw_mean = np.mean(raw_vals)
+        abs_delta = raw_mean - tani_mean
+        rel_delta = (abs_delta / tani_mean) * 100 if tani_mean != 0 else np.nan
+        
+        total_tanimoto.extend(tani_vals)
+        total_raw.extend(raw_vals)
+        
+        lines.append(f"{mf:<25} {tani_mean:>11.1f} {raw_mean:>11.1f} {abs_delta:>9.1f} {rel_delta:>11.1f}")
+    
+    lines.append("-"*80)
+    
+    # Overall statistics
+    if total_tanimoto and total_raw:
+        overall_tani = np.mean(total_tanimoto)
+        overall_raw = np.mean(total_raw)
+        overall_abs = overall_raw - overall_tani
+        overall_rel = (overall_abs / overall_tani) * 100 if overall_tani != 0 else np.nan
+        lines.append(f"{'OVERALL':<25} {overall_tani:>11.1f} {overall_raw:>11.1f} {overall_abs:>9.1f} {overall_rel:>11.1f}")
+    
+    lines.append("="*80)
+    lines.append("")
+    
+    return "\n".join(lines)
+
+
+def compute_negative_control_comparison(
+    workspace_dir: Path,
+    results_dict: Dict[str, List[Dict]],
+) -> str:
+    """
+    Generate summary comparison for negative_control vs tanimoto baseline.
+    Shows total absolute and relative change in EF@1%.
+    """
+    neg_results = results_dict.get("negative_control", [])
+    tanimoto_results = results_dict.get("tanimoto", [])
+    
+    if not neg_results or not tanimoto_results:
+        return "No data available for negative_control comparison.\n"
+    
+    # Extract EF@1% values
+    neg_ef1 = [r.get("ef_1%", np.nan) for r in neg_results]
+    tani_ef1 = [r.get("ef_1%", np.nan) for r in tanimoto_results]
+    
+    neg_ef1 = [v for v in neg_ef1 if not np.isnan(v)]
+    tani_ef1 = [v for v in tani_ef1 if not np.isnan(v)]
+    
+    if not neg_ef1 or not tani_ef1:
+        return "Insufficient data for negative_control comparison.\n"
+    
+    neg_mean = np.mean(neg_ef1)
+    neg_std = np.std(neg_ef1)
+    tani_mean = np.mean(tani_ef1)
+    tani_std = np.std(tani_ef1)
+    
+    abs_delta = neg_mean - tani_mean
+    rel_delta = (abs_delta / tani_mean) * 100 if tani_mean != 0 else np.nan
+    
+    lines = []
+    lines.append("\nNegative Control vs Tanimoto Baseline: EF@1% Summary")
+    lines.append("="*80)
+    lines.append(f"Tanimoto Baseline:     {tani_mean:.1f} ± {tani_std:.1f} (n={len(tani_ef1)})")
+    lines.append(f"Negative Control:      {neg_mean:.1f} ± {neg_std:.1f} (n={len(neg_ef1)})")
+    lines.append("-"*80)
+    lines.append(f"Absolute Change (Δ):   {abs_delta:+.1f}")
+    lines.append(f"Relative Change (%):   {rel_delta:+.1f}%")
+    lines.append("="*80)
+    lines.append("")
+    
+    return "\n".join(lines)
 
 
 # ============================================================================
@@ -899,6 +1038,11 @@ def main():
         default="reports/phase5_bias_analysis.txt",
         help="Output report file path",
     )
+    parser.add_argument(
+        "--skip-stratified",
+        action="store_true",
+        help="Skip stratified potency tier analysis (faster)",
+    )
     
     args = parser.parse_args()
     
@@ -952,22 +1096,38 @@ def main():
     
     # Perform significance tests
     print("\nPerforming statistical tests...")
-    p_values = perform_significance_tests(results_dict, baseline_exp="tanimoto")
+    p_values, test_warnings = perform_significance_tests(results_dict, baseline_exp="tanimoto")
     if p_values:
         print(f"  Computed {sum(len(v) for v in p_values.values())} pairwise comparisons")
     else:
         print("  No comparisons (insufficient data or missing baseline)")
     
+    if test_warnings:
+        print("\nStatistical Test Warnings:")
+        for warning in test_warnings:
+            print(f"  ⚠ {warning}")
+    
+    # Generate detailed comparisons
+    print("\nGenerating detailed comparisons...")
+    raw_desc_comparison = compute_raw_descriptors_comparison(workspace_dir, results_dict)
+    neg_control_comparison = compute_negative_control_comparison(workspace_dir, results_dict)
+    print("  ✓ Raw descriptors per-MF comparison")
+    print("  ✓ Negative control summary comparison")
+    
     # Compute stratified potency tier metrics
-    print("\nComputing stratified potency tier metrics...")
-    stratified_stats = aggregate_stratified_metrics(workspace_dir, results_dict)
-    for exp_type in EXPERIMENT_ORDER:
-        if exp_type in stratified_stats and stratified_stats[exp_type]:
-            has_data = any(not np.isnan(mean) for mean, _ in stratified_stats[exp_type].values())
-            if has_data:
-                print(f"  ✓ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: Computed tier EF@1%")
-            else:
-                print(f"  ✗ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: No tier data available")
+    if args.skip_stratified:
+        print("\nSkipping stratified potency tier metrics (--skip-stratified flag)")
+        stratified_stats = {}
+    else:
+        print("\nComputing stratified potency tier metrics...")
+        stratified_stats = aggregate_stratified_metrics(workspace_dir, results_dict)
+        for exp_type in EXPERIMENT_ORDER:
+            if exp_type in stratified_stats and stratified_stats[exp_type]:
+                has_data = any(not np.isnan(mean) for mean, _ in stratified_stats[exp_type].values())
+                if has_data:
+                    print(f"  ✓ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: Computed tier EF@1%")
+                else:
+                    print(f"  ✗ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: No tier data available")
     
     print("")
     
@@ -982,6 +1142,13 @@ def main():
     with output_path.open("w") as f:
         f.write(text_report)
         f.write("\n\n")
+        f.write("="*80)
+        f.write("\nDETAILED COMPARISONS:\n")
+        f.write("="*80)
+        f.write("\n")
+        f.write(raw_desc_comparison)
+        f.write(neg_control_comparison)
+        f.write("\n")
         f.write("="*80)
         f.write("\nLATEX TABLE:\n")
         f.write("="*80)
