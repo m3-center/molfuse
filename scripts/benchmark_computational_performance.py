@@ -350,18 +350,21 @@ def run_benchmark(
     print(f"  MF scaled features: {mf_feat_scaled.shape}")
     
     # ========================================================================
-    # Load ZINC Candidates
+    # Generate Synthetic ZINC Candidates (for runtime testing only)
     # ========================================================================
-    print("\nLoading ZINC candidates...")
+    print("\nGenerating synthetic ZINC candidates...")
     max_size = max(sample_sizes)
     
-    print(f"  Loading fingerprints (max {max_size})...")
-    zinc_fp, zinc_smiles_fp = load_fingerprints(zinc_fp_csv, max_rows=max_size)
-    print(f"    Loaded: {len(zinc_fp)} molecules")
+    # Fingerprints: 2048-bit binary vectors
+    print(f"  Generating fingerprints ({max_size} molecules)...")
+    np.random.seed(123)
+    zinc_fp = np.random.randint(0, 2, size=(max_size, 2048))
+    print(f"    Generated: {len(zinc_fp)} molecules × 2048 bits")
     
-    print(f"  Loading features (max {max_size})...")
-    zinc_feat, zinc_smiles_feat = load_features(zinc_feat_csv, max_rows=max_size)
-    print(f"    Loaded: {len(zinc_feat)} molecules")
+    # Features: same dimensionality as MF features
+    print(f"  Generating features ({max_size} molecules)...")
+    zinc_feat = np.random.randn(max_size, n_features)
+    print(f"    Generated: {len(zinc_feat)} molecules × {n_features} features")
     
     # ========================================================================
     # Run Benchmarks
