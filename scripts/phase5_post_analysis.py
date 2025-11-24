@@ -158,15 +158,15 @@ def load_phase1_reference_results(
     Load Phase 1/4 reference results that correspond to Phase 5 experiments.
     
     For each Phase 5 run, loads the Phase 1/4 baseline it's testing against:
-    - tanimoto: Load Phase 1 fingerprint+UMAP runs (same target/replicate)
-    - raw_descriptors: Load Phase 1/4 features+UMAP runs (same target/replicate)
-    - negative_control: Load Phase 1 kinase runs (control uses kinase model)
+    - tanimoto: Load Phase 1 ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep[1-5]
+    - raw_descriptors: Load Phase 4 cross_target features+UMAP runs (matching keyword/replicate)
+    - negative_control: No baseline (testing database bias)
     
     Returns:
         Dict mapping experiment_type -> list of Phase 1/4 result dicts
     """
     phase1_dir = workspace_dir / "phase1"
-    phase4_dir = workspace_dir / "phase4"
+    phase4_dir = workspace_dir / "phase4" / "cross_target"
     
     reference_results = {}
     
@@ -179,64 +179,54 @@ def load_phase1_reference_results(
         
         for phase5_run in phase5_runs:
             config = phase5_run.get("config", {})
-            target = config.get("target", "")
+            keyword = config.get("keyword", "")
             replicate = config.get("replicate", 1)
+            
+            ref_summary = None
+            run_dir = None
             
             # Determine which Phase 1/4 baseline to load
             if exp_type == "tanimoto":
-                # Load Phase 1 fingerprint+UMAP run (ECFP4 with UMAP)
-                # Look for runs like: *UMAP*fingerprints* or *fingerprints*UMAP*
-                patterns = [
-                    f"*UMAP*fingerprints*rep{replicate}",
-                    f"*fingerprints*UMAP*rep{replicate}",
-                    f"*UMAP*ECFP4*rep{replicate}",
-                ]
-                search_dirs = [phase1_dir]
+                # Load Phase 1 best fingerprint model: ABL1_UMAP_fingerprints_20d_nn10_md0p0
+                run_name = f"ABL1_UMAP_fingerprints_20d_nn10_md0p0_rep{replicate}"
+                run_dir = phase1_dir / run_name
+                
+                if run_dir.exists():
+                    summary_path = run_dir / "logs" / "phase1_summary.json"
+                    if not summary_path.exists():
+                        # Try metrics.json as fallback
+                        summary_path = run_dir / "metrics" / "metrics.json"
+                    
+                    if summary_path.exists():
+                        try:
+                            with summary_path.open("r") as f:
+                                ref_summary = json.load(f)
+                        except Exception as e:
+                            print(f"  Warning: Could not load {summary_path}: {e}")
                 
             elif exp_type == "raw_descriptors":
-                # Load Phase 1/4 features+UMAP run
-                # Look for runs with features and UMAP
-                patterns = [
-                    f"*UMAP*features*rep{replicate}",
-                    f"*features*UMAP*rep{replicate}",
-                ]
-                search_dirs = [phase4_dir, phase1_dir]
+                # Load Phase 4 features+UMAP run: umap_features_{keyword}_rep{replicate}
+                run_name = f"umap_features_{keyword}_rep{replicate}"
+                run_dir = phase4_dir / run_name
+                
+                if run_dir.exists():
+                    summary_path = run_dir / "logs" / "phase4_summary.json"
+                    if not summary_path.exists():
+                        # Try metrics.json as fallback
+                        summary_path = run_dir / "metrics" / "metrics.json"
+                    
+                    if summary_path.exists():
+                        try:
+                            with summary_path.open("r") as f:
+                                ref_summary = json.load(f)
+                        except Exception as e:
+                            print(f"  Warning: Could not load {summary_path}: {e}")
                 
             elif exp_type == "negative_control":
                 # Negative control: no baseline comparison needed
                 continue
             else:
                 continue
-            
-            # Search for matching Phase 1/4 run
-            ref_summary = None
-            for search_dir in search_dirs:
-                if not search_dir.exists():
-                    continue
-                
-                # Try all patterns
-                for pattern in patterns:
-                    matching_runs = list(search_dir.glob(pattern))
-                    if matching_runs:
-                        # Take first match
-                        run_dir = matching_runs[0]
-                        summary_path = run_dir / "logs" / "phase1_summary.json"
-                        if not summary_path.exists():
-                            summary_path = run_dir / "logs" / "phase4_summary.json"
-                        
-                        if summary_path.exists():
-                            try:
-                                with summary_path.open("r") as f:
-                                    ref_summary = json.load(f)
-                                break
-                            except Exception:
-                                continue
-                    
-                    if ref_summary:
-                        break
-                
-                if ref_summary:
-                    break
             
             if ref_summary:
                 ref_runs.append(ref_summary)
@@ -350,14 +340,16 @@ def compute_baseline_comparisons(
     if "tanimoto" in phase5_summary_stats and "tanimoto" in phase1_summary_stats:
         p5_ef1_mean, p5_ef1_std = phase5_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         p1_ef1_mean, p1_ef1_std = phase1_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        p5_roc_mean, p5_roc_std = phase5_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
+        p1_roc_mean, p1_roc_std = phase1_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
         
         if not np.isnan(p5_ef1_mean) and not np.isnan(p1_ef1_mean):
             abs_delta = p5_ef1_mean - p1_ef1_mean
             rel_delta = (abs_delta / p1_ef1_mean) * 100 if p1_ef1_mean != 0 else np.nan
             
             lines.append("\n1. Tanimoto (Fingerprint Baseline):")
-            lines.append(f"   Phase 5 (raw ECFP4, Jaccard, NO UMAP):     EF@1% = {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}")
-            lines.append(f"   Phase 1 (ECFP4+UMAP, Euclidean):           EF@1% = {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}")
+            lines.append(f"   Phase 5 (raw ECFP4, Jaccard, NO UMAP):     EF@1% = {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}  |  ROC-AUC = {p5_roc_mean:.3f} ± {p5_roc_std:.3f}")
+            lines.append(f"   Phase 1 (ECFP4+UMAP, Euclidean):           EF@1% = {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}  |  ROC-AUC = {p1_roc_mean:.3f} ± {p1_roc_std:.3f}")
             lines.append("   " + "-"*70)
             lines.append(f"   Absolute Change (Δ):   {abs_delta:+.1f}")
             lines.append(f"   Relative Change (%):   {rel_delta:+.1f}%")
@@ -368,29 +360,47 @@ def compute_baseline_comparisons(
             else:
                 lines.append(f"   → Phase 1 ECFP4+UMAP OUTPERFORMS Phase 5 raw ECFP4 by {abs(rel_delta):.1f}%")
                 lines.append("   → UMAP improves fingerprint-based screening")
+            
+            # Add table format
+            lines.append("")
+            lines.append("   TABLE FORMAT:")
+            lines.append(f"   {'Method':<35} {'EF@1%':<15} {'ROC-AUC':<15} {'Δ EF@1%':<12} {'Δ %':<10}")
+            lines.append("   " + "-"*87)
+            lines.append(f"   {'Phase 5 (raw ECFP4, NO UMAP)':<35} {p5_ef1_mean:>6.1f} ± {p5_ef1_std:<5.1f} {p5_roc_mean:>5.3f} ± {p5_roc_std:<5.3f} {'—':<12} {'—':<10}")
+            lines.append(f"   {'Phase 1 (ECFP4+UMAP)':<35} {p1_ef1_mean:>6.1f} ± {p1_ef1_std:<5.1f} {p1_roc_mean:>5.3f} ± {p1_roc_std:<5.3f} {abs_delta:>+11.1f} {rel_delta:>+9.1f}%")
     
     # Raw Descriptors: Phase 5 raw features vs Phase 1/4 features+UMAP
     if "raw_descriptors" in phase5_summary_stats and "raw_descriptors" in phase1_summary_stats:
         p5_ef1_mean, p5_ef1_std = phase5_summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
         p1_ef1_mean, p1_ef1_std = phase1_summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
+        p5_roc_mean, p5_roc_std = phase5_summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
+        p1_roc_mean, p1_roc_std = phase1_summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
         
         if not np.isnan(p5_ef1_mean) and not np.isnan(p1_ef1_mean):
             abs_delta = p5_ef1_mean - p1_ef1_mean
             rel_delta = (abs_delta / p1_ef1_mean) * 100 if p1_ef1_mean != 0 else np.nan
             
             lines.append("\n2. Raw Descriptors (Feature Baseline):")
-            lines.append(f"   Phase 5 (raw features, scaled, NO UMAP):   EF@1% = {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}")
-            lines.append(f"   Phase 1/4 (features+UMAP, Euclidean):      EF@1% = {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}")
+            lines.append(f"   Phase 5 (raw features, scaled, NO UMAP):   EF@1% = {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}  |  ROC-AUC = {p5_roc_mean:.3f} ± {p5_roc_std:.3f}")
+            lines.append(f"   Phase 4 (features+UMAP, Euclidean):        EF@1% = {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}  |  ROC-AUC = {p1_roc_mean:.3f} ± {p1_roc_std:.3f}")
             lines.append("   " + "-"*70)
             lines.append(f"   Absolute Change (Δ):   {abs_delta:+.1f}")
             lines.append(f"   Relative Change (%):   {rel_delta:+.1f}%")
             
             if abs_delta > 0:
-                lines.append(f"   → Phase 5 raw features OUTPERFORM Phase 1/4 features+UMAP by {abs(rel_delta):.1f}%")
+                lines.append(f"   → Phase 5 raw features OUTPERFORM Phase 4 features+UMAP by {abs(rel_delta):.1f}%")
                 lines.append("   → UMAP is NOT necessary for descriptors")
             else:
-                lines.append(f"   → Phase 1/4 features+UMAP OUTPERFORM Phase 5 raw features by {abs(rel_delta):.1f}%")
+                lines.append(f"   → Phase 4 features+UMAP OUTPERFORM Phase 5 raw features by {abs(rel_delta):.1f}%")
                 lines.append("   → UMAP improves feature-based screening")
+            
+            # Add table format
+            lines.append("")
+            lines.append("   TABLE FORMAT:")
+            lines.append(f"   {'Method':<35} {'EF@1%':<15} {'ROC-AUC':<15} {'Δ EF@1%':<12} {'Δ %':<10}")
+            lines.append("   " + "-"*87)
+            lines.append(f"   {'Phase 5 (raw features, NO UMAP)':<35} {p5_ef1_mean:>6.1f} ± {p5_ef1_std:<5.1f} {p5_roc_mean:>5.3f} ± {p5_roc_std:<5.3f} {'—':<12} {'—':<10}")
+            lines.append(f"   {'Phase 4 (features+UMAP)':<35} {p1_ef1_mean:>6.1f} ± {p1_ef1_std:<5.1f} {p1_roc_mean:>5.3f} ± {p1_roc_std:<5.3f} {abs_delta:>+11.1f} {rel_delta:>+9.1f}%")
     
     # Negative Control: Just report (no baseline comparison)
     if "negative_control" in phase5_summary_stats:
