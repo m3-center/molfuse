@@ -193,17 +193,15 @@ def load_phase1_reference_results(
                 run_dir = phase1_dir / run_name
                 
                 if run_dir.exists():
-                    summary_path = run_dir / "logs" / "phase1_summary.json"
-                    if not summary_path.exists():
-                        # Try metrics.json as fallback
-                        summary_path = run_dir / "metrics" / "metrics.json"
+                    # Phase 1 stores metrics in metrics/metrics.json (not phase1_summary.json)
+                    metrics_path = run_dir / "metrics" / "metrics.json"
                     
-                    if summary_path.exists():
+                    if metrics_path.exists():
                         try:
-                            with summary_path.open("r") as f:
+                            with metrics_path.open("r") as f:
                                 ref_summary = json.load(f)
                         except Exception as e:
-                            print(f"  Warning: Could not load {summary_path}: {e}")
+                            print(f"  Warning: Could not load {metrics_path}: {e}")
                 
             elif exp_type == "raw_descriptors":
                 # Load Phase 4 features+UMAP run: umap_features_{target_short}_rep{replicate}
@@ -215,17 +213,15 @@ def load_phase1_reference_results(
                 run_dir = phase4_dir / run_name
                 
                 if run_dir.exists():
-                    summary_path = run_dir / "logs" / "phase4_summary.json"
-                    if not summary_path.exists():
-                        # Try metrics.json as fallback
-                        summary_path = run_dir / "metrics" / "metrics.json"
+                    # Phase 4 stores metrics in metrics/metrics.json (not phase4_summary.json)
+                    metrics_path = run_dir / "metrics" / "metrics.json"
                     
-                    if summary_path.exists():
+                    if metrics_path.exists():
                         try:
-                            with summary_path.open("r") as f:
+                            with metrics_path.open("r") as f:
                                 ref_summary = json.load(f)
                         except Exception as e:
-                            print(f"  Warning: Could not load {summary_path}: {e}")
+                            print(f"  Warning: Could not load {metrics_path}: {e}")
                 
             elif exp_type == "negative_control":
                 # Negative control: no baseline comparison needed
