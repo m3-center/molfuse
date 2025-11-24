@@ -313,6 +313,13 @@ def run_benchmark(
     mf_fp_embedding_df = pd.read_csv(phase1_dir / "artifacts" / "embedding_mf.csv")
     mf_fp_embedding = mf_fp_embedding_df[[f"z{i}" for i in range(20)]].values
     
+    # Generate SYNTHETIC MF fingerprints for raw baseline (avoid data loading issues)
+    print("  Generating synthetic MF fingerprints for raw baseline...")
+    n_mf_fp_samples = len(mf_fp_embedding)
+    np.random.seed(41)
+    mf_fp_raw = np.random.randint(0, 2, size=(n_mf_fp_samples, 2048))
+    print(f"    Synthetic MF fingerprints: {mf_fp_raw.shape}")
+    
     print(f"  UMAP model: {phase1_fp_run}")
     print(f"  MF embedding: {mf_fp_embedding.shape}")
     
@@ -385,7 +392,7 @@ def run_benchmark(
         
         # Method 1: Raw ECFP4
         print(f"  [1/4] Raw ECFP4 (Tanimoto, no UMAP)...")
-        result = benchmark_raw_ecfp4(fp_sample, zinc_fp[:len(mf_fp_embedding)])
+        result = benchmark_raw_ecfp4(fp_sample, mf_fp_raw)
         result["method"] = "Raw ECFP4"
         result["n_sample"] = n
         all_results.append(result)
