@@ -810,15 +810,15 @@ def generate_text_report(
     lines.append("")
     lines.append("="*80)
     
-    # Pairwise statistical comparisons
+    # Phase 5 vs Phase 1/4 baseline comparisons
     if p_values:
-        lines.append("\nPAIRWISE STATISTICAL SIGNIFICANCE:")
+        lines.append("\nSTATISTICAL SIGNIFICANCE (Phase 5 no-UMAP vs Phase 1/4 with-UMAP):")
         lines.append("-" * 80)
         
-        for (exp1, exp2), metrics in p_values.items():
-            exp1_name = EXPERIMENT_NAMES.get(exp1, exp1)
-            exp2_name = EXPERIMENT_NAMES.get(exp2, exp2)
-            lines.append(f"\n{exp1_name} vs {exp2_name}:")
+        for exp_type, metrics in p_values.items():
+            exp_name = EXPERIMENT_NAMES.get(exp_type, exp_type)
+            baseline_name = "Phase 1 ECFP4+UMAP" if exp_type == "tanimoto" else "Phase 1/4 features+UMAP"
+            lines.append(f"\n{exp_name} (Phase 5 no-UMAP) vs {baseline_name}:")
             
             for metric in METRICS:
                 if metric not in metrics:
