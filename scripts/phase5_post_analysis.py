@@ -185,21 +185,26 @@ def load_phase1_reference_results(
             # Determine which Phase 1/4 baseline to load
             if exp_type == "tanimoto":
                 # Load Phase 1 fingerprint+UMAP run (ECFP4 with UMAP)
-                # Look for runs like: *_UMAP_fingerprints_*_rep{replicate}
-                pattern = f"*_UMAP_fingerprints_*_rep{replicate}"
+                # Look for runs like: *UMAP*fingerprints* or *fingerprints*UMAP*
+                patterns = [
+                    f"*UMAP*fingerprints*rep{replicate}",
+                    f"*fingerprints*UMAP*rep{replicate}",
+                    f"*UMAP*ECFP4*rep{replicate}",
+                ]
                 search_dirs = [phase1_dir]
                 
             elif exp_type == "raw_descriptors":
                 # Load Phase 1/4 features+UMAP run
-                # Try Phase 4 first (expansion), then Phase 1
-                pattern = f"*_UMAP_features_*_rep{replicate}"
+                # Look for runs with features and UMAP
+                patterns = [
+                    f"*UMAP*features*rep{replicate}",
+                    f"*features*UMAP*rep{replicate}",
+                ]
                 search_dirs = [phase4_dir, phase1_dir]
                 
             elif exp_type == "negative_control":
-                # Load Phase 1 kinase baseline (ABL1 or target from config)
-                # Negative control uses kinase model, so load kinase runs
-                pattern = f"*_UMAP_features_*_rep1"  # Use rep1 as reference
-                search_dirs = [phase1_dir]
+                # Negative control: no baseline comparison needed
+                continue
             else:
                 continue
             
@@ -208,22 +213,30 @@ def load_phase1_reference_results(
             for search_dir in search_dirs:
                 if not search_dir.exists():
                     continue
+                
+                # Try all patterns
+                for pattern in patterns:
+                    matching_runs = list(search_dir.glob(pattern))
+                    if matching_runs:
+                        # Take first match
+                        run_dir = matching_runs[0]
+                        summary_path = run_dir / "logs" / "phase1_summary.json"
+                        if not summary_path.exists():
+                            summary_path = run_dir / "logs" / "phase4_summary.json"
+                        
+                        if summary_path.exists():
+                            try:
+                                with summary_path.open("r") as f:
+                                    ref_summary = json.load(f)
+                                break
+                            except Exception:
+                                continue
                     
-                matching_runs = list(search_dir.glob(pattern))
-                if matching_runs:
-                    # Take first match (or filter by target if needed)
-                    run_dir = matching_runs[0]
-                    summary_path = run_dir / "logs" / "phase1_summary.json"
-                    if not summary_path.exists():
-                        summary_path = run_dir / "logs" / "phase4_summary.json"
-                    
-                    if summary_path.exists():
-                        try:
-                            with summary_path.open("r") as f:
-                                ref_summary = json.load(f)
-                            break
-                        except Exception:
-                            continue
+                    if ref_summary:
+                        break
+                
+                if ref_summary:
+                    break
             
             if ref_summary:
                 ref_runs.append(ref_summary)
@@ -314,125 +327,88 @@ def perform_baseline_comparison_tests(
 
 
 # ============================================================================
-# Detailed Comparison Tables
+# Detailed Comparison: Each Phase 5 Experiment vs Its Phase 1/4 Baseline
 # ============================================================================
 
-def compute_raw_descriptors_comparison(
-    workspace_dir: Path,
-    results_dict: Dict[str, List[Dict]],
+def compute_baseline_comparisons(
+    phase5_summary_stats: Dict[str, Dict],
+    phase1_summary_stats: Dict[str, Dict],
 ) -> str:
     """
-    Generate detailed per-MF comparison table for raw_descriptors experiment.
-    Shows EF@1% values for each MF class (all raw_descriptors use same kinase target).
+    Generate comparison table showing each Phase 5 experiment vs its Phase 1/4 baseline.
+    
+    Comparisons:
+    - tanimoto (Phase 5 raw ECFP4) vs Phase 1 ECFP4+UMAP
+    - raw_descriptors (Phase 5 raw features) vs Phase 1/4 features+UMAP
+    - negative_control: Report separately (different data, no direct baseline)
     """
-    raw_desc_results = results_dict.get("raw_descriptors", [])
-    tanimoto_results = results_dict.get("tanimoto", [])
-    
-    if not raw_desc_results or not tanimoto_results:
-        return "No data available for raw_descriptors comparison.\n"
-    
-    # Group by MF class
-    raw_by_mf = {}
-    tanimoto_by_mf = {}
-    
-    for result in raw_desc_results:
-        mf = result.get("config", {}).get("keyword", "Unknown")
-        if mf not in raw_by_mf:
-            raw_by_mf[mf] = []
-        raw_by_mf[mf].append(result.get("ef_1%", np.nan))
-    
-    for result in tanimoto_results:
-        mf = result.get("config", {}).get("keyword", "Unknown")
-        if mf not in tanimoto_by_mf:
-            tanimoto_by_mf[mf] = []
-        tanimoto_by_mf[mf].append(result.get("ef_1%", np.nan))
-    
-    # Compute mean for each MF
     lines = []
-    lines.append("\nRaw Descriptors vs Tanimoto Baseline: Per-MF EF@1% Comparison")
+    lines.append("\nPhase 5 vs Phase 1/4 Baseline Comparisons")
     lines.append("="*80)
-    lines.append(f"{'MF Class':<25} {'Tanimoto':<12} {'Raw Desc':<12} {'Abs Δ':<10} {'Rel Δ (%)':<12}")
-    lines.append("-"*80)
     
-    all_mfs = sorted(set(raw_by_mf.keys()) | set(tanimoto_by_mf.keys()))
-    total_tanimoto = []
-    total_raw = []
-    
-    for mf in all_mfs:
-        tani_vals = [v for v in tanimoto_by_mf.get(mf, []) if not np.isnan(v)]
-        raw_vals = [v for v in raw_by_mf.get(mf, []) if not np.isnan(v)]
+    # Tanimoto: Phase 5 raw ECFP4 vs Phase 1 ECFP4+UMAP
+    if "tanimoto" in phase5_summary_stats and "tanimoto" in phase1_summary_stats:
+        p5_ef1_mean, p5_ef1_std = phase5_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        p1_ef1_mean, p1_ef1_std = phase1_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         
-        if not tani_vals or not raw_vals:
-            lines.append(f"{mf:<25} {'N/A':<12} {'N/A':<12} {'N/A':<10} {'N/A':<12}")
-            continue
+        if not np.isnan(p5_ef1_mean) and not np.isnan(p1_ef1_mean):
+            abs_delta = p5_ef1_mean - p1_ef1_mean
+            rel_delta = (abs_delta / p1_ef1_mean) * 100 if p1_ef1_mean != 0 else np.nan
+            
+            lines.append("\n1. Tanimoto (Fingerprint Baseline):")
+            lines.append(f"   Phase 5 (raw ECFP4, Jaccard, NO UMAP):     EF@1% = {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}")
+            lines.append(f"   Phase 1 (ECFP4+UMAP, Euclidean):           EF@1% = {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}")
+            lines.append("   " + "-"*70)
+            lines.append(f"   Absolute Change (Δ):   {abs_delta:+.1f}")
+            lines.append(f"   Relative Change (%):   {rel_delta:+.1f}%")
+            
+            if abs_delta > 0:
+                lines.append(f"   → Phase 5 raw ECFP4 OUTPERFORMS Phase 1 ECFP4+UMAP by {abs(rel_delta):.1f}%")
+                lines.append("   → UMAP is NOT necessary for fingerprints")
+            else:
+                lines.append(f"   → Phase 1 ECFP4+UMAP OUTPERFORMS Phase 5 raw ECFP4 by {abs(rel_delta):.1f}%")
+                lines.append("   → UMAP improves fingerprint-based screening")
+    
+    # Raw Descriptors: Phase 5 raw features vs Phase 1/4 features+UMAP
+    if "raw_descriptors" in phase5_summary_stats and "raw_descriptors" in phase1_summary_stats:
+        p5_ef1_mean, p5_ef1_std = phase5_summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
+        p1_ef1_mean, p1_ef1_std = phase1_summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
         
-        tani_mean = np.mean(tani_vals)
-        raw_mean = np.mean(raw_vals)
-        abs_delta = raw_mean - tani_mean
-        rel_delta = (abs_delta / tani_mean) * 100 if tani_mean != 0 else np.nan
+        if not np.isnan(p5_ef1_mean) and not np.isnan(p1_ef1_mean):
+            abs_delta = p5_ef1_mean - p1_ef1_mean
+            rel_delta = (abs_delta / p1_ef1_mean) * 100 if p1_ef1_mean != 0 else np.nan
+            
+            lines.append("\n2. Raw Descriptors (Feature Baseline):")
+            lines.append(f"   Phase 5 (raw features, scaled, NO UMAP):   EF@1% = {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}")
+            lines.append(f"   Phase 1/4 (features+UMAP, Euclidean):      EF@1% = {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}")
+            lines.append("   " + "-"*70)
+            lines.append(f"   Absolute Change (Δ):   {abs_delta:+.1f}")
+            lines.append(f"   Relative Change (%):   {rel_delta:+.1f}%")
+            
+            if abs_delta > 0:
+                lines.append(f"   → Phase 5 raw features OUTPERFORM Phase 1/4 features+UMAP by {abs(rel_delta):.1f}%")
+                lines.append("   → UMAP is NOT necessary for descriptors")
+            else:
+                lines.append(f"   → Phase 1/4 features+UMAP OUTPERFORM Phase 5 raw features by {abs(rel_delta):.1f}%")
+                lines.append("   → UMAP improves feature-based screening")
+    
+    # Negative Control: Just report (no baseline comparison)
+    if "negative_control" in phase5_summary_stats:
+        nc_ef1_mean, nc_ef1_std = phase5_summary_stats["negative_control"].get("ef_1%", (np.nan, np.nan))
         
-        total_tanimoto.extend(tani_vals)
-        total_raw.extend(raw_vals)
-        
-        lines.append(f"{mf:<25} {tani_mean:>11.1f} {raw_mean:>11.1f} {abs_delta:>9.1f} {rel_delta:>11.1f}")
+        if not np.isnan(nc_ef1_mean):
+            lines.append("\n3. Negative Control (Database Bias Test):")
+            lines.append(f"   Non-kinase actives vs kinase model:        EF@1% = {nc_ef1_mean:.1f} ± {nc_ef1_std:.1f}")
+            lines.append("   Expected random performance:               EF@1% ≈ 1.0")
+            lines.append("   " + "-"*70)
+            
+            if nc_ef1_mean < 2.0:
+                lines.append("   → EF@1% ≈ 1.0 indicates NO database bias (good)")
+            else:
+                lines.append(f"   → EF@1% = {nc_ef1_mean:.1f} suggests POTENTIAL database bias")
+                lines.append("   → Model may be enriching ChEMBL compounds regardless of target")
     
-    lines.append("-"*80)
-    
-    # Overall statistics
-    if total_tanimoto and total_raw:
-        overall_tani = np.mean(total_tanimoto)
-        overall_raw = np.mean(total_raw)
-        overall_abs = overall_raw - overall_tani
-        overall_rel = (overall_abs / overall_tani) * 100 if overall_tani != 0 else np.nan
-        lines.append(f"{'OVERALL':<25} {overall_tani:>11.1f} {overall_raw:>11.1f} {overall_abs:>9.1f} {overall_rel:>11.1f}")
-    
-    lines.append("="*80)
-    lines.append("")
-    
-    return "\n".join(lines)
-
-
-def compute_negative_control_comparison(
-    workspace_dir: Path,
-    results_dict: Dict[str, List[Dict]],
-) -> str:
-    """
-    Generate summary comparison for negative_control experiment.
-    Shows EF@1% statistics across all non-kinase control classes.
-    """
-    neg_results = results_dict.get("negative_control", [])
-    tanimoto_results = results_dict.get("tanimoto", [])
-    
-    if not neg_results or not tanimoto_results:
-        return "No data available for negative_control comparison.\n"
-    
-    # Extract EF@1% values
-    neg_ef1 = [r.get("ef_1%", np.nan) for r in neg_results]
-    tani_ef1 = [r.get("ef_1%", np.nan) for r in tanimoto_results]
-    
-    neg_ef1 = [v for v in neg_ef1 if not np.isnan(v)]
-    tani_ef1 = [v for v in tani_ef1 if not np.isnan(v)]
-    
-    if not neg_ef1 or not tani_ef1:
-        return "Insufficient data for negative_control comparison.\n"
-    
-    neg_mean = np.mean(neg_ef1)
-    neg_std = np.std(neg_ef1)
-    tani_mean = np.mean(tani_ef1)
-    tani_std = np.std(tani_ef1)
-    
-    abs_delta = neg_mean - tani_mean
-    rel_delta = (abs_delta / tani_mean) * 100 if tani_mean != 0 else np.nan
-    
-    lines = []
-    lines.append("\nNegative Control vs Tanimoto Baseline: EF@1% Summary")
-    lines.append("="*80)
-    lines.append(f"Tanimoto Baseline:     {tani_mean:.1f} ± {tani_std:.1f} (n={len(tani_ef1)})")
-    lines.append(f"Negative Control:      {neg_mean:.1f} ± {neg_std:.1f} (n={len(neg_ef1)})")
-    lines.append("-"*80)
-    lines.append(f"Absolute Change (Δ):   {abs_delta:+.1f}")
-    lines.append(f"Relative Change (%):   {rel_delta:+.1f}%")
-    lines.append("="*80)
+    lines.append("\n" + "="*80)
     lines.append("")
     
     return "\n".join(lines)
@@ -1120,12 +1096,10 @@ def main():
         for warning in test_warnings:
             print(f"  ⚠ {warning}")
     
-    # Generate detailed comparisons
-    print("\nGenerating detailed comparisons...")
-    raw_desc_comparison = compute_raw_descriptors_comparison(workspace_dir, results_dict)
-    neg_control_comparison = compute_negative_control_comparison(workspace_dir, results_dict)
-    print("  ✓ Raw descriptors per-MF comparison")
-    print("  ✓ Negative control summary comparison")
+    # Generate detailed comparisons (each Phase 5 experiment vs its Phase 1/4 baseline)
+    print("\nGenerating baseline comparisons...")
+    baseline_comparison = compute_baseline_comparisons(summary_stats, phase1_summary_stats)
+    print("  ✓ Each Phase 5 experiment vs its Phase 1/4 baseline")
     
     # Compute stratified potency tier metrics
     if args.skip_stratified:
@@ -1163,12 +1137,10 @@ def main():
         f.write(text_report)
         f.write("\n\n")
         f.write("="*80)
-        f.write("\nDETAILED COMPARISONS:\n")
+        f.write("\nBASELINE COMPARISONS (Phase 5 vs Phase 1/4):\n")
         f.write("="*80)
         f.write("\n")
-        f.write(raw_desc_comparison)
-        f.write(neg_control_comparison)
-        f.write("\n")
+        f.write(baseline_comparison)
         f.write("="*80)
         f.write("\nLATEX TABLE:\n")
         f.write("="*80)
