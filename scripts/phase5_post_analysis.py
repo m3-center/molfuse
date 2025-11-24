@@ -150,6 +150,91 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
 # Statistical Analysis
 # ============================================================================
 
+def load_phase1_reference_results(
+    workspace_dir: Path,
+    phase5_results: Dict[str, List[Dict]],
+) -> Dict[str, List[Dict]]:
+    """
+    Load Phase 1/4 reference results that correspond to Phase 5 experiments.
+    
+    For each Phase 5 run, loads the Phase 1/4 baseline it's testing against:
+    - tanimoto: Load Phase 1 fingerprint+UMAP runs (same target/replicate)
+    - raw_descriptors: Load Phase 1/4 features+UMAP runs (same target/replicate)
+    - negative_control: Load Phase 1 kinase runs (control uses kinase model)
+    
+    Returns:
+        Dict mapping experiment_type -> list of Phase 1/4 result dicts
+    """
+    phase1_dir = workspace_dir / "phase1"
+    phase4_dir = workspace_dir / "phase4"
+    
+    reference_results = {}
+    
+    # For each Phase 5 experiment type, find corresponding Phase 1/4 runs
+    for exp_type, phase5_runs in phase5_results.items():
+        if not phase5_runs:
+            continue
+        
+        ref_runs = []
+        
+        for phase5_run in phase5_runs:
+            config = phase5_run.get("config", {})
+            target = config.get("target", "")
+            replicate = config.get("replicate", 1)
+            
+            # Determine which Phase 1/4 baseline to load
+            if exp_type == "tanimoto":
+                # Load Phase 1 fingerprint+UMAP run (ECFP4 with UMAP)
+                # Look for runs like: *_UMAP_fingerprints_*_rep{replicate}
+                pattern = f"*_UMAP_fingerprints_*_rep{replicate}"
+                search_dirs = [phase1_dir]
+                
+            elif exp_type == "raw_descriptors":
+                # Load Phase 1/4 features+UMAP run
+                # Try Phase 4 first (expansion), then Phase 1
+                pattern = f"*_UMAP_features_*_rep{replicate}"
+                search_dirs = [phase4_dir, phase1_dir]
+                
+            elif exp_type == "negative_control":
+                # Load Phase 1 kinase baseline (ABL1 or target from config)
+                # Negative control uses kinase model, so load kinase runs
+                pattern = f"*_UMAP_features_*_rep1"  # Use rep1 as reference
+                search_dirs = [phase1_dir]
+            else:
+                continue
+            
+            # Search for matching Phase 1/4 run
+            ref_summary = None
+            for search_dir in search_dirs:
+                if not search_dir.exists():
+                    continue
+                    
+                matching_runs = list(search_dir.glob(pattern))
+                if matching_runs:
+                    # Take first match (or filter by target if needed)
+                    run_dir = matching_runs[0]
+                    summary_path = run_dir / "logs" / "phase1_summary.json"
+                    if not summary_path.exists():
+                        summary_path = run_dir / "logs" / "phase4_summary.json"
+                    
+                    if summary_path.exists():
+                        try:
+                            with summary_path.open("r") as f:
+                                ref_summary = json.load(f)
+                            break
+                        except Exception:
+                            continue
+            
+            if ref_summary:
+                ref_runs.append(ref_summary)
+        
+        if ref_runs:
+            reference_results[exp_type] = ref_runs
+            print(f"  Loaded {len(ref_runs)} Phase 1/4 reference runs for {exp_type}")
+    
+    return reference_results
+
+
 def compute_summary_stats(results: List[Dict]) -> Dict[str, Tuple[float, float]]:
     """
     Compute mean ± std for each metric across replicates.
@@ -173,56 +258,57 @@ def compute_summary_stats(results: List[Dict]) -> Dict[str, Tuple[float, float]]
     return stats_dict
 
 
-def perform_pairwise_significance_tests(
-    results_dict: Dict[str, List[Dict]],
-) -> Tuple[Dict[Tuple[str, str], Dict[str, float]], List[str]]:
+def perform_baseline_comparison_tests(
+    phase5_results: Dict[str, List[Dict]],
+    phase1_reference: Dict[str, List[Dict]],
+) -> Tuple[Dict[str, Dict[str, float]], List[str]]:
     """
-    Perform pairwise t-tests between all Phase 5 experiments.
+    Compare each Phase 5 experiment against its Phase 1/4 baseline (with UMAP).
+    
+    Tests:
+    - tanimoto (Phase 5 raw ECFP4) vs Phase 1 ECFP4+UMAP
+    - raw_descriptors (Phase 5 raw features) vs Phase 1/4 features+UMAP
+    - negative_control: not tested (different data - just report separately)
     
     Returns:
-        Tuple of (p_values dict keyed by (exp1, exp2), list of warning messages)
+        Tuple of (p_values dict keyed by experiment, list of warning messages)
     """
     p_values = {}
     warning_messages = []
     
-    # All pairwise comparisons between the 3 experiments
-    comparisons = [
-        ("tanimoto", "raw_descriptors"),
-        ("tanimoto", "negative_control"),
-        ("raw_descriptors", "negative_control"),
-    ]
-    
-    for exp1, exp2 in comparisons:
-        exp1_results = results_dict.get(exp1, [])
-        exp2_results = results_dict.get(exp2, [])
+    for exp_type in ["tanimoto", "raw_descriptors"]:
+        phase5_runs = phase5_results.get(exp_type, [])
+        phase1_runs = phase1_reference.get(exp_type, [])
         
-        if not exp1_results or not exp2_results:
+        if not phase5_runs or not phase1_runs:
+            print(f"  Skipping {exp_type}: missing Phase 5 or Phase 1 data")
             continue
         
-        p_values[(exp1, exp2)] = {}
+        p_values[exp_type] = {}
         
         for metric in METRICS:
-            exp1_vals = [r.get(metric, np.nan) for r in exp1_results]
-            exp2_vals = [r.get(metric, np.nan) for r in exp2_results]
+            phase5_vals = [r.get(metric, np.nan) for r in phase5_runs]
+            phase1_vals = [r.get(metric, np.nan) for r in phase1_runs]
             
             # Remove NaNs
-            exp1_vals = [v for v in exp1_vals if not np.isnan(v)]
-            exp2_vals = [v for v in exp2_vals if not np.isnan(v)]
+            phase5_vals = [v for v in phase5_vals if not np.isnan(v)]
+            phase1_vals = [v for v in phase1_vals if not np.isnan(v)]
             
-            if len(exp1_vals) < 2 or len(exp2_vals) < 2:
-                p_values[(exp1, exp2)][metric] = np.nan
+            if len(phase5_vals) < 2 or len(phase1_vals) < 2:
+                p_values[exp_type][metric] = np.nan
                 continue
             
-            # Use independent t-test (different sample sizes likely)
+            # Independent t-test (Phase 5 no-UMAP vs Phase 1 with-UMAP)
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
-                t_stat, p_val = stats.ttest_ind(exp1_vals, exp2_vals)
+                t_stat, p_val = stats.ttest_ind(phase5_vals, phase1_vals)
                 if w:
                     for warning in w:
-                        msg = f"Statistical test warning for {exp1} vs {exp2} ({metric}): {warning.message}"
+                        baseline_name = "Phase 1 ECFP4+UMAP" if exp_type == "tanimoto" else "Phase 1/4 features+UMAP"
+                        msg = f"{exp_type} (no UMAP) vs {baseline_name} ({metric}): {warning.message}"
                         warning_messages.append(msg)
             
-            p_values[(exp1, exp2)][metric] = p_val
+            p_values[exp_type][metric] = p_val
     
     return p_values, warning_messages
 
@@ -617,7 +703,7 @@ def format_p_value(p_val: float) -> str:
 
 def generate_latex_table(
     summary_stats: Dict[str, Dict],
-    p_values: Dict[Tuple[str, str], Dict],
+    p_values: Dict[str, Dict],
     stratified_stats: Dict[str, Dict[str, Tuple[float, float]]],
 ) -> str:
     """Generate LaTeX table for Phase 5 results with stratified potency tiers."""
@@ -680,10 +766,11 @@ def generate_latex_table(
 
 def generate_text_report(
     summary_stats: Dict[str, Dict],
-    p_values: Dict[Tuple[str, str], Dict],
+    p_values: Dict[str, Dict],
     results_dict: Dict[str, List[Dict]],
+    phase1_reference: Dict[str, Dict] = None,
 ) -> str:
-    """Generate human-readable text report for LaTeX inclusion."""
+    """Generate human-readable text report comparing Phase 5 to Phase 1/4 baselines."""
     lines = []
     
     lines.append("="*80)
@@ -825,17 +912,18 @@ def generate_text_report(
 
 def generate_latex_text_snippet(
     summary_stats: Dict[str, Dict],
-    p_values: Dict[Tuple[str, str], Dict],
+    p_values: Dict[str, Dict],
     stratified_stats: Dict[str, Dict[str, Tuple[float, float]]],
+    phase1_reference: Dict[str, Dict] = None,
 ) -> str:
-    """Generate concise LaTeX text snippet for Results section with pairwise comparisons."""
+    """Generate concise LaTeX text snippet showing Phase 5 vs Phase 1/4 baseline comparisons."""
     lines = []
     
     lines.append("% LaTeX snippet for Results/Bias Analysis section")
     lines.append("% Copy the text below into your paper")
     lines.append("% Note: Incomplete experiments will show [INCOMPLETE] markers")
     lines.append("")
-    lines.append("\\subsection{Validation \\& Baseline Experiments}")
+    lines.append("\\subsection{Phase 5: Baseline Validation Experiments}")
     lines.append("")
     
     # Check data availability
@@ -843,143 +931,90 @@ def generate_latex_text_snippet(
     has_raw_descriptors = "raw_descriptors" in summary_stats and summary_stats["raw_descriptors"]
     has_tanimoto = "tanimoto" in summary_stats and summary_stats["tanimoto"]
     
-    # Database bias
+    # Summary of all 3 experiments
+    lines.append("We conducted three baseline experiments to validate MolFuSE's approach:")
+    lines.append("")
+    
+    # Experiment 1: Tanimoto
+    if has_tanimoto:
+        tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
+        tan_roc_mean, tan_roc_std = summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
+        
+        if not np.isnan(tan_ef1_mean):
+            lines.append("\\textbf{Tanimoto Baseline (Industry Standard):} ")
+            lines.append(f"ECFP4 fingerprint similarity achieved EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f} ")
+            lines.append(f"and ROC-AUC = {tan_roc_mean:.3f} $\\pm$ {tan_roc_std:.3f}.")
+            
+            if "tanimoto" in stratified_stats:
+                tan_tiers = stratified_stats["tanimoto"]
+                tier_strs = []
+                for tier, label in [("high", "High (<100 nM)"), ("medium", "Med (100-1K nM)"), ("low", "Low (1-100K nM)")]:
+                    mean, std = tan_tiers.get(tier, (np.nan, np.nan))
+                    if not np.isnan(mean):
+                        tier_strs.append(f"{label}: {mean:.1f}$\\pm${std:.1f}")
+                if tier_strs:
+                    lines.append(f"Stratified: {', '.join(tier_strs)}.")
+            lines.append("")
+        else:
+            lines.append("\\textbf{Tanimoto Baseline:} [INCOMPLETE]")
+            lines.append("")
+    
+    # Experiment 2: Raw Descriptors
+    if has_raw_descriptors:
+        rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
+        rd_roc_mean, rd_roc_std = summary_stats["raw_descriptors"].get("roc_auc", (np.nan, np.nan))
+        
+        if not np.isnan(rd_ef1_mean):
+            lines.append("\\textbf{Raw Descriptors (No UMAP):} ")
+            lines.append(f"1-NN in high-dimensional scaled feature space achieved EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f} ")
+            lines.append(f"and ROC-AUC = {rd_roc_mean:.3f} $\\pm$ {rd_roc_std:.3f}.")
+            
+            if "raw_descriptors" in stratified_stats:
+                rd_tiers = stratified_stats["raw_descriptors"]
+                tier_strs = []
+                for tier, label in [("high", "High"), ("medium", "Med"), ("low", "Low")]:
+                    mean, std = rd_tiers.get(tier, (np.nan, np.nan))
+                    if not np.isnan(mean):
+                        tier_strs.append(f"{label}: {mean:.1f}$\\pm${std:.1f}")
+                if tier_strs:
+                    lines.append(f"Stratified: {', '.join(tier_strs)}.")
+            lines.append("")
+        else:
+            lines.append("\\textbf{Raw Descriptors:} [INCOMPLETE]")
+            lines.append("")
+    
+    # Experiment 3: Negative Control
     if has_negative_control:
         nc_ef1_mean, nc_ef1_std = summary_stats["negative_control"].get("ef_1%", (np.nan, np.nan))
         nc_roc_mean, nc_roc_std = summary_stats["negative_control"].get("roc_auc", (np.nan, np.nan))
         
         if not np.isnan(nc_ef1_mean):
-            lines.append("To address potential database bias, we evaluated the model's performance on")
-            lines.append("structurally distinct non-kinase actives scored against the ABL1 kinase model.")
-            lines.append(f"The negative control yielded EF@1\\% = {nc_ef1_mean:.1f} $\\pm$ {nc_ef1_std:.1f}")
-            lines.append(f"and ROC-AUC = {nc_roc_mean:.3f} $\\pm$ {nc_roc_std:.3f}, indicating")
+            lines.append("\\textbf{Negative Control (Database Bias Test):} ")
+            lines.append(f"Non-kinase actives scored against kinase model: EF@1\\% = {nc_ef1_mean:.1f} $\\pm$ {nc_ef1_std:.1f} ")
+            lines.append(f"and ROC-AUC = {nc_roc_mean:.3f} $\\pm$ {nc_roc_std:.3f}.")
             
             if nc_ef1_mean < 2.0:
-                lines.append("minimal database bias (EF@1\\% $\\approx$ 1.0 represents random scoring).")
+                lines.append("This near-random performance indicates minimal database bias.")
             else:
-                lines.append("potential database bias that warrants further investigation.")
+                lines.append("This elevated performance suggests potential database bias.")
             
-            # Add stratified tier scores if available
             if "negative_control" in stratified_stats:
                 nc_tiers = stratified_stats["negative_control"]
-                tier_text = []
-                for tier in TIER_ORDER:
-                    if tier in nc_tiers:
-                        mean, std = nc_tiers[tier]
-                        if not np.isnan(mean):
-                            tier_label = {"high": "<100 nM", "medium": "100-1000 nM", "low": "1-100K nM"}[tier]
-                            tier_text.append(f"{tier_label}: {mean:.1f} $\\pm$ {std:.1f}")
-                if tier_text:
-                    lines.append(f"Stratified by potency: {', '.join(tier_text)}.")
+                tier_strs = []
+                for tier, label in [("high", "High"), ("medium", "Med"), ("low", "Low")]:
+                    mean, std = nc_tiers.get(tier, (np.nan, np.nan))
+                    if not np.isnan(mean):
+                        tier_strs.append(f"{label}: {mean:.1f}$\\pm${std:.1f}")
+                if tier_strs:
+                    lines.append(f"Stratified: {', '.join(tier_strs)}.")
+            lines.append("")
         else:
-            lines.append("% [INCOMPLETE: Database bias control experiment not yet finished]")
-    else:
-        lines.append("% [INCOMPLETE: Database bias control experiment not yet started]")
-    
-    lines.append("")
-    
-    # Baselines comparison
-    if has_raw_descriptors and has_tanimoto:
-        rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
-        tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
-        
-        if not np.isnan(rd_ef1_mean) and not np.isnan(tan_ef1_mean):
-            lines.append("We compared MolFuSE (Phase 2) against two baselines: (1) 1-NN in the raw 2D descriptor space")
-            lines.append("(no dimensionality reduction) and (2) Tanimoto similarity with ECFP4 fingerprints (industry standard).")
-            lines.append(f"Raw descriptors achieved overall EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f},")
-            lines.append(f"Tanimoto baseline achieved EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f},")
-            lines.append(f"compared to MolFuSE (Phase 2) EF@1\\% = {phase2_ef1_mean:.1f}.")
-            
-            # Add stratified comparison
+            lines.append("\\textbf{Negative Control:} [INCOMPLETE]")
             lines.append("")
-            lines.append("Stratified by potency tier:")
-            
-            # Tanimoto tiers
-            if "tanimoto" in stratified_stats:
-                tan_tiers = stratified_stats["tanimoto"]
-                tan_high_mean, tan_high_std = tan_tiers.get("high", (np.nan, np.nan))
-                tan_med_mean, tan_med_std = tan_tiers.get("medium", (np.nan, np.nan))
-                tan_low_mean, tan_low_std = tan_tiers.get("low", (np.nan, np.nan))
-                
-                if not np.isnan(tan_high_mean):
-                    lines.append(f"Tanimoto: High (<100 nM): {tan_high_mean:.1f} $\\pm$ {tan_high_std:.1f}, "
-                               f"Medium (100-1000 nM): {tan_med_mean:.1f} $\\pm$ {tan_med_std:.1f}, "
-                               f"Low (1-100K nM): {tan_low_mean:.1f} $\\pm$ {tan_low_std:.1f}.")
-            
-            # Raw descriptors tiers
-            if "raw_descriptors" in stratified_stats:
-                rd_tiers = stratified_stats["raw_descriptors"]
-                rd_high_mean, rd_high_std = rd_tiers.get("high", (np.nan, np.nan))
-                rd_med_mean, rd_med_std = rd_tiers.get("medium", (np.nan, np.nan))
-                rd_low_mean, rd_low_std = rd_tiers.get("low", (np.nan, np.nan))
-                
-                if not np.isnan(rd_high_mean):
-                    lines.append(f"Raw descriptors: High: {rd_high_mean:.1f} $\\pm$ {rd_high_std:.1f}, "
-                               f"Medium: {rd_med_mean:.1f} $\\pm$ {rd_med_std:.1f}, "
-                               f"Low: {rd_low_mean:.1f} $\\pm$ {rd_low_std:.1f}.")
-            
-            lines.append(f"MolFuSE (Phase 2): High: {phase2_tier_high:.1f}, "
-                        f"Medium: {phase2_tier_medium:.1f}, Low: {phase2_tier_low:.1f}.")
-            
-            lines.append("")
-            lines.append("These results demonstrate that MolFuSE's UMAP-based dimensionality reduction")
-            lines.append("specifically enriches high-potency actives, outperforming both raw descriptor")
-            lines.append("and fingerprint-based baselines.")
     
-    elif has_raw_descriptors or has_tanimoto:
-        # Partial data - show what we have
-        if has_raw_descriptors:
-            rd_ef1_mean, rd_ef1_std = summary_stats["raw_descriptors"].get("ef_1%", (np.nan, np.nan))
-            
-            if not np.isnan(rd_ef1_mean):
-                lines.append("We evaluated 1-NN in the raw 2D descriptor space (no dimensionality reduction),")
-                lines.append(f"achieving overall EF@1\\% = {rd_ef1_mean:.1f} $\\pm$ {rd_ef1_std:.1f}")
-                lines.append(f"compared to MolFuSE (Phase 2) EF@1\\% = {phase2_ef1_mean:.1f}.")
-                
-                # Add stratified tiers if available
-                if "raw_descriptors" in stratified_stats:
-                    rd_tiers = stratified_stats["raw_descriptors"]
-                    rd_high_mean, rd_high_std = rd_tiers.get("high", (np.nan, np.nan))
-                    rd_med_mean, rd_med_std = rd_tiers.get("medium", (np.nan, np.nan))
-                    rd_low_mean, rd_low_std = rd_tiers.get("low", (np.nan, np.nan))
-                    
-                    if not np.isnan(rd_high_mean):
-                        lines.append("")
-                        lines.append("Stratified by potency tier:")
-                        lines.append(f"Raw descriptors: High (<100 nM): {rd_high_mean:.1f} $\\pm$ {rd_high_std:.1f}, "
-                                   f"Medium (100-1000 nM): {rd_med_mean:.1f} $\\pm$ {rd_med_std:.1f}, "
-                                   f"Low (1-100K nM): {rd_low_mean:.1f} $\\pm$ {rd_low_std:.1f}.")
-                        lines.append(f"MolFuSE (Phase 2): High: {phase2_tier_high:.1f}, "
-                                   f"Medium: {phase2_tier_medium:.1f}, Low: {phase2_tier_low:.1f}.")
-                
-                lines.append("% [INCOMPLETE: Tanimoto baseline not yet complete for full comparison]")
-        
-        elif has_tanimoto:
-            tan_ef1_mean, tan_ef1_std = summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
-            
-            if not np.isnan(tan_ef1_mean):
-                lines.append(f"We established a Tanimoto ECFP4 baseline (EF@1\\% = {tan_ef1_mean:.1f} $\\pm$ {tan_ef1_std:.1f})")
-                lines.append(f"compared to MolFuSE (Phase 2) EF@1\\% = {phase2_ef1_mean:.1f}.")
-                
-                # Add stratified tiers if available
-                if "tanimoto" in stratified_stats:
-                    tan_tiers = stratified_stats["tanimoto"]
-                    tan_high_mean, tan_high_std = tan_tiers.get("high", (np.nan, np.nan))
-                    tan_med_mean, tan_med_std = tan_tiers.get("medium", (np.nan, np.nan))
-                    tan_low_mean, tan_low_std = tan_tiers.get("low", (np.nan, np.nan))
-                    
-                    if not np.isnan(tan_high_mean):
-                        lines.append("")
-                        lines.append("Stratified by potency tier:")
-                        lines.append(f"Tanimoto: High (<100 nM): {tan_high_mean:.1f} $\\pm$ {tan_high_std:.1f}, "
-                                   f"Medium (100-1000 nM): {tan_med_mean:.1f} $\\pm$ {tan_med_std:.1f}, "
-                                   f"Low (1-100K nM): {tan_low_mean:.1f} $\\pm$ {tan_low_std:.1f}.")
-                        lines.append(f"MolFuSE (Phase 2): High: {phase2_tier_high:.1f}, "
-                                   f"Medium: {phase2_tier_medium:.1f}, Low: {phase2_tier_low:.1f}.")
-                
-                lines.append("% [INCOMPLETE: Raw descriptor baseline not yet complete for full comparison]")
-    else:
-        lines.append("% [INCOMPLETE: Baseline experiments not yet started]")
+    # Interpretation note
+    lines.append("\\textbf{Note:} Pairwise statistical comparisons between experiments are provided in the supplementary materials.")
+    lines.append("All three experiments use the same evaluation set (ABL1 kinase actives + ZINC decoys).")
     
     lines.append("")
     
@@ -1062,12 +1097,21 @@ def main():
         else:
             print(f"  ✗ {EXPERIMENT_NAMES.get(exp_type, exp_type)}: No data (skipped)")
     
-    # Perform pairwise significance tests between the 3 Phase 5 experiments
-    print("\nPerforming pairwise statistical tests between Phase 5 experiments...")
-    p_values, test_warnings = perform_pairwise_significance_tests(results_dict)
+    # Load Phase 1/4 reference results (with UMAP baselines)
+    print("\nLoading Phase 1/4 reference results (UMAP baselines)...")
+    phase1_reference = load_phase1_reference_results(workspace_dir, results_dict)
+    if phase1_reference:
+        total_ref = sum(len(runs) for runs in phase1_reference.values())
+        print(f"  Loaded {total_ref} Phase 1/4 baseline runs for comparison")
+    else:
+        print("  WARNING: No Phase 1/4 reference data found - cannot perform baseline comparisons")
+    
+    # Perform statistical tests: Phase 5 (no UMAP) vs Phase 1/4 (with UMAP)
+    print("\nPerforming statistical tests: Phase 5 (no UMAP) vs Phase 1/4 (with UMAP)...")
+    p_values, test_warnings = perform_baseline_comparison_tests(results_dict, phase1_reference)
     if p_values:
         n_comparisons = sum(len(metrics) for metrics in p_values.values())
-        print(f"  Computed {n_comparisons} pairwise metric comparisons across {len(p_values)} experiment pairs")
+        print(f"  Computed {n_comparisons} metric comparisons across {len(p_values)} experiments")
     else:
         print("  No comparisons (insufficient data)")
     
@@ -1100,12 +1144,19 @@ def main():
     
     print("")
     
+    # Compute Phase 1 reference summary stats for comparison
+    phase1_summary_stats = {}
+    if phase1_reference:
+        for exp_type, runs in phase1_reference.items():
+            if runs:
+                phase1_summary_stats[exp_type] = compute_summary_stats(runs)
+    
     # Generate reports
     print("Generating reports...")
     
-    text_report = generate_text_report(summary_stats, p_values, results_dict)
+    text_report = generate_text_report(summary_stats, p_values, results_dict, phase1_summary_stats)
     latex_table = generate_latex_table(summary_stats, p_values, stratified_stats)
-    latex_snippet = generate_latex_text_snippet(summary_stats, p_values, stratified_stats)
+    latex_snippet = generate_latex_text_snippet(summary_stats, p_values, stratified_stats, phase1_summary_stats)
     
     # Write output
     with output_path.open("w") as f:
