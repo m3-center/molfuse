@@ -82,29 +82,36 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
     missing_runs = []
     error_runs = []
     
-    # Match any run directory (e.g., tanimoto_rep1, raw_descriptors_rep2, etc.)
-    for run_dir in sorted(phase5_dir.glob("*")):
-        if not run_dir.is_dir():
-            continue
+    # Collect from all detected subdirectories
+    for phase5_dir in phase5_subdirs:
+        print(f"Scanning: {phase5_dir}")
         
-        summary_path = run_dir / "logs" / "phase5_summary.json"
+        # Match any run directory (e.g., tanimoto_rep1, raw_descriptors_rep2, etc.)
+        for run_dir in sorted(phase5_dir.glob("*")):
+            if not run_dir.is_dir():
+                continue
         
-        if not summary_path.exists():
-            missing_runs.append(run_dir.name)
-            continue
-        
-        try:
-            with summary_path.open("r") as f:
-                summary = json.load(f)
+            summary_path = run_dir / "logs" / "phase5_summary.json"
             
-            exp_type = summary.get("experiment_type")
-            if exp_type in results:
-                results[exp_type].append(summary)
-            else:
-                print(f"WARNING: Unknown experiment type '{exp_type}' in {run_dir.name}, skipping")
-        
-        except Exception as e:
-            error_runs.append((run_dir.name, str(e)))
+            if not summary_path.exists():
+                missing_runs.append(run_dir.name)
+                continue
+            
+            try:
+                with summary_path.open("r") as f:
+                    summary = json.load(f)
+                
+                # Store the actual parent directory for later use
+                summary["_phase5_subdir"] = phase5_dir.name
+                
+                exp_type = summary.get("experiment_type")
+                if exp_type in results:
+                    results[exp_type].append(summary)
+                else:
+                    print(f"WARNING: Unknown experiment type '{exp_type}' in {run_dir.name}, skipping")
+            
+            except Exception as e:
+                error_runs.append((run_dir.name, str(e)))
     
     # Report missing/error runs
     if missing_runs:
@@ -313,8 +320,9 @@ def compute_stratified_metrics_for_run(
     run_name = run_summary["run_name"]
     config = run_summary.get("config", {})
     
-    # Get paths
-    phase5_dir = workspace_dir / "phase5" / "validation" / run_name
+    # Get paths - use stored subdirectory (validation or expansion)
+    phase5_subdir = run_summary.get("_phase5_subdir", "validation")
+    phase5_dir = workspace_dir / "phase5" / phase5_subdir / run_name
     ranked_scores_path = phase5_dir / "artifacts" / "ranked_scores.csv"
     
     if not ranked_scores_path.exists():
