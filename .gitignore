@@ -1,9 +1,11 @@
 # UMMBAS - Data and outputs (DO NOT COMMIT)
 datasets/*
 datasets_debugging/*
+datasets_deprecated/*
 test_outputs/*
 experiment_workspace*
 final_report*
+slurm_logs/*
 logs/*
 reports/*
 temp/*
