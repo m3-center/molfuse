@@ -71,7 +71,7 @@ def collect_phase5_results(workspace_dir: Path) -> Dict[str, List[Dict]]:
     Returns:
         Dict mapping experiment_type -> list of result dicts
     """
-    phase5_dir = workspace_dir / "phase5" / "validation"
+    phase5_dir = workspace_dir / "phase5" / "expansion"
     
     if not phase5_dir.exists():
         print(f"WARNING: Phase 5 validation directory not found: {phase5_dir}")
