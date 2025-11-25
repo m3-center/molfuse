@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -27,11 +28,17 @@ import joblib
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
+from sklearn.neighbors import NearestNeighbors
 
 
 # ============================================================================
 # Utility Functions
 # ============================================================================
+
+def flush_print(*args, **kwargs):
+    """Print and immediately flush stdout."""
+    print(*args, **kwargs)
+    sys.stdout.flush()
 
 def load_fingerprints(csv_path: Path, max_rows: int = None) -> Tuple[np.ndarray, List[str]]:
     """
@@ -114,28 +121,42 @@ def load_features(csv_path: Path, max_rows: int = None) -> Tuple[np.ndarray, Lis
     return X, smiles
 
 
-def jaccard_distance_batch(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+def jaccard_distance_batch(X: np.ndarray, Y: np.ndarray, batch_size: int = 1000) -> np.ndarray:
     """
-    Compute Jaccard distance between binary vectors.
+    Compute Jaccard distance between binary vectors using batching to save memory.
     
     Args:
-        X: (n_samples, n_features) binary array
-        Y: (n_refs, n_features) binary array
+        X: (n_samples, n_features) binary array (float32)
+        Y: (n_refs, n_features) binary array (float32)
+        batch_size: Number of samples to process at once
     
     Returns:
         (n_samples, n_refs) distance matrix
     """
-    # Compute intersection and union
-    intersection = np.dot(X, Y.T)  # (n_samples, n_refs)
-    x_sum = X.sum(axis=1, keepdims=True)  # (n_samples, 1)
-    y_sum = Y.sum(axis=1, keepdims=True).T  # (1, n_refs)
-    union = x_sum + y_sum - intersection
+    n_samples = X.shape[0]
+    n_refs = Y.shape[0]
     
-    # Jaccard similarity = intersection / union
-    jaccard_sim = intersection / (union + 1e-10)
+    # Pre-compute Y sums (1, n_refs)
+    y_sum = Y.sum(axis=1, keepdims=True).T
     
-    # Jaccard distance = 1 - similarity
-    return 1.0 - jaccard_sim
+    # Initialize result matrix (float32)
+    distances = np.zeros((n_samples, n_refs), dtype=np.float32)
+    
+    for i in range(0, n_samples, batch_size):
+        end = min(i + batch_size, n_samples)
+        X_batch = X[i:end]
+        
+        # Compute intersection
+        intersection = np.dot(X_batch, Y.T)
+        
+        # Compute union
+        x_sum = X_batch.sum(axis=1, keepdims=True)
+        union = x_sum + y_sum - intersection
+        
+        # Jaccard distance = 1 - (intersection / union)
+        distances[i:end] = 1.0 - (intersection / (union + 1e-10))
+        
+    return distances
 
 
 # ============================================================================
@@ -145,18 +166,16 @@ def jaccard_distance_batch(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
 def benchmark_raw_ecfp4(
     candidates_fp: np.ndarray,
     mf_fp: np.ndarray,
+    batch_size: int = 1000,
 ) -> Dict[str, float]:
     """
     Benchmark raw ECFP4 + Tanimoto scoring.
-    
-    Returns:
-        Dict with timing breakdown
     """
     results = {}
     
     # Time the scoring step
     start = time.time()
-    distances = jaccard_distance_batch(candidates_fp, mf_fp)
+    distances = jaccard_distance_batch(candidates_fp, mf_fp, batch_size=batch_size)
     scores = -distances.min(axis=1)  # 1-NN: negative distance
     end = time.time()
     
@@ -172,25 +191,30 @@ def benchmark_raw_features(
     candidates_feat: np.ndarray,
     mf_feat: np.ndarray,
     scaler,
+    batch_size: int = 1000,
 ) -> Dict[str, float]:
     """
     Benchmark raw features + Euclidean scoring.
-    
-    Returns:
-        Dict with timing breakdown
     """
     results = {}
     
     # Time scaling
     start = time.time()
-    candidates_scaled = scaler.transform(candidates_feat)
+    candidates_scaled = scaler.transform(candidates_feat).astype(np.float32)
     end = time.time()
     results["scaling_time"] = end - start
     
-    # Time scoring
+    # Time scoring (batched cdist)
     start = time.time()
-    distances = cdist(candidates_scaled, mf_feat, metric="euclidean")
-    scores = -distances.min(axis=1)
+    n_samples = len(candidates_scaled)
+    scores = np.zeros(n_samples, dtype=np.float32)
+    
+    for i in range(0, n_samples, batch_size):
+        end_idx = min(i + batch_size, n_samples)
+        batch = candidates_scaled[i:end_idx]
+        dists = cdist(batch, mf_feat, metric="euclidean")
+        scores[i:end_idx] = -dists.min(axis=1)
+        
     end = time.time()
     results["scoring_time"] = end - start
     
@@ -203,73 +227,66 @@ def benchmark_raw_features(
 
 def benchmark_ecfp4_umap(
     candidates_fp: np.ndarray,
-    mf_embedding: np.ndarray,
+    mf_tree: NearestNeighbors,
     umap_model,
 ) -> Dict[str, float]:
     """
-    Benchmark ECFP4 + UMAP (20D) scoring.
-    
-    Returns:
-        Dict with timing breakdown
+    Benchmark ECFP4 + UMAP (20D) scoring using KDTree.
     """
     results = {}
     
     # Time UMAP transform
     start = time.time()
-    candidates_embedded = umap_model.transform(candidates_fp)
+    candidates_embedded = umap_model.transform(candidates_fp).astype(np.float32)
     end = time.time()
     results["transform_time"] = end - start
     
-    # Time scoring in 20D space
+    # Time scoring (Tree query)
     start = time.time()
-    distances = cdist(candidates_embedded, mf_embedding, metric="euclidean")
-    scores = -distances.min(axis=1)
+    distances, _ = mf_tree.kneighbors(candidates_embedded)
+    scores = -distances.flatten()
     end = time.time()
     results["scoring_time"] = end - start
     
     results["total_time"] = results["transform_time"] + results["scoring_time"]
     results["n_candidates"] = len(candidates_fp)
-    results["n_references"] = len(mf_embedding)
+    # Note: n_references is implicit in the tree
     
     return results
 
 
 def benchmark_features_umap(
     candidates_feat: np.ndarray,
-    mf_embedding: np.ndarray,
+    mf_tree: NearestNeighbors,
     scaler,
     umap_model,
 ) -> Dict[str, float]:
     """
-    Benchmark Features + UMAP (2D) scoring.
-    
-    Returns:
-        Dict with timing breakdown
+    Benchmark Features + UMAP (2D) scoring using KDTree.
     """
     results = {}
     
     # Time scaling
     start = time.time()
-    candidates_scaled = scaler.transform(candidates_feat)
+    candidates_scaled = scaler.transform(candidates_feat).astype(np.float32)
     end = time.time()
     results["scaling_time"] = end - start
     
     # Time UMAP transform
     start = time.time()
-    candidates_embedded = umap_model.transform(candidates_scaled)
+    candidates_embedded = umap_model.transform(candidates_scaled).astype(np.float32)
     end = time.time()
     results["transform_time"] = end - start
     
-    # Time scoring in 2D space
+    # Time scoring (Tree query)
     start = time.time()
-    distances = cdist(candidates_embedded, mf_embedding, metric="euclidean")
-    scores = -distances.min(axis=1)
+    distances, _ = mf_tree.kneighbors(candidates_embedded)
+    scores = -distances.flatten()
     end = time.time()
     results["scoring_time"] = end - start
     
     results["total_time"] = results["scaling_time"] + results["transform_time"] + results["scoring_time"]
     results["n_candidates"] = len(candidates_feat)
-    results["n_references"] = len(mf_embedding)
     
     return results
 
@@ -311,22 +328,28 @@ def run_benchmark(
     
     # Load MF embedding (column names are z0, z1, ..., z19 for 20D)
     mf_fp_embedding_df = pd.read_csv(phase1_dir / "artifacts" / "embedding_mf.csv")
-    mf_fp_embedding = mf_fp_embedding_df[[f"z{i}" for i in range(20)]].values
+    mf_fp_embedding = mf_fp_embedding_df[[f"z{i}" for i in range(20)]].values.astype(np.float32)
+    
+    # Build KDTree for MF embedding (20D)
+    print("  Building KDTree for MF embedding (20D)...")
+    mf_fp_tree = NearestNeighbors(n_neighbors=1, algorithm='kd_tree', metric='euclidean', n_jobs=-1)
+    mf_fp_tree.fit(mf_fp_embedding)
     
     # Generate SYNTHETIC MF fingerprints for raw baseline (avoid data loading issues)
     print("  Generating synthetic MF fingerprints for raw baseline...")
     n_mf_fp_samples = len(mf_fp_embedding)
     np.random.seed(41)
-    mf_fp_raw = np.random.randint(0, 2, size=(n_mf_fp_samples, 2048))
+    # Use float32 for BLAS optimization in dot product
+    mf_fp_raw = np.random.randint(0, 2, size=(n_mf_fp_samples, 2048)).astype(np.float32)
     print(f"    Synthetic MF fingerprints: {mf_fp_raw.shape}")
     
-    print(f"  UMAP model: {phase1_fp_run}")
-    print(f"  MF embedding: {mf_fp_embedding.shape}")
+    flush_print(f"  UMAP model: {phase1_fp_run}")
+    flush_print(f"  MF embedding: {mf_fp_embedding.shape}")
     
     # ========================================================================
     # Load Phase 1 Features+UMAP Model (2D)
     # ========================================================================
-    print("\nLoading Phase 1 Features+UMAP model (2D)...")
+    flush_print("\nLoading Phase 1 Features+UMAP model (2D)...")
     phase1_feat_dir = workspace_dir / "phase1" / phase1_feat_run
     
     # Load scaler
@@ -337,90 +360,95 @@ def run_benchmark(
     
     # Load MF embedding (2D, column names are z0, z1)
     mf_feat_embedding_df = pd.read_csv(phase1_feat_dir / "artifacts" / "embedding_mf.csv")
-    mf_feat_embedding = mf_feat_embedding_df[[f"z{i}" for i in range(2)]].values
+    mf_feat_embedding = mf_feat_embedding_df[[f"z{i}" for i in range(2)]].values.astype(np.float32)
+    
+    # Build KDTree for MF embedding (2D)
+    print("  Building KDTree for MF embedding (2D)...")
+    mf_feat_tree = NearestNeighbors(n_neighbors=1, algorithm='kd_tree', metric='euclidean', n_jobs=-1)
+    mf_feat_tree.fit(mf_feat_embedding)
     
     # Generate SYNTHETIC MF features for runtime testing (avoid data loading issues)
-    print("  Generating synthetic MF features for runtime testing...")
+    flush_print("  Generating synthetic MF features for runtime testing...")
     n_mf_samples = len(mf_feat_embedding)
     n_features = scaler.n_features_in_
-    print(f"    MF samples: {n_mf_samples}")
-    print(f"    Feature dimensionality: {n_features}")
+    flush_print(f"    MF samples: {n_mf_samples}")
+    flush_print(f"    Feature dimensionality: {n_features}")
     
     np.random.seed(42)
-    mf_feat_full = np.random.randn(n_mf_samples, n_features)
-    mf_feat_scaled = scaler.transform(mf_feat_full)
-    print(f"    Synthetic MF features scaled: {mf_feat_scaled.shape}")
+    mf_feat_full = np.random.randn(n_mf_samples, n_features).astype(np.float32)
+    mf_feat_scaled = scaler.transform(mf_feat_full).astype(np.float32)
+    flush_print(f"    Synthetic MF features scaled: {mf_feat_scaled.shape}")
     
-    print(f"  Scaler loaded")
-    print(f"  UMAP model: {phase1_feat_run}")
-    print(f"  MF embedding (2D): {mf_feat_embedding.shape}")
-    print(f"  MF scaled features: {mf_feat_scaled.shape}")
+    flush_print(f"  Scaler loaded")
+    flush_print(f"  UMAP model: {phase1_feat_run}")
+    flush_print(f"  MF embedding (2D): {mf_feat_embedding.shape}")
+    flush_print(f"  MF scaled features: {mf_feat_scaled.shape}")
     
     # ========================================================================
     # Generate Synthetic ZINC Candidates (for runtime testing only)
     # ========================================================================
-    print("\nGenerating synthetic ZINC candidates...")
+    flush_print("\nGenerating synthetic ZINC candidates...")
     max_size = max(sample_sizes)
     
     # Fingerprints: 2048-bit binary vectors
-    print(f"  Generating fingerprints ({max_size} molecules)...")
+    flush_print(f"  Generating fingerprints ({max_size} molecules)...")
     np.random.seed(123)
-    zinc_fp = np.random.randint(0, 2, size=(max_size, 2048))
-    print(f"    Generated: {len(zinc_fp)} molecules × 2048 bits")
+    zinc_fp = np.random.randint(0, 2, size=(max_size, 2048)).astype(np.float32)
+    flush_print(f"    Generated: {len(zinc_fp)} molecules × 2048 bits")
     
     # Features: same dimensionality as MF features
-    print(f"  Generating features ({max_size} molecules)...")
-    zinc_feat = np.random.randn(max_size, n_features)
-    print(f"    Generated: {len(zinc_feat)} molecules × {n_features} features")
+    flush_print(f"  Generating features ({max_size} molecules)...")
+    zinc_feat = np.random.randn(max_size, n_features).astype(np.float32)
+    flush_print(f"    Generated: {len(zinc_feat)} molecules × {n_features} features")
     
     # ========================================================================
     # Run Benchmarks
     # ========================================================================
-    print("\n" + "="*80)
-    print("RUNNING BENCHMARKS")
-    print("="*80)
+    flush_print("\n" + "="*80)
+    flush_print("RUNNING BENCHMARKS")
+    flush_print("="*80)
     
     all_results = []
     
     for n in sample_sizes:
-        print(f"\nSample size: {n:,} molecules")
-        print("-" * 80)
+        flush_print(f"\nSample size: {n:,} molecules")
+        flush_print("-" * 80)
         
         # Subsample candidates
         fp_sample = zinc_fp[:min(n, len(zinc_fp))]
         feat_sample = zinc_feat[:min(n, len(zinc_feat))]
         
         # Method 1: Raw ECFP4
-        print(f"  [1/4] Raw ECFP4 (Tanimoto, no UMAP)...")
+        flush_print(f"  [1/4] Raw ECFP4 (Tanimoto, no UMAP)...")
         result = benchmark_raw_ecfp4(fp_sample, mf_fp_raw)
         result["method"] = "Raw ECFP4"
         result["n_sample"] = n
         all_results.append(result)
-        print(f"    Total time: {result['total_time']:.3f} sec")
+        flush_print(f"    Total time: {result['total_time']:.3f} sec")
         
         # Method 2: Raw Features
-        print(f"  [2/4] Raw Features (Euclidean, no UMAP)...")
+        flush_print(f"  [2/4] Raw Features (Euclidean, no UMAP)...")
         result = benchmark_raw_features(feat_sample, mf_feat_scaled, scaler)
         result["method"] = "Raw Features"
         result["n_sample"] = n
         all_results.append(result)
-        print(f"    Total time: {result['total_time']:.3f} sec")
+        flush_print(f"    Total time: {result['total_time']:.3f} sec")
         
         # Method 3: ECFP4 + UMAP (20D)
-        print(f"  [3/4] ECFP4 + UMAP (20D)...")
-        result = benchmark_ecfp4_umap(fp_sample, mf_fp_embedding, umap_fp_model)
+        flush_print(f"  [3/4] ECFP4 + UMAP (20D)...")
+        result = benchmark_ecfp4_umap(fp_sample, mf_fp_tree, umap_fp_model)
         result["method"] = "ECFP4 + UMAP (20D)"
         result["n_sample"] = n
         all_results.append(result)
-        print(f"    Transform: {result.get('transform_time', 0):.3f} sec, Scoring: {result['scoring_time']:.3f} sec, Total: {result['total_time']:.3f} sec")
+        flush_print(f"    Transform: {result.get('transform_time', 0):.3f} sec, Scoring: {result['scoring_time']:.3f} sec, Total: {result['total_time']:.3f} sec")
         
         # Method 4: Features + UMAP (2D)
-        print(f"  [4/4] Features + UMAP (2D)...")
-        result = benchmark_features_umap(feat_sample, mf_feat_embedding, scaler, umap_feat_model)
+        flush_print(f"  [4/4] Features + UMAP (2D)...")
+        result = benchmark_features_umap(feat_sample, mf_feat_tree, scaler, umap_feat_model)
         result["method"] = "Features + UMAP (2D)"
         result["n_sample"] = n
         all_results.append(result)
-        print(f"    Transform: {result.get('transform_time', 0):.3f} sec, Scoring: {result['scoring_time']:.3f} sec, Total: {result['total_time']:.3f} sec")
+        flush_print(f"    Transform: {result.get('transform_time', 0):.3f} sec, Scoring: {result['scoring_time']:.3f} sec, Total: {result['total_time']:.3f} sec")
     
     # ========================================================================
     # Save Results
