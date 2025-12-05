@@ -32,6 +32,7 @@ import logging
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from scipy.stats import gaussian_kde
 from scipy.spatial.distance import cdist
 
@@ -151,12 +152,13 @@ def _compute_bedroc_ief_from_ranked_scores(ranked_scores_path: Path, alpha_vals:
         return {}
     
     try:
-        df_scores = pd.read_csv(ranked_scores_path, low_memory=False)
-        if 'score' not in df_scores.columns or 'label' not in df_scores.columns:
+        # Use polars for fast CSV read (only needed columns)
+        df_pl = pl.read_csv(ranked_scores_path, columns=['score', 'label'])
+        if 'score' not in df_pl.columns or 'label' not in df_pl.columns:
             return {}
         
-        labels = df_scores['label'].to_numpy()
-        scores = df_scores['score'].to_numpy()
+        labels = df_pl['label'].to_numpy()
+        scores = df_pl['score'].to_numpy()
         
         result = {}
         for alpha in alpha_vals:
@@ -192,27 +194,32 @@ def _compute_rank_distribution_stats(ranked_scores_path: Path) -> Dict[str, floa
         return {}
     
     try:
-        df = pd.read_csv(ranked_scores_path, low_memory=False)
+        # Use polars for fast CSV read (only needed columns)
+        cols_needed = ['score', 'distance', 'source', 'label']
+        # Read available columns
+        df_pl = pl.read_csv(ranked_scores_path)
+        available_cols = [c for c in cols_needed if c in df_pl.columns]
+        df_pl = df_pl.select(available_cols)
         
         # Ensure proper sorting (best first)
-        if "score" in df.columns:
-            df = df.sort_values(by="score", ascending=False, kind="stable").reset_index(drop=True)
-        elif "distance" in df.columns:
-            df = df.sort_values(by="distance", ascending=True, kind="stable").reset_index(drop=True)
+        if "score" in df_pl.columns:
+            df_pl = df_pl.sort("score", descending=True)
+        elif "distance" in df_pl.columns:
+            df_pl = df_pl.sort("distance", descending=False)
         else:
             return {}
         
         # Check for source column
-        if "source" not in df.columns:
+        if "source" not in df_pl.columns:
             # Fallback: use label column if available
-            if "label" in df.columns:
-                active_mask = df["label"] == 1
+            if "label" in df_pl.columns:
+                active_mask = df_pl["label"].to_numpy() == 1
             else:
                 return {}
         else:
-            active_mask = df["source"] == "actives"
+            active_mask = df_pl["source"].to_numpy() == "actives"
         
-        N_total = len(df)
+        N_total = len(df_pl)
         active_ranks = np.where(active_mask)[0]  # 0-indexed ranks
         N_actives = len(active_ranks)
         
