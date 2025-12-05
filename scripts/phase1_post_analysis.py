@@ -158,12 +158,18 @@ def _compute_ranked_scores_metrics(ranked_scores_path: Path, alpha_vals: List[fl
         return {}
     
     try:
-        # Use polars for fast CSV read with parallelism
-        # Read all columns first, then select (polars errors if column doesn't exist)
-        df_pl = pl.read_csv(
-            ranked_scores_path,
-            n_threads=64,
-        )
+        # Check for parquet cache (faster reads)
+        parquet_path = ranked_scores_path.with_suffix('.parquet')
+        if parquet_path.exists():
+            df_pl = pl.read_parquet(parquet_path)
+        else:
+            # Use polars for fast CSV read with parallelism
+            df_pl = pl.read_csv(ranked_scores_path, n_threads=12)
+            # Save parquet cache for future reads
+            try:
+                df_pl.write_parquet(parquet_path)
+            except Exception:
+                pass  # Ignore write errors (e.g., permissions)
         
         # Select only the columns we need (that exist)
         cols_needed = ['score', 'label', 'source']
@@ -684,13 +690,17 @@ def plot_rank_distribution_diagnostic(
     # This is the key diagnostic: high top1% AND high bottom50% = bimodal problem
     fig, ax = plt.subplots(figsize=(8, 6))
     
-    x = df_runs["rank_frac_in_top1pct"].dropna() * 100
-    y = df_runs["rank_frac_in_bottom50pct"].dropna() * 100
+    # Filter to rows with valid rank data for both columns
+    mask = df_runs["rank_frac_in_top1pct"].notna() & df_runs["rank_frac_in_bottom50pct"].notna()
+    df_valid = df_runs[mask].copy()
+    
+    x = df_valid["rank_frac_in_top1pct"] * 100
+    y = df_valid["rank_frac_in_bottom50pct"] * 100
     
     # Color by method if available
-    if "method" in df_runs.columns:
+    if "method" in df_valid.columns:
         colors_map = {"pca": "#2E86AB", "umap": "#F18F01"}
-        colors = [colors_map.get(m, "gray") for m in df_runs["method"]]
+        colors = [colors_map.get(m, "gray") for m in df_valid["method"]]
         scatter = ax.scatter(x, y, alpha=0.5, s=30, c=colors, edgecolors="black", linewidths=0.5)
         # Legend for methods
         for method, color in colors_map.items():
@@ -1019,7 +1029,11 @@ def plot_4metric_comparison(
                     fontweight='bold'
                 )
         
-        if sharey and idx > 0:
+        # Set appropriate y-axis limits per metric (auto-scale with padding)
+        if not sharey:
+            max_val = max(means[i] + stds[i] for i in range(len(means)) if means[i] > 0) if any(m > 0 for m in means) else 1.0
+            ax.set_ylim(0, max_val * 1.15)  # 15% padding for labels
+        elif idx > 0:
             # Share y-axis limits with first subplot (compatible with newer matplotlib)
             ax.sharey(axes[0])
     
