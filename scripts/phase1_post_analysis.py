@@ -1013,8 +1013,8 @@ def plot_4metric_comparison(
                 )
         
         if sharey and idx > 0:
-            # Share y-axis limits with first subplot
-            axes[0].get_shared_y_axes().join(axes[0], ax)
+            # Share y-axis limits with first subplot (compatible with newer matplotlib)
+            ax.sharey(axes[0])
     
     # Hide 6th subplot (2×3 grid, 5 metrics)
     axes[5].axis('off')
