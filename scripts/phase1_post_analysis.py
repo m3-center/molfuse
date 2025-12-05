@@ -162,7 +162,7 @@ def _compute_ranked_scores_metrics(ranked_scores_path: Path, alpha_vals: List[fl
         # Read all columns first, then select (polars errors if column doesn't exist)
         df_pl = pl.read_csv(
             ranked_scores_path,
-            n_threads=12,
+            n_threads=64,
         )
         
         # Select only the columns we need (that exist)
