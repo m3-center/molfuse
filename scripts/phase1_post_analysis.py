@@ -159,12 +159,17 @@ def _compute_ranked_scores_metrics(ranked_scores_path: Path, alpha_vals: List[fl
     
     try:
         # Use polars for fast CSV read with parallelism and memory mapping
+        # Read all columns first, then select (polars errors if column doesn't exist)
         df_pl = pl.read_csv(
             ranked_scores_path,
-            columns=['score', 'label', 'source'],
             n_threads=12,
             memory_map=True,
         )
+        
+        # Select only the columns we need (that exist)
+        cols_needed = ['score', 'label', 'source']
+        cols_available = [c for c in cols_needed if c in df_pl.columns]
+        df_pl = df_pl.select(cols_available)
         
         if 'score' not in df_pl.columns or 'label' not in df_pl.columns:
             return {}
@@ -213,7 +218,10 @@ def _compute_ranked_scores_metrics(ranked_scores_path: Path, alpha_vals: List[fl
             })
         
         return result
-    except Exception:
+    except Exception as e:
+        # Log the error for debugging
+        import traceback
+        traceback.print_exc()
         return {}
 
 
