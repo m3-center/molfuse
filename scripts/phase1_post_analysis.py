@@ -151,7 +151,7 @@ def _compute_bedroc_ief_from_ranked_scores(ranked_scores_path: Path, alpha_vals:
         return {}
     
     try:
-        df_scores = pd.read_csv(ranked_scores_path)
+        df_scores = pd.read_csv(ranked_scores_path, low_memory=False)
         if 'score' not in df_scores.columns or 'label' not in df_scores.columns:
             return {}
         
