@@ -137,30 +137,47 @@ def _extract_method_dim_target(metrics: dict) -> Tuple[str, int, str, float]:
     return method, dim, target, cutoff
 
 
-def _compute_bedroc_ief_from_ranked_scores(ranked_scores_path: Path, alpha_vals: List[float]) -> Dict[str, float]:
+def _compute_ranked_scores_metrics(ranked_scores_path: Path, alpha_vals: List[float]) -> Dict[str, float]:
     """
-    Retrospectively compute BEDROC and IEF from ranked_scores.csv.
+    Compute BEDROC, IEF, and rank distribution statistics from ranked_scores.csv.
+    
+    Reads the file ONCE and computes all metrics in a single pass.
     
     Args:
         ranked_scores_path: Path to artifacts/ranked_scores.csv
-        alpha_vals: List of alpha values to compute (e.g., [20.0, 160.9])
+        alpha_vals: List of alpha values for BEDROC/IEF (e.g., [20.0, 160.9])
     
     Returns:
-        Dict with keys like 'bedroc_20', 'bedroc_160', 'ief_20', 'ief_160'
+        Dict with keys:
+        - bedroc_20, bedroc_160, ief_20, ief_160 (BEDROC/IEF metrics)
+        - rank_frac_in_top1pct, rank_frac_in_top5pct, rank_frac_in_top10pct,
+          rank_frac_in_bottom50pct, rank_percentile_mean, rank_percentile_median,
+          rank_percentile_std (rank distribution stats)
     """
     if not ranked_scores_path.exists():
         return {}
     
     try:
-        # Use polars for fast CSV read (only needed columns)
-        df_pl = pl.read_csv(ranked_scores_path, columns=['score', 'label'])
+        # Use polars for fast CSV read with parallelism and memory mapping
+        df_pl = pl.read_csv(
+            ranked_scores_path,
+            columns=['score', 'label', 'source'],
+            n_threads=12,
+            memory_map=True,
+        )
+        
         if 'score' not in df_pl.columns or 'label' not in df_pl.columns:
             return {}
+        
+        # Sort by score (best first) for rank distribution
+        df_pl = df_pl.sort("score", descending=True)
         
         labels = df_pl['label'].to_numpy()
         scores = df_pl['score'].to_numpy()
         
         result = {}
+        
+        # === BEDROC/IEF metrics ===
         for alpha in alpha_vals:
             bedroc_val = bedroc(labels, scores, alpha=alpha)
             ief_val = ief(labels, scores, alpha=alpha)
@@ -170,74 +187,32 @@ def _compute_bedroc_ief_from_ranked_scores(ranked_scores_path: Path, alpha_vals:
             result[f'bedroc_{alpha_key}'] = bedroc_val
             result[f'ief_{alpha_key}'] = ief_val
         
-        return result
-    except Exception:
-        return {}
-
-
-def _compute_rank_distribution_stats(ranked_scores_path: Path) -> Dict[str, float]:
-    """
-    Compute rank distribution statistics for actives from ranked_scores.csv.
-    
-    These statistics diagnose the EF1% vs BEDROC discrepancy:
-    - High frac_in_top1pct + High frac_in_bottom50pct = bimodal distribution
-      (model finds some actives very well but completely misses others)
-    
-    Args:
-        ranked_scores_path: Path to artifacts/ranked_scores.csv
-    
-    Returns:
-        Dict with keys: frac_in_top1pct, frac_in_top5pct, frac_in_top10pct,
-                       frac_in_bottom50pct, percentile_mean, percentile_median, percentile_std
-    """
-    if not ranked_scores_path.exists():
-        return {}
-    
-    try:
-        # Use polars for fast CSV read (only needed columns)
-        cols_needed = ['score', 'distance', 'source', 'label']
-        # Read available columns
-        df_pl = pl.read_csv(ranked_scores_path)
-        available_cols = [c for c in cols_needed if c in df_pl.columns]
-        df_pl = df_pl.select(available_cols)
-        
-        # Ensure proper sorting (best first)
-        if "score" in df_pl.columns:
-            df_pl = df_pl.sort("score", descending=True)
-        elif "distance" in df_pl.columns:
-            df_pl = df_pl.sort("distance", descending=False)
-        else:
-            return {}
-        
-        # Check for source column
-        if "source" not in df_pl.columns:
-            # Fallback: use label column if available
-            if "label" in df_pl.columns:
-                active_mask = df_pl["label"].to_numpy() == 1
-            else:
-                return {}
-        else:
+        # === Rank distribution stats ===
+        # Determine active mask
+        if "source" in df_pl.columns:
             active_mask = df_pl["source"].to_numpy() == "actives"
+        else:
+            active_mask = labels == 1
         
         N_total = len(df_pl)
-        active_ranks = np.where(active_mask)[0]  # 0-indexed ranks
+        active_ranks = np.where(active_mask)[0]  # 0-indexed ranks after sorting
         N_actives = len(active_ranks)
         
-        if N_actives == 0:
-            return {}
+        if N_actives > 0:
+            # Convert to percentile (0-100)
+            active_percentiles = (active_ranks / N_total) * 100
+            
+            result.update({
+                "rank_frac_in_top1pct": float((active_percentiles <= 1.0).sum() / N_actives),
+                "rank_frac_in_top5pct": float((active_percentiles <= 5.0).sum() / N_actives),
+                "rank_frac_in_top10pct": float((active_percentiles <= 10.0).sum() / N_actives),
+                "rank_frac_in_bottom50pct": float((active_percentiles >= 50.0).sum() / N_actives),
+                "rank_percentile_mean": float(active_percentiles.mean()),
+                "rank_percentile_median": float(np.median(active_percentiles)),
+                "rank_percentile_std": float(active_percentiles.std()),
+            })
         
-        # Convert to percentile (0-100)
-        active_percentiles = (active_ranks / N_total) * 100
-        
-        return {
-            "rank_frac_in_top1pct": float((active_percentiles <= 1.0).sum() / N_actives),
-            "rank_frac_in_top5pct": float((active_percentiles <= 5.0).sum() / N_actives),
-            "rank_frac_in_top10pct": float((active_percentiles <= 10.0).sum() / N_actives),
-            "rank_frac_in_bottom50pct": float((active_percentiles >= 50.0).sum() / N_actives),
-            "rank_percentile_mean": float(active_percentiles.mean()),
-            "rank_percentile_median": float(np.median(active_percentiles)),
-            "rank_percentile_std": float(active_percentiles.std()),
-        }
+        return result
     except Exception:
         return {}
 
@@ -285,12 +260,9 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1", alpha_vals: Optional[L
                 except Exception:
                     replicate = None
 
-        # Compute BEDROC/IEF retrospectively from ranked_scores.csv
+        # Compute BEDROC/IEF and rank distribution stats from ranked_scores.csv (single read)
         ranked_scores_path = run_dir / "artifacts" / "ranked_scores.csv"
-        bedroc_ief_metrics = _compute_bedroc_ief_from_ranked_scores(ranked_scores_path, alpha_vals)
-        
-        # Compute rank distribution statistics (for EF vs BEDROC diagnostic)
-        rank_stats = _compute_rank_distribution_stats(ranked_scores_path)
+        ranked_metrics = _compute_ranked_scores_metrics(ranked_scores_path, alpha_vals)
 
         row = {
             "run_name": run_dir.name,
@@ -315,11 +287,8 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1", alpha_vals: Optional[L
             "n_zinc_eval": metrics.get("n_zinc_eval", np.nan),
             "n_mf_for_scoring": metrics.get("n_mf_for_scoring", np.nan),
         }
-        # Add BEDROC/IEF metrics
-        row.update(bedroc_ief_metrics)
-        
-        # Add rank distribution stats
-        row.update(rank_stats)
+        # Add BEDROC/IEF metrics and rank distribution stats
+        row.update(ranked_metrics)
         
         rows.append(row)
 
