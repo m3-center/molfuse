@@ -815,6 +815,319 @@ def plot_rank_distribution_diagnostic(
     return saved
 
 
+def plot_full_active_rank_distribution(
+    workspace_dir: Path,
+    df_runs: pd.DataFrame,
+    out_dir: Path,
+    logger: logging.Logger,
+    phase: str = "phase1"
+) -> List[Path]:
+    """
+    Generate full active rank distribution analysis plots.
+    
+    Reads ranked_scores.csv from each run to extract actual active percentile ranks,
+    then creates aggregated visualizations:
+    1. Aggregated CDF: Cumulative fraction of actives found vs percentile screened
+    2. Aggregated Histogram: Where actives concentrate across rank spectrum
+    3. Violin plots: Compare distributions by method/representation
+    
+    Args:
+        workspace_dir: Root workspace directory
+        df_runs: Per-run DataFrame with run metadata
+        out_dir: Output directory for plots
+        logger: Logger instance
+        phase: Phase subdirectory name
+    
+    Returns:
+        List of saved file paths
+    """
+    _ensure_dir(out_dir)
+    saved: List[Path] = []
+    
+    logger.info("Collecting full active rank distributions from all runs...")
+    
+    # Collect active percentile ranks from all runs
+    # Structure: {(method, representation): [list of percentile ranks across all runs]}
+    method_ranks: Dict[Tuple[str, str], List[float]] = {
+        ("pca", "features"): [],
+        ("pca", "fingerprints"): [],
+        ("umap", "features"): [],
+        ("umap", "fingerprints"): [],
+    }
+    
+    phase_dir = workspace_dir / phase
+    n_processed = 0
+    
+    for _, row in df_runs.iterrows():
+        run_name = row.get("run_name")
+        method = row.get("method")
+        rep = row.get("representation")
+        
+        if not run_name or not method or not rep:
+            continue
+        
+        key = (method, rep)
+        if key not in method_ranks:
+            continue
+        
+        # Load ranked_scores (prefer parquet cache)
+        run_dir = phase_dir / run_name
+        ranked_scores_path = run_dir / "artifacts" / "ranked_scores.csv"
+        parquet_path = ranked_scores_path.with_suffix(".parquet")
+        
+        try:
+            if parquet_path.exists():
+                df_scores = pl.read_parquet(parquet_path)
+            elif ranked_scores_path.exists():
+                df_scores = pl.read_csv(ranked_scores_path, n_threads=12)
+            else:
+                continue
+            
+            # Get active mask
+            if "source" in df_scores.columns:
+                active_mask = df_scores["source"].to_numpy() == "actives"
+            elif "label" in df_scores.columns:
+                active_mask = df_scores["label"].to_numpy() == 1
+            else:
+                continue
+            
+            # Sort by score (descending) to get ranks
+            df_scores = df_scores.sort("score", descending=True)
+            N_total = len(df_scores)
+            
+            # Recompute active mask after sorting
+            if "source" in df_scores.columns:
+                active_mask = df_scores["source"].to_numpy() == "actives"
+            else:
+                active_mask = df_scores["label"].to_numpy() == 1
+            
+            # Get percentile ranks of actives (0 = best, 100 = worst)
+            active_indices = np.where(active_mask)[0]
+            active_percentiles = (active_indices / N_total) * 100
+            
+            method_ranks[key].extend(active_percentiles.tolist())
+            n_processed += 1
+            
+        except Exception:
+            continue
+    
+    logger.info(f"Processed {n_processed} runs for full rank distribution")
+    
+    # Check if we have data
+    total_actives = sum(len(v) for v in method_ranks.values())
+    if total_actives == 0:
+        logger.warning("No active rank data collected. Skipping full distribution plots.")
+        return saved
+    
+    # Define colors and labels
+    colors = {
+        ("pca", "features"): "#2E86AB",
+        ("pca", "fingerprints"): "#A23B72",
+        ("umap", "features"): "#F18F01",
+        ("umap", "fingerprints"): "#06A77D",
+    }
+    labels = {
+        ("pca", "features"): "PCA/Features",
+        ("pca", "fingerprints"): "PCA/Fingerprints",
+        ("umap", "features"): "UMAP/Features",
+        ("umap", "fingerprints"): "UMAP/Fingerprints",
+    }
+    
+    # ===== Plot 1: Aggregated CDF =====
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    for key in [("pca", "features"), ("pca", "fingerprints"), ("umap", "features"), ("umap", "fingerprints")]:
+        ranks = method_ranks[key]
+        if len(ranks) == 0:
+            continue
+        
+        # Sort ranks and compute CDF
+        sorted_ranks = np.sort(ranks)
+        cdf = np.arange(1, len(sorted_ranks) + 1) / len(sorted_ranks)
+        
+        ax.plot(sorted_ranks, cdf, label=f"{labels[key]} (n={len(ranks):,})", 
+                color=colors[key], linewidth=2)
+    
+    # Reference: random (diagonal)
+    ax.plot([0, 100], [0, 1], "k--", alpha=0.5, linewidth=1.5, label="Random")
+    
+    # Reference: perfect (vertical at 0)
+    ax.axvline(x=0, color="green", linestyle=":", alpha=0.5, linewidth=1.5, label="Perfect")
+    
+    ax.set_xlabel("Percentile Rank Screened (%)", fontsize=12)
+    ax.set_ylabel("Cumulative Fraction of Actives Found", fontsize=12)
+    ax.set_title("Aggregated Enrichment Curve: Active Recovery vs Screening Effort", 
+                 fontsize=13, fontweight="bold")
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 1.02)
+    ax.legend(loc="lower right", fontsize=10)
+    ax.grid(alpha=0.3, linestyle="--")
+    
+    # Add reference lines for key thresholds
+    for thresh, label_text in [(1, "1%"), (5, "5%"), (10, "10%")]:
+        ax.axvline(x=thresh, color="gray", linestyle=":", alpha=0.3, linewidth=1)
+        ax.text(thresh + 0.5, 0.02, label_text, fontsize=8, color="gray")
+    
+    plt.tight_layout()
+    p_png = out_dir / "active_rank_cdf_aggregated.png"
+    p_pdf = out_dir / "active_rank_cdf_aggregated.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches="tight")
+    fig.savefig(p_pdf, bbox_inches="tight")
+    plt.close(fig)
+    saved.extend([p_png, p_pdf])
+    logger.info(f"Saved aggregated CDF: {p_png}")
+    
+    # ===== Plot 2: Aggregated Histogram (Density) =====
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    bins = np.linspace(0, 100, 51)  # 2% bins
+    
+    for key in [("pca", "features"), ("pca", "fingerprints"), ("umap", "features"), ("umap", "fingerprints")]:
+        ranks = method_ranks[key]
+        if len(ranks) == 0:
+            continue
+        
+        # Histogram with density normalization
+        ax.hist(ranks, bins=bins, alpha=0.4, label=labels[key], 
+                color=colors[key], edgecolor=colors[key], linewidth=1.0, density=True)
+    
+    # Reference: uniform (random)
+    ax.axhline(y=0.01, color="black", linestyle="--", alpha=0.5, linewidth=1.5, label="Random (uniform)")
+    
+    ax.set_xlabel("Active Percentile Rank (%)", fontsize=12)
+    ax.set_ylabel("Density", fontsize=12)
+    ax.set_title("Distribution of Active Ranks Across All Runs", fontsize=13, fontweight="bold")
+    ax.set_xlim(0, 100)
+    ax.legend(loc="upper right", fontsize=10)
+    ax.grid(alpha=0.3, linestyle="--")
+    
+    plt.tight_layout()
+    p_png = out_dir / "active_rank_histogram_aggregated.png"
+    p_pdf = out_dir / "active_rank_histogram_aggregated.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches="tight")
+    fig.savefig(p_pdf, bbox_inches="tight")
+    plt.close(fig)
+    saved.extend([p_png, p_pdf])
+    logger.info(f"Saved aggregated histogram: {p_png}")
+    
+    # ===== Plot 3: Violin Plot Comparison =====
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Prepare data for violin plot
+    violin_data = []
+    violin_labels = []
+    violin_colors = []
+    
+    for key in [("pca", "features"), ("pca", "fingerprints"), ("umap", "features"), ("umap", "fingerprints")]:
+        ranks = method_ranks[key]
+        if len(ranks) > 0:
+            violin_data.append(ranks)
+            violin_labels.append(labels[key])
+            violin_colors.append(colors[key])
+    
+    if len(violin_data) > 0:
+        parts = ax.violinplot(violin_data, positions=range(len(violin_data)), 
+                              showmeans=True, showmedians=True, widths=0.7)
+        
+        # Color the violins
+        for i, pc in enumerate(parts['bodies']):
+            pc.set_facecolor(violin_colors[i])
+            pc.set_alpha(0.6)
+            pc.set_edgecolor(violin_colors[i])
+        
+        # Style mean and median lines
+        parts['cmeans'].set_color('black')
+        parts['cmeans'].set_linewidth(2)
+        parts['cmedians'].set_color('red')
+        parts['cmedians'].set_linewidth(2)
+        
+        ax.set_xticks(range(len(violin_labels)))
+        ax.set_xticklabels(violin_labels, rotation=30, ha="right", fontsize=11)
+        
+        ax.set_ylabel("Active Percentile Rank (%)", fontsize=12)
+        ax.set_title("Active Rank Distribution by Method (Lower = Better)", 
+                     fontsize=13, fontweight="bold")
+        ax.set_ylim(0, 100)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        
+        # Add reference line for random expectation
+        ax.axhline(y=50, color="black", linestyle="--", alpha=0.5, linewidth=1.5)
+        ax.text(len(violin_labels) - 0.5, 52, "Random mean", fontsize=9, color="gray")
+        
+        # Add legend for mean vs median
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='black', linewidth=2, label='Mean'),
+            Line2D([0], [0], color='red', linewidth=2, label='Median'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
+    
+    plt.tight_layout()
+    p_png = out_dir / "active_rank_violin.png"
+    p_pdf = out_dir / "active_rank_violin.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches="tight")
+    fig.savefig(p_pdf, bbox_inches="tight")
+    plt.close(fig)
+    saved.extend([p_png, p_pdf])
+    logger.info(f"Saved violin plot: {p_png}")
+    
+    # ===== Plot 4: Zoomed CDF (Top 20%) =====
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    for key in [("pca", "features"), ("pca", "fingerprints"), ("umap", "features"), ("umap", "fingerprints")]:
+        ranks = method_ranks[key]
+        if len(ranks) == 0:
+            continue
+        
+        sorted_ranks = np.sort(ranks)
+        cdf = np.arange(1, len(sorted_ranks) + 1) / len(sorted_ranks)
+        
+        # Only plot up to 20%
+        mask = sorted_ranks <= 20
+        ax.plot(sorted_ranks[mask], cdf[mask], label=labels[key], 
+                color=colors[key], linewidth=2.5)
+    
+    # Reference lines
+    ax.plot([0, 20], [0, 0.2], "k--", alpha=0.5, linewidth=1.5, label="Random")
+    
+    ax.set_xlabel("Percentile Rank Screened (%)", fontsize=12)
+    ax.set_ylabel("Cumulative Fraction of Actives Found", fontsize=12)
+    ax.set_title("Early Enrichment Detail: Active Recovery in Top 20%", 
+                 fontsize=13, fontweight="bold")
+    ax.set_xlim(0, 20)
+    ax.set_ylim(0, 1.0)
+    ax.legend(loc="lower right", fontsize=10)
+    ax.grid(alpha=0.3, linestyle="--")
+    
+    # Add key threshold lines
+    for thresh in [1, 5, 10]:
+        ax.axvline(x=thresh, color="gray", linestyle=":", alpha=0.4, linewidth=1)
+    
+    plt.tight_layout()
+    p_png = out_dir / "active_rank_cdf_top20.png"
+    p_pdf = out_dir / "active_rank_cdf_top20.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches="tight")
+    fig.savefig(p_pdf, bbox_inches="tight")
+    plt.close(fig)
+    saved.extend([p_png, p_pdf])
+    logger.info(f"Saved top-20% CDF: {p_png}")
+    
+    # ===== Summary Statistics =====
+    logger.info("Full active rank distribution summary:")
+    for key in [("pca", "features"), ("pca", "fingerprints"), ("umap", "features"), ("umap", "fingerprints")]:
+        ranks = method_ranks[key]
+        if len(ranks) == 0:
+            continue
+        arr = np.array(ranks)
+        pct_top1 = (arr <= 1).sum() / len(arr) * 100
+        pct_top5 = (arr <= 5).sum() / len(arr) * 100
+        pct_top10 = (arr <= 10).sum() / len(arr) * 100
+        logger.info(f"  {labels[key]}: n={len(arr):,}, mean={arr.mean():.1f}%, median={np.median(arr):.1f}%, "
+                    f"top1%={pct_top1:.1f}%, top5%={pct_top5:.1f}%, top10%={pct_top10:.1f}%")
+    
+    return saved
+
+
 def plot_umap_heatmaps(df_g: pd.DataFrame, out_dir: Path) -> None:
     _ensure_dir(out_dir)
     sub = df_g[df_g["method"] == "umap"].copy()
@@ -2006,6 +2319,13 @@ def main():
     if rank_files:
         manifest.setdefault("rank_diagnostic", []).extend([str(p) for p in rank_files])
     logger.info("Finished rank distribution diagnostic plots")
+
+    # 4b2) Full active rank distribution analysis (CDF, histogram, violin)
+    logger.info("START: Full active rank distribution analysis")
+    full_rank_files = plot_full_active_rank_distribution(workspace_dir, df_runs, plot_dir, logger, args.phase)
+    if full_rank_files:
+        manifest.setdefault("rank_full_distribution", []).extend([str(p) for p in full_rank_files])
+    logger.info("Finished full active rank distribution analysis")
 
     # 4c) 2D scatter plots for molecular group visualization
     logger.info("START: 2D scatter embeddings")
