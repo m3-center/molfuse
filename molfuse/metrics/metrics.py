@@ -120,9 +120,9 @@ def bedroc(labels: np.ndarray, scores: np.ndarray, alpha: float = 20.0) -> float
         sorted_data = [[scores[i], labels[i]] for i in order]
         return float(RDKitScoring.CalcBEDROC(sorted_data, col=1, alpha=alpha))
     
-    else:
+    # else:
         # Fallback implementation (validated against RDKit)
-        return _bedroc_fallback(labels, scores, alpha)
+    #     return _bedroc_fallback(labels, scores, alpha)
 
 
 def _bedroc_fallback(labels: np.ndarray, scores: np.ndarray, alpha: float) -> float:
