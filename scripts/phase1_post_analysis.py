@@ -173,6 +173,68 @@ def _compute_bedroc_ief_from_ranked_scores(ranked_scores_path: Path, alpha_vals:
         return {}
 
 
+def _compute_rank_distribution_stats(ranked_scores_path: Path) -> Dict[str, float]:
+    """
+    Compute rank distribution statistics for actives from ranked_scores.csv.
+    
+    These statistics diagnose the EF1% vs BEDROC discrepancy:
+    - High frac_in_top1pct + High frac_in_bottom50pct = bimodal distribution
+      (model finds some actives very well but completely misses others)
+    
+    Args:
+        ranked_scores_path: Path to artifacts/ranked_scores.csv
+    
+    Returns:
+        Dict with keys: frac_in_top1pct, frac_in_top5pct, frac_in_top10pct,
+                       frac_in_bottom50pct, percentile_mean, percentile_median, percentile_std
+    """
+    if not ranked_scores_path.exists():
+        return {}
+    
+    try:
+        df = pd.read_csv(ranked_scores_path, low_memory=False)
+        
+        # Ensure proper sorting (best first)
+        if "score" in df.columns:
+            df = df.sort_values(by="score", ascending=False, kind="stable").reset_index(drop=True)
+        elif "distance" in df.columns:
+            df = df.sort_values(by="distance", ascending=True, kind="stable").reset_index(drop=True)
+        else:
+            return {}
+        
+        # Check for source column
+        if "source" not in df.columns:
+            # Fallback: use label column if available
+            if "label" in df.columns:
+                active_mask = df["label"] == 1
+            else:
+                return {}
+        else:
+            active_mask = df["source"] == "actives"
+        
+        N_total = len(df)
+        active_ranks = np.where(active_mask)[0]  # 0-indexed ranks
+        N_actives = len(active_ranks)
+        
+        if N_actives == 0:
+            return {}
+        
+        # Convert to percentile (0-100)
+        active_percentiles = (active_ranks / N_total) * 100
+        
+        return {
+            "rank_frac_in_top1pct": float((active_percentiles <= 1.0).sum() / N_actives),
+            "rank_frac_in_top5pct": float((active_percentiles <= 5.0).sum() / N_actives),
+            "rank_frac_in_top10pct": float((active_percentiles <= 10.0).sum() / N_actives),
+            "rank_frac_in_bottom50pct": float((active_percentiles >= 50.0).sum() / N_actives),
+            "rank_percentile_mean": float(active_percentiles.mean()),
+            "rank_percentile_median": float(np.median(active_percentiles)),
+            "rank_percentile_std": float(active_percentiles.std()),
+        }
+    except Exception:
+        return {}
+
+
 def scan_runs(workspace_dir: Path, phase: str = "phase1", alpha_vals: Optional[List[float]] = None) -> pd.DataFrame:
     if alpha_vals is None:
         alpha_vals = [20.0, 160.9]  # Default: standard and aggressive early recognition
@@ -219,6 +281,9 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1", alpha_vals: Optional[L
         # Compute BEDROC/IEF retrospectively from ranked_scores.csv
         ranked_scores_path = run_dir / "artifacts" / "ranked_scores.csv"
         bedroc_ief_metrics = _compute_bedroc_ief_from_ranked_scores(ranked_scores_path, alpha_vals)
+        
+        # Compute rank distribution statistics (for EF vs BEDROC diagnostic)
+        rank_stats = _compute_rank_distribution_stats(ranked_scores_path)
 
         row = {
             "run_name": run_dir.name,
@@ -245,6 +310,9 @@ def scan_runs(workspace_dir: Path, phase: str = "phase1", alpha_vals: Optional[L
         }
         # Add BEDROC/IEF metrics
         row.update(bedroc_ief_metrics)
+        
+        # Add rank distribution stats
+        row.update(rank_stats)
         
         rows.append(row)
 
@@ -281,6 +349,11 @@ def group_and_best(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, dict]]:
     # Add BEDROC/IEF columns if they exist
     for col in df.columns:
         if col.startswith("bedroc_") or col.startswith("ief_"):
+            agg_dict[col] = ["mean", "std"]
+    
+    # Add rank distribution columns if they exist
+    for col in df.columns:
+        if col.startswith("rank_"):
             agg_dict[col] = ["mean", "std"]
     
     # Important: include rows with NaNs in UMAP-only keys (so PCA isn't dropped)
@@ -583,6 +656,168 @@ def plot_bedroc_ief_bars(
             plt.close(fig)
             saved.extend([p_png, p_pdf])
             logger.info(f"Saved {metric_label} bars: {p_png}")
+    
+    return saved
+
+
+def plot_rank_distribution_diagnostic(
+    df_runs: pd.DataFrame,
+    df_grouped: pd.DataFrame,
+    out_dir: Path,
+    logger: logging.Logger,
+) -> List[Path]:
+    """
+    Generate diagnostic plots for active rank distribution.
+    
+    These plots diagnose the EF1% vs BEDROC discrepancy:
+    - If EF1% is high but BEDROC is moderate, we expect bimodal distribution
+    - Bimodal = some actives ranked very early, others ranked very poorly
+    
+    Generates:
+    1. Aggregate histogram + CDF of active percentile ranks
+    2. Bimodality scatter: frac_in_top1pct vs frac_in_bottom50pct
+    3. By-method comparison histograms
+    
+    Args:
+        df_runs: Per-run DataFrame with rank_* columns
+        df_grouped: Grouped DataFrame (for method/representation info)
+        out_dir: Output directory for plots
+        logger: Logger instance
+    
+    Returns:
+        List of saved file paths
+    """
+    _ensure_dir(out_dir)
+    saved: List[Path] = []
+    
+    # Check if rank columns exist
+    if "rank_frac_in_top1pct" not in df_runs.columns:
+        logger.warning("Rank distribution columns not found in df_runs. Skipping rank diagnostic plots.")
+        return saved
+    
+    logger.info("Generating rank distribution diagnostic plots...")
+    
+    # ===== Plot 1: Bimodality Diagnostic Scatter =====
+    # This is the key diagnostic: high top1% AND high bottom50% = bimodal problem
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    x = df_runs["rank_frac_in_top1pct"].dropna() * 100
+    y = df_runs["rank_frac_in_bottom50pct"].dropna() * 100
+    
+    # Color by method if available
+    if "method" in df_runs.columns:
+        colors_map = {"pca": "#2E86AB", "umap": "#F18F01"}
+        colors = [colors_map.get(m, "gray") for m in df_runs["method"]]
+        scatter = ax.scatter(x, y, alpha=0.5, s=30, c=colors, edgecolors="black", linewidths=0.5)
+        # Legend for methods
+        for method, color in colors_map.items():
+            ax.scatter([], [], c=color, label=method.upper(), s=50, edgecolors="black", linewidths=0.5)
+        ax.legend(title="Method", loc="upper left")
+    else:
+        ax.scatter(x, y, alpha=0.5, s=30, c="steelblue", edgecolors="black", linewidths=0.5)
+    
+    ax.set_xlabel("% of Actives in Top 1% (drives EF@1%)", fontsize=11)
+    ax.set_ylabel("% of Actives in Bottom 50% (drags down BEDROC)", fontsize=11)
+    ax.set_title("Bimodality Diagnostic: Early Hits vs. Missed Actives", fontsize=12, fontweight="bold")
+    
+    # Annotate quadrants with reference lines
+    ax.axhline(y=25, color="red", linestyle="--", alpha=0.5, linewidth=1)
+    ax.axvline(x=25, color="green", linestyle="--", alpha=0.5, linewidth=1)
+    
+    # Quadrant labels
+    ax.text(60, 8, "Good:\nMany early, few late", fontsize=9, color="green", ha="center",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+    ax.text(60, 40, "Bimodal:\nHigh EF@1%, moderate BEDROC", fontsize=9, color="orange", ha="center",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+    ax.text(12, 40, "Poor:\nFew early, many late", fontsize=9, color="red", ha="center",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+    
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 60)
+    
+    plt.tight_layout()
+    p_png = out_dir / "rank_bimodality_diagnostic.png"
+    p_pdf = out_dir / "rank_bimodality_diagnostic.pdf"
+    fig.savefig(p_png, dpi=300, bbox_inches="tight")
+    fig.savefig(p_pdf, bbox_inches="tight")
+    plt.close(fig)
+    saved.extend([p_png, p_pdf])
+    logger.info(f"Saved bimodality diagnostic: {p_png}")
+    
+    # ===== Plot 2: Distribution by Method =====
+    if "method" in df_runs.columns and "representation" in df_runs.columns:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        
+        configs = [
+            ("pca", "features", "#2E86AB"),
+            ("pca", "fingerprints", "#A23B72"),
+            ("umap", "features", "#F18F01"),
+            ("umap", "fingerprints", "#06A77D"),
+        ]
+        
+        for ax, (col, title) in zip(axes, [
+            ("rank_frac_in_top1pct", "% Actives in Top 1%"),
+            ("rank_frac_in_bottom50pct", "% Actives in Bottom 50%"),
+        ]):
+            for method, rep, color in configs:
+                subset = df_runs[(df_runs["method"] == method) & (df_runs["representation"] == rep)][col].dropna() * 100
+                if len(subset) > 0:
+                    ax.hist(subset, bins=20, alpha=0.5, label=f"{method.upper()}/{rep[:4]}", 
+                           color=color, edgecolor="black", linewidth=0.5)
+            ax.set_xlabel(title, fontsize=11)
+            ax.set_ylabel("Count (runs)", fontsize=11)
+            ax.legend(fontsize=9)
+        
+        plt.suptitle("Rank Distribution by Method/Representation", fontsize=12, fontweight="bold")
+        plt.tight_layout(rect=(0, 0, 1, 0.96))
+        
+        p_png = out_dir / "rank_distribution_by_method.png"
+        p_pdf = out_dir / "rank_distribution_by_method.pdf"
+        fig.savefig(p_png, dpi=300, bbox_inches="tight")
+        fig.savefig(p_pdf, bbox_inches="tight")
+        plt.close(fig)
+        saved.extend([p_png, p_pdf])
+        logger.info(f"Saved method comparison: {p_png}")
+    
+    # ===== Plot 3: EF@1% vs frac_in_top1pct (Sanity Check) =====
+    if "ef_1%" in df_runs.columns:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        valid = df_runs.dropna(subset=["ef_1%", "rank_frac_in_top1pct"])
+        x = valid["rank_frac_in_top1pct"] * 100
+        y = valid["ef_1%"]
+        
+        ax.scatter(x, y, alpha=0.5, s=30, c="steelblue", edgecolors="black", linewidths=0.5)
+        
+        ax.set_xlabel("% of Actives Found in Top 1%", fontsize=11)
+        ax.set_ylabel("EF@1%", fontsize=11)
+        ax.set_title("Sanity Check: EF@1% vs Actual Top 1% Hit Rate", fontsize=12, fontweight="bold")
+        
+        # Add diagonal reference
+        max_val = max(x.max(), 60) if len(x) > 0 else 60
+        ax.plot([0, max_val], [0, max_val], "r--", alpha=0.5, linewidth=1.5, label="y = x (theoretical)")
+        ax.legend(loc="upper left")
+        
+        plt.tight_layout()
+        p_png = out_dir / "rank_ef1_sanity_check.png"
+        p_pdf = out_dir / "rank_ef1_sanity_check.pdf"
+        fig.savefig(p_png, dpi=300, bbox_inches="tight")
+        fig.savefig(p_pdf, bbox_inches="tight")
+        plt.close(fig)
+        saved.extend([p_png, p_pdf])
+        logger.info(f"Saved EF@1% sanity check: {p_png}")
+    
+    # ===== Summary Statistics (log) =====
+    logger.info("Rank distribution summary statistics:")
+    for col in ["rank_frac_in_top1pct", "rank_frac_in_top5pct", "rank_frac_in_bottom50pct"]:
+        if col in df_runs.columns:
+            vals = df_runs[col].dropna() * 100
+            logger.info(f"  {col}: mean={vals.mean():.1f}%, median={vals.median():.1f}%, std={vals.std():.1f}%")
+    
+    # Bimodality count
+    bimodal_mask = (df_runs["rank_frac_in_top1pct"] > 0.20) & (df_runs["rank_frac_in_bottom50pct"] > 0.25)
+    n_bimodal = bimodal_mask.sum()
+    logger.info(f"  Bimodal runs (>20% top1% AND >25% bottom50%): {n_bimodal} / {len(df_runs)}")
     
     return saved
 
@@ -1767,6 +2002,13 @@ def main():
     plot_umap_heatmaps(df_grouped, plot_dir)
     manifest.setdefault("heatmaps", []).extend([str(plot_dir/"umap_heatmap_grid.png"), str(plot_dir/"umap_heatmap_grid.pdf")])
     logger.info("Finished plots (bars/heatmaps)")
+
+    # 4b) Rank distribution diagnostic plots (EF vs BEDROC discrepancy)
+    logger.info("START: Rank distribution diagnostic")
+    rank_files = plot_rank_distribution_diagnostic(df_runs, df_grouped, plot_dir, logger)
+    if rank_files:
+        manifest.setdefault("rank_diagnostic", []).extend([str(p) for p in rank_files])
+    logger.info("Finished rank distribution diagnostic plots")
 
     # 4c) 2D scatter plots for molecular group visualization
     logger.info("START: 2D scatter embeddings")
