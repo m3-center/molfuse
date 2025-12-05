@@ -158,12 +158,11 @@ def _compute_ranked_scores_metrics(ranked_scores_path: Path, alpha_vals: List[fl
         return {}
     
     try:
-        # Use polars for fast CSV read with parallelism and memory mapping
+        # Use polars for fast CSV read with parallelism
         # Read all columns first, then select (polars errors if column doesn't exist)
         df_pl = pl.read_csv(
             ranked_scores_path,
             n_threads=12,
-            memory_map=True,
         )
         
         # Select only the columns we need (that exist)
