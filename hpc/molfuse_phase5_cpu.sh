@@ -51,8 +51,11 @@ echo "=========================================="
 echo ""
 
 # Activate conda environment
-echo "Activating conda environment: ummbas-screening-mordredcommunity"
-source "${CONDA_ACTIVATE:-/home/ahagg2s/miniforge3/bin/activate}" "${CONDA_ENV:-ummbas-screening-mordredcommunity}"
+echo "Activating conda environment: ${CONDA_ENV:-molfuse}"
+if [[ -z "${CONDA_ACTIVATE:-}" && -n "${CONDA_EXE:-}" ]]; then
+    CONDA_ACTIVATE="$(dirname "$CONDA_EXE")/activate"
+fi
+source "${CONDA_ACTIVATE:-$HOME/miniforge3/bin/activate}" "${CONDA_ENV:-molfuse}"
 
 # Verify Python environment
 echo "Python executable: $(which python)"

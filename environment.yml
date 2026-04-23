@@ -1,4 +1,4 @@
-name: ummbas-screening
+name: molfuse
 channels:
   - conda-forge
   - defaults
@@ -21,7 +21,7 @@ dependencies:
   # GUI
   - dash>=2.18
   - dash-bootstrap-components>=1.6
-  # Optional — post-analysis scripts only (install separately if needed)
-  # - pyarrow>=17      # Parquet caching + fast CSV parsing (10-100x speedup)
-  # - seaborn>=0.13    # Publication plots in scripts/phase*_post_analysis.py
-  # - polars>=1.0      # Fast DataFrame ops in scripts/phase*_post_analysis.py
+  # Post-analysis scripts only
+  - pyarrow>=17      # Parquet caching + fast CSV parsing (10-100x speedup)
+  - seaborn>=0.13    # Publication plots in scripts/phase*_post_analysis.py
+  - polars>=1.0      # Fast DataFrame ops in scripts/phase*_post_analysis.py

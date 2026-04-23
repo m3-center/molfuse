@@ -65,8 +65,11 @@ SKIP_EXISTING=${SKIP_EXISTING:-true}  # Skip existing files by default
 DRY_RUN=${DRY_RUN:-false}  # Dry run mode (preview only)
 
 # --- Environment Setup ---
-echo "[SLURM] Activating conda environment: ummbas-screening-mordredcommunity"
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+echo "[SLURM] Activating conda environment: ${CONDA_ENV:-molfuse}"
+if [[ -z "${CONDA_ACTIVATE:-}" && -n "${CONDA_EXE:-}" ]]; then
+    CONDA_ACTIVATE="$(dirname "$CONDA_EXE")/activate"
+fi
+source "${CONDA_ACTIVATE:-$HOME/miniforge3/bin/activate}" "${CONDA_ENV:-molfuse}"
 
 # Create output and cache directories
 mkdir -p "${OUTPUT_DIR}"

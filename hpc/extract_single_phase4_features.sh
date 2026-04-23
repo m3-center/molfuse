@@ -39,8 +39,11 @@ echo "==========================================================================
 cd "${SLURM_SUBMIT_DIR}"
 
 
-# Activate conda environment (adjust name as needed)
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+# Activate conda environment (set CONDA_ENV and CONDA_ACTIVATE to override defaults)
+if [[ -z "${CONDA_ACTIVATE:-}" && -n "${CONDA_EXE:-}" ]]; then
+    CONDA_ACTIVATE="$(dirname "$CONDA_EXE")/activate"
+fi
+source "${CONDA_ACTIVATE:-$HOME/miniforge3/bin/activate}" "${CONDA_ENV:-molfuse}"
 
 
 # Run extraction script

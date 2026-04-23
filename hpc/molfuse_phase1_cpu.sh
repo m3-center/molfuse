@@ -39,7 +39,10 @@ echo "Workspace: ${WORKSPACE_DIR}"
 echo "=========================================="
 echo ""
 
-source "${CONDA_ACTIVATE:-/home/ahagg2s/miniforge3/bin/activate}" "${CONDA_ENV:-ummbas-screening-mordredcommunity}"
+if [[ -z "${CONDA_ACTIVATE:-}" && -n "${CONDA_EXE:-}" ]]; then
+    CONDA_ACTIVATE="$(dirname "$CONDA_EXE")/activate"
+fi
+source "${CONDA_ACTIVATE:-$HOME/miniforge3/bin/activate}" "${CONDA_ENV:-molfuse}"
 python -m molfuse.cli.phase1 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 
 EXIT_CODE=$?

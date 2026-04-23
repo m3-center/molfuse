@@ -26,7 +26,10 @@
 # =============================================================================
 
 # Load conda environment
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+if [[ -z "${CONDA_ACTIVATE:-}" && -n "${CONDA_EXE:-}" ]]; then
+    CONDA_ACTIVATE="$(dirname "$CONDA_EXE")/activate"
+fi
+source "${CONDA_ACTIVATE:-$HOME/miniforge3/bin/activate}" "${CONDA_ENV:-molfuse}"
 
 
 echo "=========================================="

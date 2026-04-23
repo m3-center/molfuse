@@ -14,8 +14,10 @@
 set -e  # Exit on error
 
 # Activate conda environment
-source ~/.bashrc
-conda activate ummbas-screening-mordredcommunity
+if [[ -z "${CONDA_ACTIVATE:-}" && -n "${CONDA_EXE:-}" ]]; then
+    CONDA_ACTIVATE="$(dirname "$CONDA_EXE")/activate"
+fi
+source "${CONDA_ACTIVATE:-$HOME/miniforge3/bin/activate}" "${CONDA_ENV:-molfuse}"
 
 # Get Phase 4 run directory from array
 PHASE4_RUN_DIR=$1
