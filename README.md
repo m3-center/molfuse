@@ -71,10 +71,10 @@ Datasets are not included in this repository (too large for git). The expected d
 
 | Phase | Research question | Retrains? | Key output |
 |-------|------------------|-----------|------------|
-| **1** — Hyperparameter sweep | Which DR method/hyperparams work best? | ✅ Full | Scaler + DR model + embeddings + `metrics.json` |
-| **2** — Affinity cutoff sensitivity | Does filtering MF by potency improve EF@1%? | ❌ Re-scoring only | Per-cutoff `metrics.json` + `ranked_scores.csv` |
-| **3** — MF cloud ablation | What is the critical MF cloud size? | ✅ Full | Phase transition curve (UMAP→PCA crossover) |
-| **4** — Cross-target generalization | Does performance vary across targets? | ✅ Full | Per-target EF@1%, MF size vs performance scatter |
+| **1** — Hyperparameter sweep | Which DR method/hyperparams work best? | Full | Scaler + DR model + embeddings + `metrics.json` |
+| **2** — Affinity cutoff sensitivity | Does filtering MF by potency improve EF@1%? | Re-scoring only | Per-cutoff `metrics.json` + `ranked_scores.csv` |
+| **3** — MF cloud ablation | What is the critical MF cloud size? | Full | Phase transition curve (UMAP→PCA crossover) |
+| **4** — Cross-target generalization | Does performance vary across targets? | Full | Per-target EF@1%, MF size vs performance scatter |
 | **5** — Validation baselines | Is UMAP/descriptor selection necessary? | varies | Tanimoto, raw-descriptor, and negative-control comparisons |
 
 ### Eight Phase 4 targets
