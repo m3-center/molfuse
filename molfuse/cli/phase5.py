@@ -590,7 +590,13 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         
         # Load Phase 1/4 best model artifacts (imputer + scaler, NOT UMAP)
         logger.info("  Loading best model artifacts...")
-        base_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
+        if "phase2_best_model_dir" not in cfg:
+            raise KeyError(
+                "Config must include 'phase2_best_model_dir' pointing to the Phase 1 or Phase 4 "
+                "workspace directory (e.g. 'experiment_workspace_v4/phase1'). "
+                "Regenerate configs with: python scripts/generate_molfuse_phase5_configs_v4.py --workspace-dir <your_workspace>"
+            )
+        base_model_dir = Path(cfg["phase2_best_model_dir"])
         
         # Get replicate number from config (must match Phase 1/4 replicate)
         replicate = cfg.get("replicate", 1)
@@ -792,7 +798,13 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
         
         # Load Phase 1/4 best model FIRST to get the correct MF source
         logger.info("  Loading best model...")
-        base_model_dir = Path(cfg.get("phase2_best_model_dir", "experiment_workspace_v4/phase1"))
+        if "phase2_best_model_dir" not in cfg:
+            raise KeyError(
+                "Config must include 'phase2_best_model_dir' pointing to the Phase 1 or Phase 4 "
+                "workspace directory (e.g. 'experiment_workspace_v4/phase1'). "
+                "Regenerate configs with: python scripts/generate_molfuse_phase5_configs_v4.py --workspace-dir <your_workspace>"
+            )
+        base_model_dir = Path(cfg["phase2_best_model_dir"])
         
         # Get replicate number from config (must match Phase 1/4 replicate)
         replicate = cfg.get("replicate", 1)
@@ -843,18 +855,13 @@ def run_phase5(config_path: Path, workspace_dir: Path) -> None:
                 mf_features_csv = Path(phase1_cfg["mf_features_csv"])
                 logger.info(f"  Loading kinase MF features from Phase 1 config: {mf_features_csv}")
                 if not mf_features_csv.exists():
-                    logger.warning(f"    MF file from Phase 1 config not found: {mf_features_csv}")
-                    # Fallback to hardcoded path if original not found (e.g. different machine)
-                    fallback_path = Path("output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv")
-                    if fallback_path.exists():
-                        logger.warning(f"    Falling back to default path: {fallback_path}")
-                        mf_features_csv = fallback_path
-                    else:
-                        logger.error("    MF features CSV not found")
-                        act_scores = np.array([])
-                        zinc_scores = np.array([])
-                        # Skip the rest of this block
-                        mf_features_csv = None
+                    logger.error(
+                        f"    MF features CSV from Phase 1 config not found: {mf_features_csv}. "
+                        "Ensure the data directory is accessible or update the path in the Phase 1 config."
+                    )
+                    act_scores = np.array([])
+                    zinc_scores = np.array([])
+                    mf_features_csv = None
 
                 if mf_features_csv:
                     df_mf_kinase = pd.read_csv(mf_features_csv, low_memory=False)

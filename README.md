@@ -120,19 +120,21 @@ Primary metric: **EF@1%** (enrichment factor at top 1%). Also reported: ROC-AUC,
 python scripts/generate_molfuse_phase1_configs_v4.py --data-dir /path/to/datasets_2d_all
 
 # Phase 2 (cutoff sweep config; references Phase 1 workspace)
-python scripts/generate_molfuse_phase2_configs_v4.py
+python scripts/generate_molfuse_phase2_configs_v4.py --workspace-dir experiment_workspace_v4
 
 # Phase 3 (MF ablation; reads Phase 1 + Phase 2 results)
 python scripts/generate_molfuse_phase3_configs_v4.py \
     --phase1_grouped reporting/phase1_post_analysis/phase1_summary_grouped.csv \
     --phase2_best_cutoffs reporting/phase2_post_analysis/phase2_best_cutoffs.json \
-    --data_dir /path/to/datasets_2d_all
+    --data-dir /path/to/datasets_2d_all
 
 # Phase 4 (cross-target; 8 targets × 5 replicates = 40 configs)
 python scripts/generate_molfuse_phase4_configs_v4.py --data-dir /path/to/datasets_2d_all
 
-# Phase 5 (validation baselines)
-python scripts/generate_molfuse_phase5_configs_v4.py --data-dir /path/to/datasets_2d_all
+# Phase 5 (validation baselines; --workspace-dir must match your Phase 1 workspace)
+python scripts/generate_molfuse_phase5_configs_v4.py \
+    --data-dir /path/to/datasets_2d_all \
+    --workspace-dir experiment_workspace_v4
 ```
 
 All generators write to `configs/molfuse_phase*_grid/` (gitignored; regenerate locally).
@@ -220,6 +222,16 @@ SLURM resources per phase: 64 CPUs, 64–350 GB RAM, 2–72 h walltime.
 | `scripts/analyze_phase4_mf_cloud_sizes.py` | MF cloud sizes for all Phase 4 targets (publication table) |
 | `scripts/benchmark_computational_performance.py` | Wall-clock timing: Tanimoto vs features vs UMAP across molecule counts |
 | `scripts/extract_phase4_features.py` | Compute Mordred 2D descriptors for Phase 4 KW CSVs |
+
+All scripts accept `--workspace_dir` (default: `experiment_workspace_v4`) and `--output_dir`:
+
+```bash
+python scripts/phase1_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase1_post_analysis
+python scripts/phase2_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase2_post_analysis
+python scripts/phase3_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase3_post_analysis
+python scripts/phase4_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase4_post_analysis
+python scripts/phase5_post_analysis.py --workspace_dir experiment_workspace_v4 --output_dir reporting/phase5_post_analysis
+```
 
 ---
 

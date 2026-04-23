@@ -3,14 +3,15 @@
 Phase 4 Post-Analysis: Cross-Target Generalization Study
 
 Aggregates Phase 4 results and generates publication-quality plots:
-- Cross-target performance comparison (EF@1% across 9 kinases)
+- Cross-target performance comparison (EF@1% across 8 targets)
 - Correlation: Natural MF cloud size vs High-potency EF@1%
 - Potency-stratified enrichment across targets
 - Target-specific degradation curves
 - Statistical validation (Spearman correlation + significance)
 
-Targets (Tyrosine Kinases):
-- ABL1, ABL2, EGFR, ERBB2, SRC, LCK, YES1, FYN, LYN
+Targets (8 diverse proteins, leave-one-out design):
+- SOD1 (P00441), PLA2G2A (P14555), KIF11 (P52732), NAMPT (P43490)
+- FGFR1 (P11362), CA2 (P00918), CYP3A4 (P08684), ABL1 (P00519)
 
 Potency Tiers (nM):
 - High:   0.1 ≤ affinity ≤ 100

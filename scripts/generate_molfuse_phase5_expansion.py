@@ -224,9 +224,16 @@ def main():
         default="configs/molfuse_phase5_expansion",
         help="Directory to write generated config files (default: %(default)s).",
     )
+    parser.add_argument(
+        "--workspace-dir",
+        default="experiment_workspace_v4",
+        help="Workspace directory used in Phase 4 (sets phase2_best_model_dir to <workspace-dir>/phase4/cross_target; default: %(default)s).",
+    )
     args = parser.parse_args()
     global BASE_DATA_DIR
     BASE_DATA_DIR = Path(args.data_dir)
+    global PHASE4_MODEL_DIR
+    PHASE4_MODEL_DIR = f"{args.workspace_dir}/phase4/cross_target"
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     

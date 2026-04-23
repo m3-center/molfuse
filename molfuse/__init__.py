@@ -9,4 +9,4 @@ Core invariants:
 - Spearman's rho reported (pActivity vs score) for actives.
 """
 
-__version__ = "4.0.0-dev"
+__version__ = "4.0.0"

@@ -50,4 +50,22 @@ def generate_phase2_configs(
 
 
 if __name__ == "__main__":
-    generate_phase2_configs()
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Generate Phase 2 config file for affinity cutoff sensitivity analysis."
+    )
+    parser.add_argument(
+        "--workspace-dir",
+        default="experiment_workspace_v4",
+        help="Phase 1 workspace directory (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="configs/molfuse_phase2_grid",
+        help="Directory to write the generated config file (default: %(default)s).",
+    )
+    args = parser.parse_args()
+    generate_phase2_configs(
+        output_dir=Path(args.output_dir),
+        phase1_workspace=args.workspace_dir,
+    )

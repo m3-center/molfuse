@@ -224,7 +224,7 @@ def main():
                        help="Path to Phase 1 grouped summary CSV (for extracting best hyperparameters)")
     parser.add_argument("--phase2_best_cutoffs", type=str, default="reporting/phase2_post_analysis/phase2_best_cutoffs.json",
                        help="Path to Phase 2 best cutoffs JSON (optional, uses 100 nM if not found)")
-    parser.add_argument("--output_dir", type=str, default="configs/molfuse_phase3_grid",
+    parser.add_argument("--output-dir", type=str, default="configs/molfuse_phase3_grid",
                        help="Output directory for configs")
     parser.add_argument("--target", type=str, default="TyrosineProteinKinaseABL1_P00519",
                        help="Target protein")
@@ -232,7 +232,7 @@ def main():
                        help="Comma-separated MF sizes")
     parser.add_argument("--replicates", type=str, default="1,2,3,4,5",
                        help="Comma-separated replicate numbers")
-    parser.add_argument("--data_dir", type=str, default="output_recalculated_full_datasets/datasets_2d_all",
+    parser.add_argument("--data-dir", type=str, default="output_recalculated_full_datasets/datasets_2d_all",
                        help="Root directory containing MF and ZINC CSV files (default: %(default)s).")
     args = parser.parse_args()
     

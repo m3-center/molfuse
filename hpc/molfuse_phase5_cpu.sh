@@ -72,7 +72,7 @@ echo ""
 echo "=========================================="
 echo "Job finished with exit code: ${EXIT_CODE}"
 echo "End Time: $(date)"
-echo "Duration: $(date -ud "@$(($(date +%s) - $(date -d "$(grep 'Start Time:' slurm_logs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out 2>/dev/null | head -1 | cut -d: -f2-)" +%s)))" +%T) 2>/dev/null || echo 'N/A')"
+echo "Duration: ${SECONDS}s"
 echo "=========================================="
 
 exit ${EXIT_CODE}

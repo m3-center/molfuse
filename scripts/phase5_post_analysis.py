@@ -337,29 +337,21 @@ def compute_baseline_comparisons(
     lines.append("\nPhase 5 vs Phase 1/4 Baseline Comparisons")
     lines.append("="*80)
     
-    print(f"  DEBUG compute_baseline_comparisons: phase5_summary_stats keys = {list(phase5_summary_stats.keys())}")
-    print(f"  DEBUG compute_baseline_comparisons: phase1_summary_stats keys = {list(phase1_summary_stats.keys())}")
     
     # Tanimoto: Phase 5 raw ECFP4 vs Phase 1 ECFP4+UMAP
     if "tanimoto" in phase5_summary_stats:
-        print(f"  DEBUG: Tanimoto in phase5_summary_stats")
         has_baseline = "tanimoto" in phase1_summary_stats
-        print(f"  DEBUG: Tanimoto in phase1_summary_stats: {has_baseline}")
         
         p5_ef1_mean, p5_ef1_std = phase5_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
         p5_roc_mean, p5_roc_std = phase5_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
         
-        print(f"  DEBUG: Phase 5 tanimoto EF@1%: {p5_ef1_mean:.1f} ± {p5_ef1_std:.1f}")
         
         if has_baseline:
             p1_ef1_mean, p1_ef1_std = phase1_summary_stats["tanimoto"].get("ef_1%", (np.nan, np.nan))
             p1_roc_mean, p1_roc_std = phase1_summary_stats["tanimoto"].get("roc_auc", (np.nan, np.nan))
-            print(f"  DEBUG: Phase 1 tanimoto EF@1%: {p1_ef1_mean:.1f} ± {p1_ef1_std:.1f}")
         else:
             p1_ef1_mean = p1_ef1_std = p1_roc_mean = p1_roc_std = np.nan
-            print(f"  DEBUG: No Phase 1 baseline for tanimoto - all NaN")
         
-        print(f"  DEBUG: Checking condition: p5_ef1_mean isnan={np.isnan(p5_ef1_mean)}, p1_ef1_mean isnan={np.isnan(p1_ef1_mean)}")
         
         if not np.isnan(p5_ef1_mean) and not np.isnan(p1_ef1_mean):
             abs_delta = p5_ef1_mean - p1_ef1_mean
@@ -561,7 +553,6 @@ def compute_stratified_metrics_for_run(
     ranked_scores_path = phase5_dir / "artifacts" / "ranked_scores.csv"
     
     if not ranked_scores_path.exists():
-        print(f"DEBUG: ranked_scores.csv not found for {run_name}")
         return {}
     
     try:
@@ -569,62 +560,52 @@ def compute_stratified_metrics_for_run(
             # Load ABL1 actives from MF features
             mf_features_csv_str = config.get("mf_features_csv", "")
             if not mf_features_csv_str:
-                print(f"DEBUG: mf_features_csv not in config for {run_name}")
                 return {}
             
             mf_features_csv = Path(mf_features_csv_str)
             if not mf_features_csv.exists():
-                print(f"DEBUG: MF features CSV not found: {mf_features_csv}")
                 return {}
             
             df_mf = pd.read_csv(mf_features_csv, low_memory=False)
             target = config.get("target", "P00519")
             
             if "accession" not in df_mf.columns:
-                print(f"DEBUG: 'accession' column not found in MF features for {run_name}")
                 return {}
             
             df_actives = df_mf[df_mf["accession"] == target].copy()
             
             if len(df_actives) == 0:
-                print(f"DEBUG: No actives found for target {target} in {run_name}")
                 return {}
             
             if "Standard Value (nM)" not in df_actives.columns:
-                print(f"DEBUG: 'Standard Value (nM)' column not found in actives for {run_name}")
                 return {}
             
             smiles_col = "canonical_smiles" if "canonical_smiles" in df_actives.columns else "SMILES"
             
             result = compute_tier_ef1(ranked_scores_path, df_actives, smiles_col)
             if not result:
-                print(f"DEBUG: compute_tier_ef1 returned empty dict for {run_name}")
             return result
         
         elif experiment_type == "negative_control":
             # Load KW dataset
             kw_csv_str = config.get("negative_control_kw_csv", "")
             if not kw_csv_str:
-                print(f"DEBUG: negative_control_kw_csv not in config for {run_name}")
                 return {}
             
             kw_csv = Path(kw_csv_str)
             if not kw_csv.exists():
-                print(f"DEBUG: KW CSV not found: {kw_csv}")
                 return {}
             
             df_kw = pd.read_csv(kw_csv, low_memory=False)
             
             # Check if we have activity column
             if "Standard Value (nM)" not in df_kw.columns:
-                print(f"DEBUG: 'Standard Value (nM)' not in KW dataset for {run_name}")
                 return {}
             
             smiles_col = "canonical_smiles" if "canonical_smiles" in df_kw.columns else "SMILES"
             
             result = compute_tier_ef1(ranked_scores_path, df_kw, smiles_col)
             if not result:
-                print(f"DEBUG: compute_tier_ef1 returned empty dict for {run_name} (negative control)")
             return result
         
     except Exception as e:
