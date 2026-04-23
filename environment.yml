@@ -1,0 +1,27 @@
+name: ummbas-screening
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  # Core scientific stack
+  - numpy>=2.0
+  - pandas>=2.2
+  - scipy>=1.14
+  - scikit-learn>=1.5
+  - joblib>=1.4
+  # Dimensionality reduction
+  - umap-learn>=0.5.7
+  # Cheminformatics
+  - rdkit>=2024.09
+  - mordred>=1.2
+  # Visualisation (GUI + post-analysis)
+  - matplotlib>=3.9
+  - plotly>=5.24
+  # GUI
+  - dash>=2.18
+  - dash-bootstrap-components>=1.6
+  # Optional — post-analysis scripts only (install separately if needed)
+  # - pyarrow>=17      # Parquet caching + fast CSV parsing (10-100x speedup)
+  # - seaborn>=0.13    # Publication plots in scripts/phase*_post_analysis.py
+  # - polars>=1.0      # Fast DataFrame ops in scripts/phase*_post_analysis.py

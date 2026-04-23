@@ -137,6 +137,7 @@ def generate_phase3_configs(
     target: str = "TyrosineProteinKinaseABL1_P00519",
     mf_sizes: List | None = None,
     replicates: List[int] | None = None,
+    data_dir: Path = Path("output_recalculated_full_datasets/datasets_2d_all"),
 ) -> List[Path]:
     """
     Generate Phase 3 configuration grid.
@@ -163,10 +164,10 @@ def generate_phase3_configs(
     
     # Base paths (2D Mordred features + ECFP4 fingerprints)
     base_paths = {
-        "mf_features_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv",
-        "zinc_features_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv",
-        "mf_fingerprints_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv",
-        "zinc_fingerprints_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_fingerprints_ECFP4.csv",
+        "mf_features_csv": str(data_dir / "KW-0808_Transferase_affinity_extracted_features.csv"),
+        "zinc_features_csv": str(data_dir / "zinc" / "zinc_acquirable_extracted_features.csv"),
+        "mf_fingerprints_csv": str(data_dir / "KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv"),
+        "zinc_fingerprints_csv": str(data_dir / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"),
     }
     
     # Generate configs for each method × MF size × replicate
@@ -231,6 +232,8 @@ def main():
                        help="Comma-separated MF sizes")
     parser.add_argument("--replicates", type=str, default="1,2,3,4,5",
                        help="Comma-separated replicate numbers")
+    parser.add_argument("--data_dir", type=str, default="output_recalculated_full_datasets/datasets_2d_all",
+                       help="Root directory containing MF and ZINC CSV files (default: %(default)s).")
     args = parser.parse_args()
     
     # Parse inputs
@@ -238,6 +241,7 @@ def main():
     phase1_grouped_path = Path(args.phase1_grouped)
     phase2_path = Path(args.phase2_best_cutoffs)
     output_dir = Path(args.output_dir)
+    data_dir = Path(args.data_dir)
     
     # Parse MF sizes
     mf_sizes = []
@@ -285,6 +289,7 @@ def main():
         target=args.target,
         mf_sizes=mf_sizes,
         replicates=replicates,
+        data_dir=data_dir,
     )
     
     print("="*80)

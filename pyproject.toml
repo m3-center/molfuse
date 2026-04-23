@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "molfuse"
+version = "4.0.0"
+description = "Molecular Function-Guided Virtual Screening (UMMBAS)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "scipy>=1.14",
+    "scikit-learn>=1.5",
+    "joblib>=1.4",
+    "umap-learn>=0.5",
+    "rdkit>=2024.09",
+    "mordred>=1.2",
+    "matplotlib>=3.9",
+    "plotly>=5.24",
+    "dash>=2.18",
+    "dash-bootstrap-components>=1.6",
+]
+
+[project.optional-dependencies]
+# Required for 10-100x CSV loading speedup and Parquet caching
+fast-io = [
+    "pyarrow>=17",
+]
+# Required for post-analysis scripts (scripts/phase*_post_analysis.py)
+analysis = [
+    "pyarrow>=17",
+    "seaborn>=0.13",
+    "polars>=1.0",
+]
+# All optional extras
+all = [
+    "pyarrow>=17",
+    "seaborn>=0.13",
+    "polars>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["molfuse*"]

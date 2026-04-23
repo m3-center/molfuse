@@ -52,7 +52,7 @@ echo ""
 
 # Activate conda environment
 echo "Activating conda environment: ummbas-screening-mordredcommunity"
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+source "${CONDA_ACTIVATE:-/home/ahagg2s/miniforge3/bin/activate}" "${CONDA_ENV:-ummbas-screening-mordredcommunity}"
 
 # Verify Python environment
 echo "Python executable: $(which python)"

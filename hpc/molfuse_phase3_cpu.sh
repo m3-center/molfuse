@@ -86,7 +86,7 @@ echo "Node: $(hostname)"
 echo "=========================================="
 
 # Activate mamba environment
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+source "${CONDA_ACTIVATE:-/home/ahagg2s/miniforge3/bin/activate}" "${CONDA_ENV:-ummbas-screening-mordredcommunity}"
 
 # Verify Python environment
 echo "Python: $(which python3)"

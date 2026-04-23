@@ -1,4 +1,5 @@
 {
+  "_note": "CSV paths are relative to the repo root. Replace the 'output_recalculated_full_datasets/datasets_2d_all' prefix with the path to your downloaded data directory, or run: python scripts/generate_molfuse_phase1_configs_v4.py --data-dir /path/to/your/datasets_2d_all",
   "run_name": "ABL1_UMAP_features_5d_nn50_md0p01_full2d",
   "target": "TyrosineProteinKinaseABL1_P00519",
   "method": "umap",

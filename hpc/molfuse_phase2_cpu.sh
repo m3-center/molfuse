@@ -40,7 +40,7 @@ echo "Workspace: ${WORKSPACE_DIR}"
 echo "=========================================="
 echo ""
 
-source /home/ahagg2s/miniforge3/bin/activate ummbas-screening-mordredcommunity
+source "${CONDA_ACTIVATE:-/home/ahagg2s/miniforge3/bin/activate}" "${CONDA_ENV:-ummbas-screening-mordredcommunity}"
 python -m molfuse.cli.phase2 --config "$CONFIG_PATH" --workspace "$WORKSPACE_DIR"
 
 EXIT_CODE=$?

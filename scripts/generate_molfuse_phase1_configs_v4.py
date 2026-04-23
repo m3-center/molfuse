@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from itertools import product
@@ -9,12 +10,32 @@ from itertools import product
 # Based on feature_comparison_v2.py results showing full 2D features yield highest EF@1%
 # Writes configs to configs/molfuse_phase1_grid/
 
+_parser = argparse.ArgumentParser(
+    description="Generate Phase 1 config grid (hyperparameter sweep, ABL1 baseline)."
+)
+_parser.add_argument(
+    "--data-dir",
+    default="output_recalculated_full_datasets/datasets_2d_all",
+    help=(
+        "Root directory containing MF, ZINC, and actives CSV files. "
+        "Expected layout: <data-dir>/KW-*/..., <data-dir>/zinc/..., <data-dir>/chembl/... "
+        "(default: %(default)s)"
+    ),
+)
+_parser.add_argument(
+    "--output-dir",
+    default="configs/molfuse_phase1_grid",
+    help="Directory to write generated config files (default: %(default)s).",
+)
+_args = _parser.parse_args()
+_DATA_DIR = Path(_args.data_dir)
+
 BASE = {
     "target": "TyrosineProteinKinaseABL1_P00519",
-    # Updated to full 2D Mordred descriptors (1613 raw features)
-    "mf_features_csv": "output_recalculated_full_datasets/datasets_2d_all/KW-0808_Transferase_affinity_extracted_features.csv",
-    "zinc_features_csv": "output_recalculated_full_datasets/datasets_2d_all/zinc/zinc_acquirable_extracted_features.csv",
-    "actives_features_csv": "output_recalculated_full_datasets/datasets_2d_all/chembl/ABL1_P00519_actives_extracted_features.csv",
+    # Full 2D Mordred descriptors (1613 raw features)
+    "mf_features_csv": str(_DATA_DIR / "KW-0808_Transferase_affinity_extracted_features.csv"),
+    "zinc_features_csv": str(_DATA_DIR / "zinc" / "zinc_acquirable_extracted_features.csv"),
+    "actives_features_csv": str(_DATA_DIR / "chembl" / "ABL1_P00519_actives_extracted_features.csv"),
     "sample_zinc": -1,
     "affinity_cutoff_nM": 100000,
     "on_empty_cutoff": "error",
@@ -28,7 +49,7 @@ UMAP_MIN_DIST = [0.0, 0.01, 0.1]
 UMAP_METRIC = "euclidean"
 
 
-OUT_DIR = Path("configs/molfuse_phase1_grid")
+OUT_DIR = Path(_args.output_dir)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Replicates
@@ -74,10 +95,10 @@ FP_UMAP_MIN_DIST = [0.0, 0.01, 0.1]
 
 BASE_FP = {
     **BASE,
-    # Point to fingerprint CSVs in full 2D dataset directory
-    "mf_features_csv": BASE["mf_features_csv"].replace("extracted_features.csv", "extracted_fingerprints_ECFP4.csv"),
-    "zinc_features_csv": BASE["zinc_features_csv"].replace("extracted_features.csv", "extracted_fingerprints_ECFP4.csv"),
-    "actives_features_csv": BASE["actives_features_csv"].replace("extracted_features.csv", "extracted_fingerprints_ECFP4.csv"),
+    # ECFP4 fingerprint CSVs
+    "mf_features_csv": str(_DATA_DIR / "KW-0808_Transferase_affinity_extracted_fingerprints_ECFP4.csv"),
+    "zinc_features_csv": str(_DATA_DIR / "zinc" / "zinc_acquirable_extracted_fingerprints_ECFP4.csv"),
+    "actives_features_csv": str(_DATA_DIR / "chembl" / "ABL1_P00519_actives_extracted_fingerprints_ECFP4.csv"),
 }
 
 # Generate PCA configs (fingerprints) with replicates

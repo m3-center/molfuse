@@ -205,7 +205,25 @@ def generate_negative_control_configs(output_dir: Path) -> List[Path]:
 
 
 def main():
-    output_dir = Path("configs/molfuse_phase5_grid")
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Generate Phase 5 config grid (validation & baseline experiments)."
+    )
+    parser.add_argument(
+        "--data-dir",
+        default="output_recalculated_full_datasets/datasets_2d_all",
+        help="Root directory containing MF, ZINC, and actives CSV files (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="configs/molfuse_phase5_grid",
+        help="Directory to write generated config files (default: %(default)s).",
+    )
+    args = parser.parse_args()
+    global BASE_DATA_DIR
+    BASE_DATA_DIR = Path(args.data_dir)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     print("="*80)
     print("PHASE 5 CONFIG GENERATOR: Validation & Baseline Experiments")
