@@ -240,7 +240,7 @@ python scripts/phase5_post_analysis.py --workspace_dir experiment_workspace_v4 -
 A Dash web app for scoring candidate molecules against pre-trained models without re-running the pipeline.
 
 ```bash
-python -m molfuse.gui.app --workspace /path/to/experiment_workspace_v4
+python -m molfuse.gui.app --workspace experiment_workspace_v4
 # → http://127.0.0.1:8050
 ```
 

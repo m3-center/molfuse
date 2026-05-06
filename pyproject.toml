@@ -22,22 +22,17 @@ dependencies = [
     "plotly>=5.24",
     "dash>=2.18",
     "dash-bootstrap-components>=1.6",
+    "pyarrow>=17",
 ]
 
 [project.optional-dependencies]
-# Required for 10-100x CSV loading speedup and Parquet caching
-fast-io = [
-    "pyarrow>=17",
-]
 # Required for post-analysis scripts (scripts/phase*_post_analysis.py)
 analysis = [
-    "pyarrow>=17",
     "seaborn>=0.13",
     "polars>=1.0",
 ]
 # All optional extras
 all = [
-    "pyarrow>=17",
     "seaborn>=0.13",
     "polars>=1.0",
 ]

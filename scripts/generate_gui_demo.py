@@ -1,13 +1,24 @@
 """
-Generate lightweight demo case for MolFuSE GUI.
+DEPRECATED — do not use.
 
-Creates a minimal workspace with:
-- Small subset of Antioxidant (KW-0049, P00441) data
-- Pre-trained PCA and UMAP models
-- Example candidate molecules CSV
+This script required local raw dataset files and is no longer maintained.
 
-This allows users to test the GUI without large memory requirements.
+To try the GUI:
+  Option A: Download the pre-trained model workspace from Zenodo and point
+            the GUI at it:
+              python -m molfuse.gui --workspace /path/to/downloaded/workspace
+
+  Option B: Train a model on your own data using the GUI training tab, or
+            via the CLI:
+              python -m molfuse.cli.phase1 --config <config.json> \\
+                  --workspace ./my_workspace
+
+See README.md for full instructions.
 """
+
+import sys
+print(__doc__)
+sys.exit(0)
 
 from __future__ import annotations
 

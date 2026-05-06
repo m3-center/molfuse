@@ -13,6 +13,12 @@ from dash import dcc, html, Input, Output, State, ALL, ctx
 from dash import dcc as dcc_module  # For send_data_frame
 import dash_bootstrap_components as dbc
 import pandas as pd
+import json as _json
+import subprocess
+import sys
+import tempfile
+import uuid
+
 import numpy as np
 
 from molfuse.gui.components import ModelLoader, DescriptorCalculator, CandidateProjector, Visualizer
@@ -41,6 +47,9 @@ MODEL_LOADER = None
 CURRENT_MODEL = None
 CURRENT_ARTIFACTS = None
 
+# Training process registry — Popen objects can't be serialised into dcc.Store
+_TRAINING_PROCESSES: Dict[str, subprocess.Popen] = {}
+
 
 def create_layout():
     """Create main GUI layout."""
@@ -66,7 +75,7 @@ def create_layout():
                             dbc.InputGroupText("Workspace Path:"),
                             dbc.Input(
                                 id="workspace-path-input",
-                                placeholder="/path/to/experiment_workspace_v4",
+                                placeholder="experiment_workspace_v4",
                                 type="text",
                                 value=""  # Will be set by callback
                             ),
@@ -122,7 +131,7 @@ def create_layout():
                                             id='candidate-csv-upload',
                                             children=html.Div([
                                                 'Drag and Drop or ',
-                                                html.A('Select CSV File')
+                                                html.A('Select CSV or Parquet File')
                                             ]),
                                             style={
                                                 'width': '100%',
@@ -134,12 +143,13 @@ def create_layout():
                                                 'textAlign': 'center',
                                                 'margin': '10px'
                                             },
+                                            accept='.csv,.parquet',
                                             multiple=False
                                         ),
                                         html.Div(id='upload-status', className='mt-2')
                                     ])
                                 ])
-                            ], label="Upload CSV"),
+                            ], label="Upload CSV / Parquet"),
                             dbc.Tab([
                                 dbc.Row([
                                     dbc.Col([
@@ -157,8 +167,9 @@ def create_layout():
                         html.Div([
                             html.Label("Performance Note:", className='mt-3 text-muted small'),
                             html.P(
-                                "GUI is optimized for 1-1000 candidates with real-time scoring. "
-                                "For >10k candidates, use CLI: python -m molfuse.cli.score --help",
+                                "GUI is optimized for 1–1 000 candidates with real-time scoring. "
+                                "For >10 000 candidates, use the CLI: "
+                                "python -m molfuse.cli.phase1 --config <config.json> --workspace <workspace>",
                                 className='text-muted small'
                             )
                         ])
@@ -190,11 +201,156 @@ def create_layout():
             ])
         ]),
         
+        # Train New Model section (collapsible)
+        html.Hr(),
+        dbc.Row([
+            dbc.Col([
+                dbc.Accordion([
+                    dbc.AccordionItem([
+                        html.P(
+                            "Train a new MolFuSE model on your own data. "
+                            "Provide paths to feature files — relative paths are "
+                            "resolved from the directory where the GUI was started. "
+                            "Training runs via the phase 1 CLI pipeline and the model "
+                            "is loaded into the browser automatically when done.",
+                            className='text-muted small mb-3',
+                        ),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Run Name *"),
+                                dbc.Input(
+                                    id="train-run-name",
+                                    placeholder="my_ABL1_umap_5d",
+                                    type="text",
+                                ),
+                            ], width=4),
+                            dbc.Col([
+                                html.Label("Target Accession *"),
+                                dbc.Input(
+                                    id="train-target-accession",
+                                    placeholder="P00519",
+                                    type="text",
+                                ),
+                            ], width=4),
+                            dbc.Col([
+                                html.Label("Workspace Output Path"),
+                                dbc.Input(
+                                    id="train-workspace-path",
+                                    placeholder="my_workspace  (default: current workspace)",
+                                    type="text",
+                                ),
+                            ], width=4),
+                        ], className='mb-2'),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("MF Features File * (CSV or Parquet)"),
+                                dbc.Input(
+                                    id="train-mf-path",
+                                    placeholder="data/KW-0808_Transferase_affinity_extracted_features.parquet",
+                                    type="text",
+                                ),
+                            ], width=12),
+                        ], className='mb-2'),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("ZINC Features File * (CSV or Parquet)"),
+                                dbc.Input(
+                                    id="train-zinc-path",
+                                    placeholder="data/zinc/zinc_acquirable_extracted_features.parquet",
+                                    type="text",
+                                ),
+                            ], width=12),
+                        ], className='mb-2'),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label(
+                                    "Actives File (CSV or Parquet, optional — "
+                                    "enrichment metrics skipped if absent)"
+                                ),
+                                dbc.Input(
+                                    id="train-actives-path",
+                                    placeholder="data/chembl/P00519_actives_extracted_features.parquet",
+                                    type="text",
+                                ),
+                            ], width=12),
+                        ], className='mb-3'),
+                        html.Hr(),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Method"),
+                                dbc.RadioItems(
+                                    id="train-method",
+                                    options=[
+                                        {"label": "UMAP", "value": "umap"},
+                                        {"label": "PCA", "value": "pca"},
+                                    ],
+                                    value="umap",
+                                    inline=True,
+                                ),
+                            ], width=4),
+                            dbc.Col([
+                                html.Label("Dimensions"),
+                                dbc.Input(
+                                    id="train-dimensions",
+                                    type="number",
+                                    value=5,
+                                    min=2,
+                                    max=50,
+                                ),
+                            ], width=4),
+                            dbc.Col([
+                                html.Label("Affinity Cutoff (nM)"),
+                                dbc.Input(
+                                    id="train-affinity-cutoff",
+                                    type="number",
+                                    value=100000,
+                                    min=1,
+                                ),
+                            ], width=4),
+                        ], className='mb-3'),
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Button(
+                                    "Train Model",
+                                    id="train-button",
+                                    color="warning",
+                                ),
+                            ], width="auto"),
+                            dbc.Col([
+                                html.Div(id="train-status-message"),
+                            ]),
+                        ], className='mb-2'),
+                        html.Div([
+                            html.Label("Training Log:", className='mb-1 mt-2'),
+                            dbc.Textarea(
+                                id="training-log-output",
+                                readOnly=True,
+                                style={
+                                    'height': '300px',
+                                    'fontFamily': 'monospace',
+                                    'fontSize': '0.8em',
+                                    'whiteSpace': 'pre',
+                                },
+                                className='mb-2',
+                            ),
+                        ], id="training-log-section", style={'display': 'none'}),
+                    ], title="Train New Model (on your own data)"),
+                ], start_collapsed=True),
+            ], width=12),
+        ], className='mb-3'),
+
         # Hidden stores
         dcc.Store(id='model-artifacts-store', storage_type='memory'),
         dcc.Store(id='candidate-descriptors-store', storage_type='memory'),
-        dcc.Store(id='scored-candidates-store', storage_type='memory')
-        
+        dcc.Store(id='scored-candidates-store', storage_type='memory'),
+        dcc.Store(id='training-state-store', storage_type='memory'),
+        dcc.Interval(
+            id='training-poll-interval',
+            interval=2000,
+            n_intervals=0,
+            disabled=True,
+        ),
+
     ], fluid=True)
 
 
@@ -240,11 +396,26 @@ def scan_workspace(n_clicks, workspace_path):
         models = MODEL_LOADER.scan_models(phases=["phase1", "phase4"])
         
         if not models:
-            return dbc.Alert("No models found in workspace", color="warning"), [], None
-        
+            return (
+                dbc.Alert(
+                    "No models found in this workspace. "
+                    "Use the \u2018Train New Model\u2019 section below to train a model, "
+                    "or download a pre-trained workspace from Zenodo.",
+                    color="warning",
+                ),
+                [], None,
+            )
+
         n_valid = sum(m['valid'] for m in models)
         if n_valid == 0:
-            return dbc.Alert(f"Found {len(models)} models but none are valid (missing artifacts)", color="warning"), [], None
+            return (
+                dbc.Alert(
+                    f"Found {len(models)} runs but none have complete artifacts. "
+                    "Use the \u2018Train New Model\u2019 section below to retrain.",
+                    color="warning",
+                ),
+                [], None,
+            )
         
         # Get KW categories
         kw_categories = MODEL_LOADER.get_kw_categories()
@@ -376,14 +547,18 @@ def process_candidate_input(csv_contents, smiles_text, csv_filename, artifacts_d
     smiles_list = []
     
     if triggered_id == "candidate-csv-upload" and csv_contents:
-        # Parse CSV
+        # Parse CSV or Parquet
         try:
             content_type, content_string = csv_contents.split(',')
             decoded = base64.b64decode(content_string)
-            df_input = pd.read_csv(StringIO(decoded.decode('utf-8')))
+            fname = (csv_filename or "").lower()
+            if fname.endswith('.parquet'):
+                df_input = pd.read_parquet(BytesIO(decoded))
+            else:
+                df_input = pd.read_csv(StringIO(decoded.decode('utf-8')))
             
             if 'SMILES' not in df_input.columns:
-                return None, dbc.Alert("CSV must contain 'SMILES' column", color="danger")
+                return None, dbc.Alert("File must contain a 'SMILES' column", color="danger")
             
             # Check if CSV already has pre-computed features
             feature_names = MODEL_LOADER.get_feature_names_from_scaler(CURRENT_ARTIFACTS['scaler'])
@@ -407,8 +582,8 @@ def process_candidate_input(csv_contents, smiles_text, csv_filename, artifacts_d
             smiles_list = df_input['SMILES'].astype(str).tolist()
             
         except Exception as e:
-            logger.error(f"Error parsing CSV: {e}")
-            return None, dbc.Alert(f"Error parsing CSV: {e}", color="danger")
+            logger.error(f"Error parsing file: {e}")
+            return None, dbc.Alert(f"Error parsing file: {e}", color="danger")
     
     elif triggered_id == "smiles-text-input" and smiles_text:
         # Parse text input
@@ -422,8 +597,9 @@ def process_candidate_input(csv_contents, smiles_text, csv_filename, artifacts_d
     
     if len(smiles_list) > 10000:
         return None, dbc.Alert(
-            f"Too many candidates ({len(smiles_list)}). GUI supports up to 10,000. "
-            "For larger batches, use CLI: python -m molfuse.cli.score",
+            f"Too many candidates ({len(smiles_list)}). GUI supports up to 10 000. "
+            "For larger batches use the CLI: "
+            "python -m molfuse.cli.phase1 --config <config.json> --workspace <workspace>",
             color="warning"
         )
     
@@ -615,6 +791,234 @@ def download_results(n_clicks, scored_data):
     
     df = pd.DataFrame(scored_data)
     return dcc_module.send_data_frame(df.to_csv, "molfuse_scored_candidates.csv", index=False)
+
+
+# ==================== Training Callbacks ====================
+
+@app.callback(
+    [Output("training-state-store", "data"),
+     Output("training-poll-interval", "disabled"),
+     Output("train-status-message", "children"),
+     Output("training-log-section", "style"),
+     Output("training-log-output", "value")],
+    Input("train-button", "n_clicks"),
+    [State("train-run-name", "value"),
+     State("train-target-accession", "value"),
+     State("train-mf-path", "value"),
+     State("train-zinc-path", "value"),
+     State("train-actives-path", "value"),
+     State("train-workspace-path", "value"),
+     State("train-method", "value"),
+     State("train-dimensions", "value"),
+     State("train-affinity-cutoff", "value"),
+     State("workspace-path-input", "value")],
+    prevent_initial_call=True,
+)
+def start_training(
+    n_clicks,
+    run_name, target_accession,
+    mf_path, zinc_path, actives_path,
+    workspace_out, method, dimensions, affinity_cutoff,
+    current_workspace,
+):
+    """Validate inputs, write a phase1 config, and launch the training subprocess."""
+    hidden = {'display': 'none'}
+    visible = {'display': 'block'}
+
+    # --- validation ---
+    errors = []
+    if not run_name or not run_name.strip():
+        errors.append("Run name is required.")
+    if not target_accession or not target_accession.strip():
+        errors.append("Target accession is required.")
+    # Resolve all file paths relative to the GUI's launch directory so that
+    # relative paths work correctly when passed to the subprocess.
+    cwd = Path.cwd()
+
+    def _resolve(p: str) -> Path:
+        """Expand ~ and resolve relative to the GUI launch directory."""
+        return (cwd / Path(p).expanduser()).resolve()
+
+    mf_resolved = _resolve(mf_path.strip()) if mf_path and mf_path.strip() else None
+    zinc_resolved = _resolve(zinc_path.strip()) if zinc_path and zinc_path.strip() else None
+    actives_resolved = (
+        _resolve(actives_path.strip())
+        if actives_path and actives_path.strip()
+        else None
+    )
+
+    if not mf_path or not mf_path.strip():
+        errors.append("MF features file path is required.")
+    elif not mf_resolved.exists():
+        errors.append(f"MF features file not found: {mf_resolved}")
+    if not zinc_path or not zinc_path.strip():
+        errors.append("ZINC features file path is required.")
+    elif not zinc_resolved.exists():
+        errors.append(f"ZINC features file not found: {zinc_resolved}")
+    if actives_resolved is not None and not actives_resolved.exists():
+        errors.append(f"Actives file not found: {actives_resolved}")
+
+    if errors:
+        return (
+            None, True,
+            dbc.Alert([html.P(e, className='mb-0') for e in errors], color="danger"),
+            hidden, "",
+        )
+
+    # --- workspace (resolve relative to CWD) ---
+    ws_raw = (workspace_out or "").strip() or (current_workspace or "").strip() or "./workspace"
+    ws = str((cwd / Path(ws_raw).expanduser()).resolve())
+
+    # --- config dict (always use resolved absolute paths so subprocess can find files) ---
+    config: Dict = {
+        "run_name": run_name.strip(),
+        "target": target_accession.strip(),
+        "method": method or "umap",
+        "dim": int(dimensions) if dimensions else 5,
+        "mf_features_csv": str(mf_resolved),
+        "zinc_features_csv": str(zinc_resolved),
+        "affinity_cutoff_nM": int(affinity_cutoff) if affinity_cutoff else 100000,
+        "on_empty_cutoff": "fallback",
+        "representation": "features",
+    }
+    if actives_resolved is not None:
+        config["actives_features_csv"] = str(actives_resolved)
+    if (method or "umap") == "umap":
+        config["umap_params"] = {
+            "n_neighbors": 15,
+            "min_dist": 0.1,
+            "metric": "euclidean",
+            "random_state": 42,
+        }
+
+    # --- write config and launch ---
+    process_key = str(uuid.uuid4())
+    tmp_dir = Path(tempfile.gettempdir()) / "molfuse_gui_training"
+    tmp_dir.mkdir(exist_ok=True)
+    config_path = tmp_dir / f"{process_key}_config.json"
+    log_path = tmp_dir / f"{process_key}.log"
+
+    config_path.write_text(_json.dumps(config, indent=2))
+
+    try:
+        with open(log_path, 'w') as log_file:
+            proc = subprocess.Popen(
+                [sys.executable, '-m', 'molfuse.cli.phase1',
+                 '--config', str(config_path),
+                 '--workspace', ws],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+        _TRAINING_PROCESSES[process_key] = proc
+    except Exception as exc:
+        logger.error(f"Failed to start training process: {exc}", exc_info=True)
+        return (
+            None, True,
+            dbc.Alert(f"Failed to start training: {exc}", color="danger"),
+            hidden, "",
+        )
+
+    state = {
+        "process_key": process_key,
+        "log_path": str(log_path),
+        "workspace": ws,
+        "status": "running",
+    }
+    return (
+        state, False,
+        dbc.Alert(
+            f"Training started (PID {proc.pid}). Log updates every 2 s…",
+            color="info",
+        ),
+        visible, "",
+    )
+
+
+@app.callback(
+    [Output("training-log-output", "value", allow_duplicate=True),
+     Output("training-poll-interval", "disabled", allow_duplicate=True),
+     Output("train-status-message", "children", allow_duplicate=True),
+     Output("workspace-scan-status", "children", allow_duplicate=True),
+     Output("kw-category-dropdown", "options", allow_duplicate=True),
+     Output("kw-category-dropdown", "value", allow_duplicate=True)],
+    Input("training-poll-interval", "n_intervals"),
+    State("training-state-store", "data"),
+    prevent_initial_call=True,
+)
+def poll_training(n_intervals, state):
+    """Stream log output and handle training completion."""
+    no_update = dash.no_update
+
+    if not state or state.get("status") != "running":
+        return no_update, True, no_update, no_update, no_update, no_update
+
+    process_key = state.get("process_key")
+    log_path = state.get("log_path")
+    proc = _TRAINING_PROCESSES.get(process_key)
+
+    if proc is None:
+        return (
+            no_update, True,
+            dbc.Alert("Training process not found.", color="danger"),
+            no_update, no_update, no_update,
+        )
+
+    # Read current log content
+    log_text = ""
+    try:
+        lp = Path(log_path)
+        if lp.exists():
+            log_text = lp.read_text(errors="replace")
+    except Exception:
+        pass
+
+    exit_code = proc.poll()
+
+    if exit_code is None:
+        # Still running — update log, keep polling
+        return log_text, False, no_update, no_update, no_update, no_update
+
+    # Process finished — remove from registry
+    del _TRAINING_PROCESSES[process_key]
+
+    if exit_code == 0:
+        # Rescan workspace so the new model appears in the model browser
+        ws_path = state.get("workspace", "")
+        kw_options, kw_value, scan_status = [], None, no_update
+        try:
+            global MODEL_LOADER, WORKSPACE_DIR
+            ws_resolved = Path(ws_path).expanduser().resolve()
+            MODEL_LOADER = ModelLoader(ws_resolved)
+            models = MODEL_LOADER.scan_models(phases=["phase1", "phase4"])
+            n_valid = sum(m["valid"] for m in models)
+            kw_cats = MODEL_LOADER.get_kw_categories()
+            kw_options = [{"label": kw, "value": kw} for kw in kw_cats]
+            kw_value = kw_cats[0] if kw_cats else None
+            WORKSPACE_DIR = ws_resolved
+            scan_status = dbc.Alert(
+                f"✓ Found {n_valid} valid models across {len(kw_cats)} KW categories",
+                color="success",
+            )
+        except Exception as exc:
+            scan_status = dbc.Alert(
+                f"Training succeeded but workspace rescan failed: {exc}",
+                color="warning",
+            )
+
+        return (
+            log_text, True,
+            dbc.Alert("✓ Training complete! Model loaded into browser.", color="success"),
+            scan_status, kw_options, kw_value,
+        )
+    else:
+        return (
+            log_text, True,
+            dbc.Alert(
+                f"Training failed (exit code {exit_code}). See log above.",
+                color="danger",
+            ),
+            no_update, no_update, no_update,
+        )
 
 
 # ==================== Main Entry Point ====================
