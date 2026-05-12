@@ -1,10 +1,16 @@
 # MolFuSE — Molecular Function-guided Similarity Explorer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.TODO.svg)](https://doi.org/10.5281/zenodo.TODO)
+
 **Molecular Function-guided Unsupervised Similarity-based Enrichment for Low-Data Virtual Screening**
 
 Code repository for the MolFuSE method and experiments described in:
 
 > *Molecular Function-guided Unsupervised Similarity-based Enrichment for Low-Data Virtual Screening* — Alexander Hagg, Dirk Reith, Matthias Preller, Karl N. Kirschner
+
+Given a SMILES library and a protein target, MolFuSE ranks candidates by chemical similarity to every protein sharing your target's biological function — no known actives for your specific target required.
 
 MolFuSE leverages a protein's broader **Molecular Function (MF)** category to build a low-dimensional chemical similarity space for virtual screening — without requiring active compounds for the target of interest. Using a rigorous **leave-one-target-out** design across eight diverse targets, we show that MF cloud composition fundamentally shapes which dimensionality reduction method works best, and that this generalises across proteins spanning four orders of magnitude in MF cloud size.
 
@@ -12,9 +18,12 @@ MolFuSE leverages a protein's broader **Molecular Function (MF)** category to bu
 
 ## Table of Contents
 
+- [Quick Start (5 minutes)](#quick-start-5-minutes)
 - [Part A — MolFuSE GUI: Scoring Candidates Against Trained Models](#part-a--molfuse-gui-scoring-candidates-against-trained-models)
   - [A.1 Installation](#a1-installation)
   - [A.2 Data](#a2-data)
+    - [A.2a Pre-trained model workspace](#a2a--pre-trained-model-workspace-gui-quick-start-x-gb)
+    - [A.2b Full feature dataset](#a2b--full-feature-dataset-training--paper-experiments-x-gb)
   - [A.3 Launching the GUI](#a3-launching-the-gui)
   - [A.4 GUI Walkthrough](#a4-gui-walkthrough)
   - [A.5 Training a New Model (GUI)](#a5-training-a-new-model-gui)
@@ -26,8 +35,33 @@ MolFuSE leverages a protein's broader **Molecular Function (MF)** category to bu
   - [B.4 Post-analysis Scripts](#b4-post-analysis-scripts)
 - [Key Results](#key-results)
 - [Repository Structure](#repository-structure)
+- [Troubleshooting](#troubleshooting)
 - [Citation](#citation)
 - [License](#license)
+
+---
+
+## Quick Start (5 minutes)
+
+> **Prerequisites:** conda or mamba, ≥ 48 GB RAM (or ≥ 16 GB if you load only PCA models).
+
+```bash
+# 1 — Install
+git clone https://github.com/TODO/molfuse.git && cd molfuse
+conda env create -f environment.yml && conda activate molfuse
+pip install -e . --no-deps
+
+# 2 — Download the pre-trained model workspace from Zenodo (TODO: link)
+#     Unpack so that experiment_workspace_v4/ is in the molfuse/ repo root.
+
+# 3 — Launch the GUI
+python -m molfuse.gui --workspace experiment_workspace_v4
+# Open http://127.0.0.1:8050 in your browser
+```
+
+In the browser: select a KW category → pick a model → upload your `candidates.csv` (needs a `SMILES` column) → click **Score Candidates**.
+
+Need the full dataset or want to train on your own target? See [A.2 Data](#a2-data) and [A.5 Training](#a5-training-a-new-model-gui). Running on HPC without a display? See [A.6 CLI Scoring](#a6-cli-scoring-hpc--headless).
 
 ---
 
@@ -36,6 +70,16 @@ MolFuSE leverages a protein's broader **Molecular Function (MF)** category to bu
 The interactive GUI lets you score candidate molecules against any trained MolFuSE model — no Python scripting required. It also includes a training tab for building new models on your own data.
 
 ### A.1 Installation
+
+**System requirements**
+
+| | Minimum | Recommended |
+|-|---------|-------------|
+| OS | Linux, macOS (x86-64 or arm64), Windows (WSL2) | Linux |
+| conda / mamba | 23.x | mamba (faster solver) |
+| RAM | 16 GB *(PCA models only)* | 48 GB (all models) |
+| Disk | ~3 GB (conda env) + ~15 GB (data archive) | SSD |
+| Python | 3.12 | 3.12 |
 
 **1. Create the conda environment**
 
@@ -71,11 +115,32 @@ pip install -e . --no-deps
 
 ### A.2 Data
 
-Feature datasets (Mordred 2D descriptors and ECFP4 fingerprints) and one pre-trained model are deposited at:
+All data are deposited at Zenodo:
 
-> **[TODO: Zenodo/institutional repository link]**
+> **[TODO: Zenodo link]**
 
-Download and unpack to a local directory. The expected layout is:
+The archive contains two separate downloads:
+
+#### A.2a — Pre-trained model workspace (GUI quick start, ~X GB)
+
+Download `experiment_workspace_v4.tar.gz` and unpack it in the repo root:
+
+```bash
+tar -xzf experiment_workspace_v4.tar.gz
+# creates: experiment_workspace_v4/phase4/<run_name>/artifacts/...
+```
+
+This is all you need to run the GUI and score candidates. The directory name `experiment_workspace_v4` is what you pass to `--workspace`.
+
+#### A.2b — Full feature dataset (training & paper experiments, ~X GB)
+
+Download `molfuse_data.tar.gz` and unpack to a directory of your choice (`<data-dir>`):
+
+```bash
+tar -xzf molfuse_data.tar.gz -C /path/to/data
+```
+
+Expected layout:
 
 ```
 <data-dir>/
@@ -99,22 +164,6 @@ CSV equivalents are also provided. Column schema:
 | `accession` | UniProt accession of the source protein |
 | `activity_type` | Assay type (e.g. `IC50`, `Ki`) |
 | `activity_value_nM` | Activity value in nanomolar |
-
-The pre-trained model workspace unpacks to the same directory structure the GUI expects:
-
-```
-<workspace>/
-└── phase4/<run_name>/
-    ├── artifacts/
-    │   ├── scaler.joblib
-    │   ├── umap_model.joblib   (or pca_model.joblib)
-    │   ├── embedding_mf.csv
-    │   ├── embedding_zinc.csv
-    │   └── embedding_actives.csv
-    └── metrics/
-        ├── metrics.json
-        └── ranked_scores.csv
-```
 
 ---
 
@@ -172,7 +221,17 @@ See `configs/molfuse_phase1_example.json` for the config format.
 
 ### A.6 CLI Scoring (HPC / headless)
 
-For large candidate libraries or on HPC nodes without a display, use the standalone scoring script instead of the GUI:
+For large candidate libraries or on HPC nodes without a display, use the standalone scoring script instead of the GUI.
+
+**Discover available run names:**
+
+```bash
+python scripts/score_candidates.py --workspace experiment_workspace_v4 --list
+```
+
+This prints a table of all valid models and their run names — no model is loaded. Use any listed `run_name` with `--run-name`.
+
+**Score candidates:**
 
 ```bash
 python scripts/score_candidates.py \
@@ -183,12 +242,13 @@ python scripts/score_candidates.py \
 ```
 
 | Argument | Description |
-|----------|-------------|
+|----------|-----------|
 | `--workspace` | Path to the experiment workspace directory |
-| `--run-name` | Name of the trained model run (subdirectory under `phase1/` or `phase4/`) |
+| `--run-name` | Run name from `--list` (subdirectory under `phase1/` or `phase4/`) |
 | `--candidates` | CSV or Parquet file with a `SMILES` column (or pre-computed feature columns) |
 | `--output` | Output CSV path (default: `scored_candidates.csv`) |
 | `--phase` | `phase1` or `phase4` (default: auto-detect) |
+| `--list` | List all valid run names and exit |
 
 The script produces the same ranked CSV as the GUI export and has no RAM overhead beyond loading the model itself. On SLURM:
 
@@ -428,6 +488,41 @@ python scripts/phase5_post_analysis.py --workspace_dir experiment_workspace_v4 -
 └── configs/
     └── molfuse_phase1_example.json     # Minimal worked example for phase 1
 ```
+
+---
+
+## Troubleshooting
+
+**`mordred` prints `SafetyError` warnings during `pip install` or import**  
+These are non-fatal cache-corruption warnings from mordred's descriptor registry. They do not affect results. You can suppress them with `python -W ignore scripts/score_candidates.py ...`.
+
+**`No models found` after pointing the GUI or CLI at the workspace**  
+Verify the directory structure: the workspace must contain `phase1/<run_name>/artifacts/scaler.joblib` or `phase4/<run_name>/artifacts/scaler.joblib`. The run name is the subdirectory name directly under `phase1/` or `phase4/`, not any deeper path. Use `--list` to confirm:
+```bash
+python scripts/score_candidates.py --workspace experiment_workspace_v4 --list
+```
+
+**`MemoryError` or the process is killed when loading a UMAP model**  
+The UMAP model for KW-0808 Transferase (425 K molecules) requires ≥ 48 GB RAM. On machines with less RAM, use the PCA variant of the same model (look for `PCA` in the run name). The PCA models require < 1 GB.
+
+**GUI shows a blank page or `Address already in use`**  
+Another process is using port 8050. Launch on a different port:
+```bash
+python -m molfuse.gui --workspace experiment_workspace_v4 --port 8051
+```
+
+**`pip install -e . --no-deps` fails with `mordred` version conflicts**  
+This is expected — mordred 1.2.0 pins an old numpy. Use `--no-deps` exactly as shown; all dependencies are managed by conda.
+
+**Descriptor calculation returns NaN for some SMILES**  
+Invalid or disconnected SMILES are silently dropped. Sanitize your input with RDKit before passing to MolFuSE:
+```python
+from rdkit import Chem
+valid = [smi for smi in smiles_list if Chem.MolFromSmiles(smi) is not None]
+```
+
+**`sklearn`/`numpy` pickle incompatibility when loading saved models**  
+Models must be loaded with the same major version of scikit-learn used to save them. The pre-trained workspace was saved with scikit-learn 1.8 / numpy 2.4. Rebuild the conda environment from `environment.yml` to guarantee compatibility.
 
 ---
 

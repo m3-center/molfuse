@@ -49,11 +49,15 @@ def parse_args() -> argparse.Namespace:
         help="Path to the experiment workspace directory.",
     )
     p.add_argument(
-        "--run-name", required=True, dest="run_name",
+        "--list", action="store_true", dest="list_runs",
+        help="List all valid run names in the workspace and exit.",
+    )
+    p.add_argument(
+        "--run-name", default=None, dest="run_name",
         help="Name of the trained model run (subdirectory under phase1/ or phase4/).",
     )
     p.add_argument(
-        "--candidates", required=True,
+        "--candidates", default=None,
         help="CSV or Parquet file with a SMILES column.",
     )
     p.add_argument(
@@ -86,6 +90,33 @@ def main() -> int:
     phases = [args.phase] if args.phase else ["phase1", "phase4"]
     loader = ModelLoader(workspace)
     models = loader.scan_models(phases=phases)
+
+    # --list: print available runs and exit
+    if args.list_runs:
+        if not models:
+            print(f"No valid models found in {workspace} under {phases}")
+            return 1
+        valid = [m for m in models if m["valid"]]
+        invalid = [m for m in models if not m["valid"]]
+        col_w = max(len(m["run_name"]) for m in models) + 2
+        header = f"{'RUN NAME':<{col_w}}  {'KW CATEGORY':<25}  {'DR METHOD':<8}  {'EF@1%':>6}  STATUS"
+        print(header)
+        print("-" * len(header))
+        for m in sorted(valid, key=lambda x: x["run_name"]):
+            ef = m.get("ef_1pct")
+            ef_str = f"{ef:.2f}" if ef is not None else "  n/a"
+            print(f"{m['run_name']:<{col_w}}  {m.get('kw_category', ''):<25}  {m.get('dr_method', ''):<8}  {ef_str:>6}")
+        if invalid:
+            print(f"\n{len(invalid)} incomplete run(s) skipped (missing artifacts).")
+        return 0
+
+    # Validate required args for scoring
+    if not args.run_name:
+        logger.error("--run-name is required for scoring. Use --list to see available runs.")
+        return 1
+    if not args.candidates:
+        logger.error("--candidates is required for scoring.")
+        return 1
 
     if not models:
         logger.error(f"No models found in {workspace} under {phases}")
