@@ -8,10 +8,10 @@ dependencies:
   - numpy>=2.0
   - pandas>=2.2
   - scipy>=1.14
-  - scikit-learn>=1.5
+  - scikit-learn>=1.7
   - joblib>=1.4
   # Dimensionality reduction
-  - umap-learn>=0.5.7
+  - umap-learn>=0.5.11
   # Cheminformatics
   - rdkit>=2024.09
   - mordred>=1.2

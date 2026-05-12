@@ -70,12 +70,20 @@ class ModelLoader:
                 artifacts_dir = run_dir / "artifacts"
                 logs_dir = run_dir / "logs"
                 metrics_path = run_dir / "metrics" / "metrics.json"
+
+                # Find the summary JSON: prefer {phase}_summary.json but fall back
+                # to any *_summary.json present (e.g. phase1_summary.json when the
+                # run was trained via phase1 CLI and then placed under phase4/).
                 summary_path = logs_dir / f"{phase}_summary.json"
-                
+                if not summary_path.exists() and logs_dir.exists():
+                    candidates = sorted(logs_dir.glob("*_summary.json"))
+                    if candidates:
+                        summary_path = candidates[0]
+
                 # Skip if missing critical directories
                 if not artifacts_dir.exists():
                     continue
-                
+
                 # Load metadata from summary JSON
                 metadata = {
                     "run_name": run_name,
@@ -89,7 +97,7 @@ class ModelLoader:
                     "artifacts_dir": artifacts_dir,
                     "valid": False
                 }
-                
+
                 # Try to load summary JSON
                 if summary_path.exists():
                     try:
@@ -99,23 +107,26 @@ class ModelLoader:
                             metadata["method"] = summary.get("method", "unknown")
                             metadata["representation"] = summary.get("representation", "unknown")
                             metadata["n_components"] = summary.get("n_components", 0)
-                    except Exception as e:
-                        logger.warning(f"Failed to load summary for {run_name}: {e}")
-                
-                # Infer molecular function from MF features CSV path if available
-                if summary_path.exists():
-                    try:
-                        with open(summary_path, 'r') as f:
-                            summary = json.load(f)
+                            # Infer molecular function from MF features path
                             mf_csv = summary.get("mf_features_csv", "")
                             if "KW-" in mf_csv:
-                                # Extract KW-XXXX_Name pattern
                                 parts = mf_csv.split("KW-")
                                 if len(parts) > 1:
                                     kw_part = parts[1].split("_affinity")[0]
                                     metadata["molecular_function"] = f"KW-{kw_part}"
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to load summary for {run_name}: {e}")
+
+                # Fallback: infer KW from the run name itself
+                if metadata["molecular_function"] == "Unknown" and "KW-" in run_name:
+                    parts = run_name.split("KW-")
+                    if len(parts) > 1:
+                        kw_part = parts[1].split("_affinity")[0].rstrip("_-")
+                        metadata["molecular_function"] = f"KW-{kw_part}"
+
+                # Last resort: group by run name so the model still appears
+                if metadata["molecular_function"] == "Unknown":
+                    metadata["molecular_function"] = run_name
                 
                 # Load metrics
                 if metrics_path.exists():
@@ -159,8 +170,8 @@ class ModelLoader:
         return [m for m in self.available_models if kw_category in m["molecular_function"]]
     
     def get_kw_categories(self) -> List[str]:
-        """Get list of unique KW categories from available models."""
-        kw_cats = set(m["molecular_function"] for m in self.available_models if m["molecular_function"] != "Unknown")
+        """Get list of unique KW categories from valid available models."""
+        kw_cats = set(m["molecular_function"] for m in self.available_models if m["valid"])
         return sorted(list(kw_cats))
     
     def load_model_artifacts(self, run_name: str) -> Optional[Dict]:
@@ -252,8 +263,13 @@ class ModelLoader:
             except Exception as e:
                 logger.warning(f"Failed to load metrics: {e}")
         
-        # Load config reconstruction from summary
-        summary_path = run_dir / "logs" / f"{model_meta['phase']}_summary.json"
+        # Load config reconstruction from summary (any *_summary.json)
+        logs_dir = run_dir / "logs"
+        summary_path = logs_dir / f"{model_meta['phase']}_summary.json"
+        if not summary_path.exists() and logs_dir.exists():
+            candidates = sorted(logs_dir.glob("*_summary.json"))
+            if candidates:
+                summary_path = candidates[0]
         if summary_path.exists():
             try:
                 with open(summary_path, 'r') as f:

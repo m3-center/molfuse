@@ -51,6 +51,30 @@ CURRENT_ARTIFACTS = None
 _TRAINING_PROCESSES: Dict[str, subprocess.Popen] = {}
 
 
+# Flask endpoint: open native directory picker via a subprocess so tkinter
+# runs in its own process (avoids main-thread requirement inside Flask).
+@app.server.route('/api/browse-directory')
+def _api_browse_directory():
+    """Open a native directory-picker dialog and return the chosen path."""
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, '-c',
+                'import tkinter as tk; from tkinter import filedialog; '
+                'root = tk.Tk(); root.withdraw(); '
+                'root.attributes("-topmost", True); '
+                'p = filedialog.askdirectory(title="Select workspace directory"); '
+                'print(p, end="")',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return {'path': result.stdout.strip()}
+    except Exception as exc:
+        return {'path': '', 'error': str(exc)}
+
+
 def create_layout():
     """Create main GUI layout."""
     return dbc.Container([
@@ -79,6 +103,7 @@ def create_layout():
                                 type="text",
                                 value=""  # Will be set by callback
                             ),
+                            dbc.Button("Browse…", id="browse-workspace-button", color="secondary", outline=True),
                             dbc.Button("Scan", id="scan-workspace-button", color="primary")
                         ], className='mb-2'),
                         html.Div(id="workspace-scan-status", className='mt-2')
@@ -234,11 +259,14 @@ def create_layout():
                             ], width=4),
                             dbc.Col([
                                 html.Label("Workspace Output Path"),
-                                dbc.Input(
-                                    id="train-workspace-path",
-                                    placeholder="my_workspace  (default: current workspace)",
-                                    type="text",
-                                ),
+                                dbc.InputGroup([
+                                    dbc.Input(
+                                        id="train-workspace-path",
+                                        placeholder="my_workspace  (default: current workspace)",
+                                        type="text",
+                                    ),
+                                    dbc.Button("Browse…", id="browse-train-workspace-button", color="secondary", outline=True),
+                                ]),
                             ], width=4),
                         ], className='mb-2'),
                         dbc.Row([
@@ -420,7 +448,7 @@ def scan_workspace(n_clicks, workspace_path):
         # Get KW categories
         kw_categories = MODEL_LOADER.get_kw_categories()
         if not kw_categories:
-            return dbc.Alert(f"Found {n_valid} valid models but couldn't extract KW categories", color="warning"), [], None
+            return dbc.Alert("No valid models found (missing scaler or embedding files).", color="warning"), [], None
         
         kw_options = [{"label": kw, "value": kw} for kw in kw_categories]
         
@@ -1019,6 +1047,37 @@ def poll_training(n_intervals, state):
             ),
             no_update, no_update, no_update,
         )
+
+
+# ==================== Browse Callbacks (client-side) ====================
+
+app.clientside_callback(
+    """
+    async function(n_clicks) {
+        if (!n_clicks) return window.dash_clientside.no_update;
+        const resp = await fetch('/api/browse-directory');
+        const data = await resp.json();
+        return data.path || window.dash_clientside.no_update;
+    }
+    """,
+    Output("workspace-path-input", "value", allow_duplicate=True),
+    Input("browse-workspace-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    async function(n_clicks) {
+        if (!n_clicks) return window.dash_clientside.no_update;
+        const resp = await fetch('/api/browse-directory');
+        const data = await resp.json();
+        return data.path || window.dash_clientside.no_update;
+    }
+    """,
+    Output("train-workspace-path", "value"),
+    Input("browse-train-workspace-button", "n_clicks"),
+    prevent_initial_call=True,
+)
 
 
 # ==================== Main Entry Point ====================
