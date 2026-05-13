@@ -51,15 +51,17 @@ git clone https://github.com/TODO/molfuse.git && cd molfuse
 conda env create -f environment.yml && conda activate molfuse
 pip install -e . --no-deps
 
-# 2 — Download the pre-trained model workspace from Zenodo (TODO: link)
-#     Unpack so that experiment_workspace_v4/ is in the molfuse/ repo root.
+# 2a — Try the GUI with the built-in demo (no download needed, < 1 min)
+python scripts/generate_demo_workspace.py
+python -m molfuse.gui --workspace demo_workspace
+# Open http://127.0.0.1:8050 — upload demo_candidates.csv and click Score
 
-# 3 — Launch the GUI
-python -m molfuse.gui --workspace experiment_workspace_v4
-# Open http://127.0.0.1:8050 in your browser
+# 2b — Or download the pre-trained model workspace from Zenodo (TODO: link)
+#      Unpack so that experiment_workspace_v4/ is in the molfuse/ repo root.
+#      Then: python -m molfuse.gui --workspace experiment_workspace_v4
 ```
 
-In the browser: select a KW category → pick a model → upload your `candidates.csv` (needs a `SMILES` column) → click **Score Candidates**.
+In the browser: select a KW category → pick a model → upload your `candidates.csv` (or `demo_candidates.csv`) → click **Score Candidates**.
 
 Need the full dataset or want to train on your own target? See [A.2 Data](#a2-data) and [A.5 Training](#a5-training-a-new-model-gui). Running on HPC without a display? See [A.6 CLI Scoring](#a6-cli-scoring-hpc--headless).
 

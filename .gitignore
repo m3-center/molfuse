@@ -40,6 +40,11 @@ archive_v2.0/
 *.err
 *.pdf
 
+# Demo workspace (generated locally by scripts/generate_demo_workspace.py)
+demo_workspace/
+demo_candidates.csv
+scored_candidates.csv
+
 # Python
 __pycache__/
 *.pyc
